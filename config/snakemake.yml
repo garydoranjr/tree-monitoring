@@ -1,0 +1,15 @@
+
+# Directory Structure
+
+root_dir: '/Volumes/Earth02/flower'
+crown_subdir: 'crown_labels'
+crown_output_subdir: 'videos'
+
+
+# Script Configuration Files
+
+config_video: 'config/crown_video.yml'
+
+species:
+    - alchornea_costaricensis
+    - prioria_copaifera
