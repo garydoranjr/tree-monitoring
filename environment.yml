@@ -1,0 +1,21 @@
+# conda env create -f environment.yml
+name: flower
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - xarray
+  - matplotlib
+  - cartopy
+  - numpy
+  - requests
+  - pandas
+  - rioxarray
+  - rasterio
+  - tqdm
+  - scikit-learn
+  - geopandas
+  - Pillow
+  - click
+  - pip:
+      - python-ffmpeg
