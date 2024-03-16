@@ -1,12 +1,20 @@
 input_ext: png
 video_size: [775, 770]
 padding:
-  top: 60
+  top: 120
 date_format:
-  format: "%Y-%m-%d"
-  xy: [387, 30]
+  format: '%Y-%m-%d'
+  xy: [387, 90]
   draw_kwargs:
     font_size: 50
+    fill: white
+    anchor: mm
+    align: center
+species_format:
+  format: '{genus} {species}'
+  xy: [387, 30]
+  draw_kwargs:
+    font_size: 40
     fill: white
     anchor: mm
     align: center

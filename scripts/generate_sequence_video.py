@@ -10,15 +10,19 @@ from PIL import Image, ImageDraw
 from tempfile import TemporaryDirectory
 
 
-def parse_date(filename):
+def parse_info(filename):
     parts = os.path.splitext(filename)[0].split('_')
-    y, m, d = map(int, parts[1:])
-    return datetime(y, m, d)
+    return {
+        'genus': parts[0],
+        'species': parts[1],
+        'date': datetime(*map(int, parts[-3:])),
+    }
 
 
 def reformat_image(inputfile, config, outputdir):
     video_size = config['video_size']
-    date_fmt = config['date_format']
+    date_fmt = config.get('date_format', None)
+    species_fmt = config.get('species_format', None)
     padding = config['padding']
     left, right, top, bottom = (
         padding.get(side, 0)
@@ -26,8 +30,7 @@ def reformat_image(inputfile, config, outputdir):
     )
 
     base = os.path.basename(inputfile)
-    date = parse_date(base)
-    datestr = date.strftime(date_fmt['format'])
+    info = parse_info(base)
     outputfile = os.path.join(outputdir, base)
 
     total_size = (
@@ -44,12 +47,23 @@ def reformat_image(inputfile, config, outputdir):
         yoff = ((video_size[1] - h) // 2) + top
         out.paste(im, (xoff, yoff))
 
-    draw = ImageDraw.Draw(out)
-    draw.text(
-        date_fmt['xy'],
-        datestr,
-        **date_fmt.get('draw_kwargs', {})
-    )
+    if date_fmt is not None:
+        datestr = info['date'].strftime(date_fmt['format'])
+        draw = ImageDraw.Draw(out)
+        draw.text(
+            date_fmt['xy'],
+            datestr,
+            **date_fmt.get('draw_kwargs', {})
+        )
+
+    if species_fmt is not None:
+        specstr = species_fmt['format'].format(**info)
+        draw = ImageDraw.Draw(out)
+        draw.text(
+            species_fmt['xy'],
+            specstr,
+            **species_fmt.get('draw_kwargs', {})
+        )
 
     out.save(outputfile)
     return outputfile
@@ -67,7 +81,7 @@ def main(inputdir, sequence_id, configfile, outputfile):
 
     ext = config['input_ext']
 
-    images = glob(os.path.join(inputdir, f'{sequence_id}*.{ext}'))
+    images = glob(os.path.join(inputdir, f'*_{sequence_id}_*_*_*.{ext}'))
 
     with TemporaryDirectory() as tmpdir:
         reformatted = [
