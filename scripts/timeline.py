@@ -16,13 +16,19 @@ def load_dates(datefile):
 
 @click.command()
 @click.argument('dronedatefile')
-@click.argument('planetdatefile')
+@click.argument('planetdcdatefile')
+@click.argument('planetdrdatefile')
+@click.argument('planetsddatefile')
 @click.argument('outputfile')
-def main(dronedatefile, planetdatefile, outputfile):
+def main(dronedatefile, planetdcdatefile, planetdrdatefile, planetsddatefile, outputfile):
 
     dronedates = load_dates(dronedatefile)
-    planetdates = load_dates(planetdatefile)
-    all_dates = dronedates + planetdates
+    planetdates = {
+        'classic': load_dates(planetdcdatefile),
+        'dove-r': load_dates(planetdrdatefile),
+        'superdove': load_dates(planetsddatefile),
+    }
+    all_dates = dronedates + sum(planetdates.values(), [])
     start = datetime(np.min(all_dates).year, 1, 1)
     end = datetime(np.max(all_dates).year, 6, 1)
 
@@ -35,20 +41,21 @@ def main(dronedatefile, planetdatefile, outputfile):
     )
 
     it = zip(
-        ('Drone', 'Planet Scope'),
-        ('r-', 'b-'),
-        (2.5, 5),
-        (dronedates, planetdates)
+        ('Drone', 'Planet Scope (Dove Classic)', 'Planet Scope (Dove-R)', 'Planet Scope (SuperDove)'),
+        ('k-', 'g-', 'r-', 'b-'),
+        (0, 2, 4, 6),
+        (2, 4, 6, 8),
+        (dronedates, planetdates['classic'], planetdates['dove-r'], planetdates['superdove'])
     )
 
-    for label, style, y, dates in list(it)[::-1]:
+    for label, style, ymin, ymax, dates in list(it)[::-1]:
         for date in dates:
-            ax.plot([date, date], [0, y], style, label=label)
+            ax.plot([date, date], [ymin, ymax], style, label=label)
             label = None
 
     ax.plot([start, end], [0, 0], 'k-', lw=3)
 
-    ax.legend(loc='upper right', fontsize=16)
+    ax.legend(loc='upper left', fontsize=12, frameon=False)
 
     ax.spines[["left", "top", "right", "bottom"]].set_visible(False)
     ax.spines[["bottom"]].set_position(("axes", 0.5))
