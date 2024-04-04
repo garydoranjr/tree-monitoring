@@ -1,7 +1,7 @@
 
 # Directory Structure
 
-root_dir: '/Volumes/Earth02/flower'
+root_dir: '/Volumes/Earth03/flower'
 crown_subdir: 'crown_images_500'
 crown_output_subdir: 'crown_images_500_videos'
 

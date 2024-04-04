@@ -11,7 +11,7 @@ date_format:
     anchor: mm
     align: center
 species_format:
-  format: '{genus} {species}'
+  format: '{genus} {species} - {crown_id}'
   xy: [387, 30]
   draw_kwargs:
     font_size: 40

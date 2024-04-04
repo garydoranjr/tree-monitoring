@@ -15,6 +15,7 @@ def parse_info(filename):
     return {
         'genus': parts[0],
         'species': parts[1],
+        'crown_id': int(parts[2]),
         'date': datetime(*map(int, parts[-3:])),
     }
 
