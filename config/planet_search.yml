@@ -1,0 +1,23 @@
+geometry:
+    type: "Polygon"
+    coordinates:
+        - - [-79.899046, 9.088791]
+          - [-79.791404, 9.088791]
+          - [-79.791404, 9.215107]
+          - [-79.899046, 9.215107]
+          - [-79.899046, 9.088791]
+
+string_filters:
+    - field_name: "item_type"
+      values: ["PSScene"]
+    - field_name: "instrument"
+      values: ["PS2.SD", "PSB.SD"]
+    - field_name: "publishing_stage"
+      values: ["standard", "finalized"]
+
+
+asset_types: ["basic_analytic_4b"]
+item_type: "PSScene"
+product_bundle: "analytic_udm2"
+
+order_name_format: "bcnm_{year}_{month:02d}"

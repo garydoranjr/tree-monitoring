@@ -17,5 +17,6 @@ dependencies:
   - geopandas
   - Pillow
   - click
+  - planet
   - pip:
       - python-ffmpeg
