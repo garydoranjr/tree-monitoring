@@ -4,6 +4,8 @@
 root_dir: '/Volumes/Earth03/flower'
 crown_subdir: 'crown_images_500'
 crown_output_subdir: 'crown_images_500_videos'
+planet_subdir: 'planet'
+planet_downloads_subdir: 'script'
 
 
 # Script Configuration Files
