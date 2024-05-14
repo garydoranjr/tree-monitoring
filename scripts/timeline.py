@@ -16,16 +16,12 @@ def load_dates(datefile):
 
 @click.command()
 @click.argument('dronedatefile')
-@click.argument('planetdcdatefile')
-@click.argument('planetdrdatefile')
 @click.argument('planetsddatefile')
 @click.argument('outputfile')
-def main(dronedatefile, planetdcdatefile, planetdrdatefile, planetsddatefile, outputfile):
+def main(dronedatefile, planetsddatefile, outputfile):
 
     dronedates = load_dates(dronedatefile)
     planetdates = {
-        'classic': load_dates(planetdcdatefile),
-        'dove-r': load_dates(planetdrdatefile),
         'superdove': load_dates(planetsddatefile),
     }
     all_dates = dronedates + sum(planetdates.values(), [])
@@ -41,11 +37,11 @@ def main(dronedatefile, planetdcdatefile, planetdrdatefile, planetsddatefile, ou
     )
 
     it = zip(
-        ('Drone', 'Planet Scope (Dove Classic)', 'Planet Scope (Dove-R)', 'Planet Scope (SuperDove)'),
-        ('k-', 'g-', 'r-', 'b-'),
-        (0, 2, 4, 6),
-        (2, 4, 6, 8),
-        (dronedates, planetdates['classic'], planetdates['dove-r'], planetdates['superdove'])
+        ('Drone', 'Planet Scope'),
+        ('k-', 'r-'),
+        (0, 2),
+        (2, 4),
+        (dronedates, planetdates['superdove'])
     )
 
     for label, style, ymin, ymax, dates in list(it)[::-1]:
@@ -61,7 +57,7 @@ def main(dronedatefile, planetdcdatefile, planetdrdatefile, planetsddatefile, ou
     ax.spines[["bottom"]].set_position(("axes", 0.5))
     ax.yaxis.set_visible(False)
     ax.set_xlim(start, end)
-    ax.set_ylim(-10, 10)
+    ax.set_ylim(-6, 6)
     ax.tick_params(axis='x', labelsize=16)
 
     fig.savefig(outputfile, bbox_inches='tight')
