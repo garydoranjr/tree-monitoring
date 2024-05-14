@@ -2,10 +2,10 @@
 # Directory Structure
 
 root_dir: '/Volumes/Earth03/flower'
-crown_subdir: 'crown_images_500'
-crown_output_subdir: 'crown_images_500_videos'
+crown_subdir: 'crown_images_20240423'
+crown_output_subdir: 'crown_images_20240423_videos'
 planet_subdir: 'planet'
-planet_downloads_subdir: 'script'
+planet_downloads_subdir: 'planet_bci_orders'
 
 
 # Script Configuration Files
