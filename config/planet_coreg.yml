@@ -1,0 +1,5 @@
+glob_pattern: "*rgb.tif"
+coreg_args:
+  ws: [200, 200]
+  align_grids: True
+  max_shift: 20
