@@ -22,6 +22,7 @@ from util import load_config
 def main(inputfile, configfile, outputfile):
     clip(inputfile, configfile, outputfile)
 
+
 def clip(inputfile, configfile, outputfile):
 
     config = load_config(configfile)

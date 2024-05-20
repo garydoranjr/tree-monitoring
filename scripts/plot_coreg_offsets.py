@@ -38,9 +38,9 @@ def main(coregdir, configfile, outputfile, nbins):
 
     files = sorted(glob(os.path.join(coregdir, '*.json')))
 
-    xy = np.vstack([
-        load_offsets(f) for f in tqdm(files, 'Loading')
-    ])
+    offsets = [load_offsets(f) for f in tqdm(files, 'Loading')]
+
+    xy = np.vstack([o for o in offsets if o.size > 0])
 
     fig, ax = plt.subplots(figsize=(8, 6))
 
