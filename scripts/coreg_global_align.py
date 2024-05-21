@@ -10,61 +10,10 @@ from arosics import COREG
 from py_tools_ds.geo.coord_trafo import imXY2mapXY
 import arosics.geometry as GEO
 
-from util import load_config
-from planet_coreg import stem
-
-
-def load_offsets(coregfile):
-
-    key = stem(coregfile)
-
-    with open(coregfile, 'r') as f:
-        results = json.load(f)
-
-    return {
-        (key, tgt): (
-            r['corrected_shifts_px']['x'],
-            r['corrected_shifts_px']['y'],
-        )
-        for tgt, r in results.items()
-        if r['success']
-    }
-
-
-def offsets_to_matrix(offsets):
-    keys = set([])
-    for src, tgt in offsets.keys():
-        keys |= set([src, tgt])
-    keys = sorted(keys)
-    n = len(keys)
-
-    xy = np.full((n, n, 2), np.nan)
-    for i, k1 in tqdm(list(enumerate(keys)), 'Converting'):
-        for j, k2 in enumerate(keys):
-            key = (k1, k2)
-            if k1 == k2 or key not in offsets:
-                continue
-            else:
-                xy[i, j, :] = offsets[key]
-
-    return keys, xy
-
-
-def load_offset_matrix(coregfiles):
-
-    offsets = {}
-    for f in tqdm(coregfiles, 'Loading'):
-        offsets.update(load_offsets(f))
-
-    return offsets_to_matrix(offsets)
-
-
-def iterate(offset, xy):
-    for i, dxy in enumerate(offset):
-        diff = xy[i, :] + offset
-        offset[i, :] = np.nanmedian(diff, axis=0)
-    offset -= np.nanmean(offset, axis=0)
-    return offset
+from coreg_global import (
+    load_offsets, offsets_to_matrix,
+    load_offset_matrix, iterate,
+)
 
 
 def spoof_shift(self, offset):
@@ -86,9 +35,6 @@ def main(coregdir, imagedir, outputdir):
     files = sorted(glob(os.path.join(coregdir, '*.json')))
 
     keys, xy = load_offset_matrix(files)
-
-    #keys = keys[1:3]
-    #xy = xy[1:3, 1:3]
 
     offset = np.zeros((len(xy), 2))
 
