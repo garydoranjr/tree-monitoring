@@ -3,6 +3,7 @@ import os
 import json
 import click
 import numpy as np
+import pandas as pd
 from glob import glob
 from tqdm import tqdm
 import matplotlib.pyplot as plt
@@ -27,11 +28,15 @@ def load_offsets(coregfile):
     }
 
 
-def offsets_to_matrix(offsets):
-    keys = set([])
-    for src, tgt in offsets.keys():
-        keys |= set([src, tgt])
-    keys = sorted(keys)
+def offsets_to_matrix(offsets, keys=None):
+    if filterkeys is None:
+        keys = set([])
+        for src, tgt in offsets.keys():
+            keys |= set([src, tgt])
+        keys = sorted(keys)
+    else:
+        keys = sorted(keys)
+
     n = len(keys)
 
     xy = np.full((n, n, 2), np.nan)
@@ -46,13 +51,13 @@ def offsets_to_matrix(offsets):
     return keys, xy
 
 
-def load_offset_matrix(coregfiles):
+def load_offset_matrix(coregfiles, keys=None):
 
     offsets = {}
     for f in tqdm(coregfiles, 'Loading'):
         offsets.update(load_offsets(f))
 
-    return offsets_to_matrix(offsets)
+    return offsets_to_matrix(offsets, keys=keys)
 
 
 def iterate(offset, xy):
@@ -63,16 +68,28 @@ def iterate(offset, xy):
     return offset
 
 
+def filterkeys(cloudfile, minclear):
+    if cloudfile is None:
+        return None
+
+    df = pd.read_csv(cloudfile)
+    return set(df.loc[df['PercentClear'] >= minclear]['File'])
+
+
 @click.command()
 @click.argument('coregdir')
 @click.argument('outputfile')
 @click.option('-m', '--maxiter', type=int, default=100)
 @click.option('-t', '--tolerance', type=float, default=1e-6)
-def main(coregdir, outputfile, maxiter, tolerance):
+@click.option('-c', '--cloudfile', default=None)
+@click.option('-l', '--minclear', type=float, default=0.9)
+def main(coregdir, outputfile, maxiter, tolerance, cloudfile, minclear):
 
     files = sorted(glob(os.path.join(coregdir, '*.json')))
 
-    keys, xy = load_offset_matrix(files)
+    filtered = filterkeys(cloudfile, minclear)
+
+    keys, xy = load_offset_matrix(files, keys=filtered)
 
     offset = np.zeros((len(xy), 2))
 
