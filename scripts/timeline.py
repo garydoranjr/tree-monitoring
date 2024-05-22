@@ -38,7 +38,7 @@ def main(dronedatefile, planetsddatefile, outputfile):
 
     it = zip(
         ('Drone', 'Planet Scope'),
-        ('k-', 'r-'),
+        ('k-', 'g-'),
         (0, 2),
         (2, 4),
         (dronedates, planetdates['superdove'])

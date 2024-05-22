@@ -57,15 +57,17 @@ def main(coregdir, outputfile):
 
     S = successes_to_matrix(successes)
 
-    fig, ax = plt.subplots(figsize=(8, 6))
+    idx = np.argsort(np.sum(S, axis=0))
+    S = S[idx].T[idx]
+
+    fig, ax = plt.subplots(figsize=(24, 24))
 
     ax.set_facecolor('gray')
-    ax.imshow(S, cmap='RdYlGn')
+    ax.imshow(S, cmap='RdYlGn', interpolation='nearest')
+    ax.set_xticks([])
+    ax.set_yticks([])
 
-    plt.show()
-    exit()
-
-    fig.savefig(outputfile)
+    fig.savefig(outputfile, bbox_inches='tight')
 
 
 

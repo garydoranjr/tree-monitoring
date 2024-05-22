@@ -13,14 +13,7 @@ def parse_date(path):
     return datetime.strptime(datestr, '%Y%m%d_%H%M%S')
 
 
-@click.command()
-@click.argument('inputfile', type=click.Path(
-    path_type=Path, exists=True
-))
-@click.argument('outputfile', type=click.Path(
-    path_type=Path, exists=False
-))
-def main(inputfile, outputfile):
+def load_data(inputfile):
 
     dates = []
     pcs = []
@@ -30,11 +23,40 @@ def main(inputfile, outputfile):
         dates.append(parse_date(row['File']))
         pcs.append(row['PercentClear'])
 
-    for d, p in zip(dates, pcs):
-        plt.plot([d, d], [0, 1], 'k-')
-        plt.plot([d, d], [0, p], 'r-')
+    return dates, pcs
 
-    plt.show()
+
+@click.command()
+@click.argument('inputfile', type=click.Path(
+    path_type=Path, exists=True
+))
+@click.argument('outputfile', type=click.Path(
+    path_type=Path, exists=False
+))
+def main(inputfile, outputfile):
+
+    dates, pcs = load_data(inputfile)
+
+    fig, ax = plt.subplots(figsize=(12, 4))
+    ax.set_title('Usable Data in 50 ha Plot', fontsize=20)
+
+    for d, p in zip(dates, pcs):
+        ax.plot([d, d], [0, 1], '-', color='lightgray')
+        ax.plot([d, d], [0, p], 'g-')
+
+    ax.set_facecolor('red')
+
+    ax.set_xlim(np.min(dates), np.max(dates))
+    ax.set_ylim(0, 1)
+    ax.set_xticks([
+        datetime(year, 1, 1)
+        for year in range(2020, 2025)
+    ])
+
+    ax.set_xlabel('Date', fontsize=18)
+    ax.set_ylabel('Clear Fraction', fontsize=18)
+
+    fig.savefig(outputfile, bbox_inches='tight')
 
 
 if __name__ == '__main__':
