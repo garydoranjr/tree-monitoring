@@ -6,12 +6,13 @@ from glob import glob
 from tqdm import tqdm
 import rasterio as rio
 from pathlib import Path
+from werkzeug.security import safe_join
 
 
 def find_matching_mask(path):
     head, tail = os.path.split(path)
     prefix = '_'.join(tail.split('_')[:2])
-    candidates = glob(os.path.join(head, f'{prefix}*udm2*.tif'))
+    candidates = glob(safe_join(head, f'{prefix}*udm2*.tif'))
     if len(candidates) != 1:
         return None
     return candidates[0]
@@ -32,7 +33,7 @@ def get_clear_pc(path):
 ))
 def main(inputdir, outputfile):
 
-    rgb_files = sorted(glob(os.path.join(inputdir, '*rgb.tif')))
+    rgb_files = sorted(glob(safe_join(inputdir, '*rgb.tif')))
     mask_files = list(map(find_matching_mask, rgb_files))
 
     data = []

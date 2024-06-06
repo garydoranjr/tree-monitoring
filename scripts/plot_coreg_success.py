@@ -6,6 +6,7 @@ import numpy as np
 from glob import glob
 from tqdm import tqdm
 import matplotlib.pyplot as plt
+from werkzeug.security import safe_join
 
 from util import load_config
 from planet_coreg import stem
@@ -49,7 +50,7 @@ def successes_to_matrix(successes):
 @click.argument('outputfile')
 def main(coregdir, outputfile):
 
-    files = sorted(glob(os.path.join(coregdir, '*.json')))
+    files = sorted(glob(safe_join(coregdir, '*.json')))
 
     successes = {}
     for f in tqdm(files, 'Loading'):

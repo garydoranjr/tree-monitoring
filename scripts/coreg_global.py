@@ -7,6 +7,7 @@ import pandas as pd
 from glob import glob
 from tqdm import tqdm
 import matplotlib.pyplot as plt
+from werkzeug.security import safe_join
 
 from planet_coreg import stem
 
@@ -85,7 +86,7 @@ def filterkeys(cloudfile, minclear):
 @click.option('-l', '--minclear', type=float, default=0.9)
 def main(coregdir, outputfile, maxiter, tolerance, cloudfile, minclear):
 
-    files = sorted(glob(os.path.join(coregdir, '*.json')))
+    files = sorted(glob(safe_join(coregdir, '*.json')))
 
     filtered = filterkeys(cloudfile, minclear)
 

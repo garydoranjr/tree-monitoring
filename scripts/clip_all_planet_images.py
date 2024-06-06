@@ -3,6 +3,7 @@ import os
 import click
 from tqdm import tqdm
 from pathlib import Path
+from werkzeug.security import safe_join
 
 from clip_planet_image import clip
 
@@ -20,7 +21,7 @@ from clip_planet_image import clip
 def main(inputfiles, configfile, outputdir):
 
     jobs = [
-        (f, configfile, os.path.join(outputdir, os.path.basename(f)))
+        (f, configfile, safe_join(outputdir, os.path.basename(f)))
         for f in inputfiles
     ]
 

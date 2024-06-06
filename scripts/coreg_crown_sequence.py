@@ -7,6 +7,7 @@ from tqdm import tqdm
 import geopandas as gpd
 from PIL import Image, ImageDraw
 import matplotlib.pyplot as plt
+from werkzeug.security import safe_join
 
 from arosics import COREG
 from geoarray import GeoArray
@@ -34,8 +35,8 @@ def normalize(keys, offsets, reference_key):
 
 
 def extract_window(imagedir, outputdir, key, poly, offset, radius):
-    imagefile = os.path.join(imagedir, key + '.tif')
-    outputfile = os.path.join(outputdir, key + '.png')
+    imagefile = safe_join(imagedir, key + '.tif')
+    outputfile = safe_join(outputdir, key + '.png')
 
     img = GeoArray(imagefile)
 

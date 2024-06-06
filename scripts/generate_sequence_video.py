@@ -8,6 +8,7 @@ from ffmpeg import FFmpeg
 from datetime import datetime
 from PIL import Image, ImageDraw
 from tempfile import TemporaryDirectory
+from werkzeug.security import safe_join
 
 
 def parse_info(filename):
@@ -32,7 +33,7 @@ def reformat_image(inputfile, config, outputdir):
 
     base = os.path.basename(inputfile)
     info = parse_info(base)
-    outputfile = os.path.join(outputdir, base)
+    outputfile = safe_join(outputdir, base)
 
     total_size = (
         video_size[0] + left + right,
@@ -82,7 +83,7 @@ def main(inputdir, sequence_id, configfile, outputfile):
 
     ext = config['input_ext']
 
-    images = glob(os.path.join(inputdir, f'*_{sequence_id}_*_*_*.{ext}'))
+    images = glob(safe_join(inputdir, f'*_{sequence_id}_*_*_*.{ext}'))
 
     with TemporaryDirectory() as tmpdir:
         reformatted = [
@@ -90,7 +91,7 @@ def main(inputdir, sequence_id, configfile, outputfile):
             for i in images
         ]
 
-        tmpmov = os.path.join(
+        tmpmov = safe_join(
             tmpdir,
             os.path.basename(outputfile)
         )
@@ -98,7 +99,7 @@ def main(inputdir, sequence_id, configfile, outputfile):
         ffmpeg = (
             FFmpeg()
             .input(
-                os.path.join(tmpdir, f'*.{ext}'),
+                safe_join(tmpdir, f'*.{ext}'),
                 pattern_type='glob', framerate=1
             )
             .output(

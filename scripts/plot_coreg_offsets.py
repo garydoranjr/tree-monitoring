@@ -7,6 +7,7 @@ from glob import glob
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
+from werkzeug.security import safe_join
 
 from util import load_config
 
@@ -36,7 +37,7 @@ def main(coregdir, configfile, outputfile, nbins):
     coreg_args = config.get('coreg_args', {})
     vmax = coreg_args.get('max_shift', 5)
 
-    files = sorted(glob(os.path.join(coregdir, '*.json')))
+    files = sorted(glob(safe_join(coregdir, '*.json')))
 
     offsets = [load_offsets(f) for f in tqdm(files, 'Loading')]
 

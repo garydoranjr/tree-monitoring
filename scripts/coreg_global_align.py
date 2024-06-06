@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 from arosics import COREG
 from py_tools_ds.geo.coord_trafo import imXY2mapXY
 import arosics.geometry as GEO
+from werkzeug.security import safe_join
 
 from coreg_global import (
     load_offsets, offsets_to_matrix,
@@ -32,7 +33,7 @@ def spoof_shift(self, offset):
 @click.argument('outputdir')
 def main(coregdir, imagedir, outputdir):
 
-    files = sorted(glob(os.path.join(coregdir, '*.json')))
+    files = sorted(glob(safe_join(coregdir, '*.json')))
 
     keys, xy = load_offset_matrix(files)
 
@@ -46,8 +47,8 @@ def main(coregdir, imagedir, outputdir):
 
     for k, dxy in tqdm(list(zip(keys, offset)), 'Shifting'):
         if np.any(np.isnan(dxy)): continue
-        inputfile = os.path.join(imagedir, k + '.tif')
-        outputfile = os.path.join(outputdir, k + '_aligned.tif')
+        inputfile = safe_join(imagedir, k + '.tif')
+        outputfile = safe_join(outputdir, k + '_aligned.tif')
         if not os.path.exists(inputfile):
             raise ValueError(f'Missing file {inputfile}')
         try:

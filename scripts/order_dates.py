@@ -6,6 +6,7 @@ from tqdm import tqdm
 from pathlib import Path
 from datetime import datetime
 from collections import defaultdict
+from werkzeug.security import safe_join
 
 
 from validate_planet import MANIFEST_FILE
@@ -23,9 +24,9 @@ def get_date_from_path(path):
 
 
 def get_date(orderdir, subdir):
-    order_path = os.path.join(orderdir, subdir)
+    order_path = safe_join(orderdir, subdir)
 
-    manifest_file = os.path.join(order_path, MANIFEST_FILE)
+    manifest_file = safe_join(order_path, MANIFEST_FILE)
     if not os.path.exists(manifest_file):
         return None
 
@@ -53,7 +54,7 @@ def main(orderdir):
 
     subdirs = [
         d for d in os.listdir(orderdir)
-        if os.path.isdir(os.path.join(orderdir, d))
+        if os.path.isdir(safe_join(orderdir, d))
     ]
 
     results = defaultdict(set)

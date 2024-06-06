@@ -8,6 +8,7 @@ from glob import glob
 from tqdm import tqdm
 from arosics import COREG
 from geoarray import GeoArray
+from werkzeug.security import safe_join
 
 from util import load_config
 
@@ -45,14 +46,14 @@ def main(imagedir, outputdir, configfile, referenceindex):
     config = load_config(configfile)
     coreg_args = config.get('coreg_args', {})
 
-    files = sorted(glob(os.path.join(imagedir, config['glob_pattern'])))
+    files = sorted(glob(safe_join(imagedir, config['glob_pattern'])))
     if referenceindex >= len(files):
         raise ValueError(f'Index {referenceindex} out of range for {len(files)} files')
 
     reference_file = files.pop(referenceindex)
     ref = GeoArray(reference_file)
 
-    outputfile = os.path.join(
+    outputfile = safe_join(
         outputdir,
         stem(reference_file, suffix='.json')
     )
