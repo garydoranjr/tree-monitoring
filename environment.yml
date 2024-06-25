@@ -19,5 +19,6 @@ dependencies:
   - click
   - arosics
   - planet
+  - werkzeug
   - pip:
       - python-ffmpeg
