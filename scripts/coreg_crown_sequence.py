@@ -34,7 +34,7 @@ def normalize(keys, offsets, reference_key):
     return (offsets - offsets[i])
 
 
-def extract_window(imagedir, outputdir, key, poly, offset, radius):
+def extract_window(imagedir, outputdir, key, poly, offset, radius, draw_poly=True):
     imagefile = safe_join(imagedir, key + '.tif')
     outputfile = safe_join(outputdir, key + '.png')
 
@@ -80,7 +80,8 @@ def extract_window(imagedir, outputdir, key, poly, offset, radius):
     points = poly.iloc[0]
     points = list(poly.iloc[0].exterior.coords)
 
-    draw.polygon(points, outline='red')
+    if draw_poly:
+        draw.polygon(points, outline='red')
 
     im.save(outputfile)
 
@@ -116,7 +117,10 @@ def main(droneregistration, globalregistration, shapefile, imagedir, outputdir, 
 
     for key, offset in tqdm(list(zip(keys, offsets))):
         total_offset = offset + drone_offset
-        extract_window(imagedir, outputdir, key, poly, total_offset, radius)
+        try:
+            extract_window(imagedir, outputdir, key, poly, total_offset, radius, draw_poly=False)
+        except ValueError:
+            continue
 
 
 if __name__ == '__main__':
