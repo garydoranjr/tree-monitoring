@@ -6,9 +6,6 @@ import click
 from pathlib import Path
 
 
-from generate_sequence_video import parse_info
-
-
 PROJECT_ID = 'clvd3ln9m0o7j071u73o6hrgw'
 MISSING_STR = ''
 HEADERS = (
@@ -16,6 +13,7 @@ HEADERS = (
     'species',
     'author',
     'frame',
+    'date',
     'leafing',
     'fruting_flowering_event',
     'event_color',
@@ -58,12 +56,16 @@ def get_classifications(cls):
     return a
 
 
-def parse_labels(label):
+def parse_labels(label, frames):
     author = label['label_details']['created_by']
     annotations = []
     for f, frame in sorted(label['annotations']['frames'].items(), key=lambda i: int(i[0])):
         cls = get_classifications(frame['classifications'])
-        annotations.append(cls | { 'author': author, 'frame': f })
+        annotations.append(cls | {
+            'author': author,
+            'frame': int(f),
+            'date': frames[int(f) - 1],
+        })
     return annotations
 
 
@@ -71,10 +73,13 @@ def parse_labels(label):
 @click.argument('labelfile', type=click.Path(
     path_type=Path, exists=True
 ))
+@click.argument('frameinfo', type=click.Path(
+    path_type=Path, exists=True
+))
 @click.argument('outputfile', type=click.Path(
     path_type=Path, exists=False
 ))
-def main(labelfile, outputfile):
+def main(labelfile, frameinfo, outputfile):
 
     data = []
     with open(labelfile, 'r') as f:
@@ -82,11 +87,16 @@ def main(labelfile, outputfile):
             data.append(json.loads(line))
 
 
+    with open(frameinfo, 'r') as f:
+        frames = json.load(f)
+
+
     all_annotations = []
     for row in data:
         tag, species = parse_id(row['data_row']['external_id'])
         project = row['projects'][PROJECT_ID]
-        annotations = sum(map(parse_labels, project['labels']), [])
+        parse = lambda l: parse_labels(l, frames[str(tag)])
+        annotations = sum(map(parse, project['labels']), [])
         all_annotations += [
             (a | { 'tag': tag, 'species': species })
             for a in annotations
