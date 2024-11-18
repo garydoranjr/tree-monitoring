@@ -33,14 +33,15 @@ def main(cadencefile, phenofile, outputfile):
     cintp = CadenceInterp(cdata['dates'], cdata['cadence'][:, med_idx])
 
     pheno_df = pd.read_csv(phenofile)
+    pheno_df = pheno_df.loc[pheno_df['model'] == 'M2A']
 
     rows = []
 
     for i, row in pheno_df.iterrows():
         spcode = row['sp']
         ptype = row['type']
-        mean = row['mean']
-        kappa = row['kappa']
+        mean = row['mean1']
+        kappa = row['kappa1']
 
         row = {
             'spcode': spcode,

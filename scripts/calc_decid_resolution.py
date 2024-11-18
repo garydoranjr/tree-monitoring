@@ -14,13 +14,13 @@ class CadenceInterp:
 
     def __init__(self, dates, values):
         days = (dates - np.min(dates)).astype('timedelta64[D]')
-        days = np.hstack([days, [360]]).astype(float)
+        days = np.hstack([days, [365]]).astype(float)
         values = np.hstack([values, [values[0]]])
         self.f = interp1d(days, values)
 
 
     def __call__(self, doy):
-        doy %= 360.
+        doy %= 365.
         return self.f(doy)
 
 
