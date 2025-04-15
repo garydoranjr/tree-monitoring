@@ -14,6 +14,7 @@ from trap_plot import (
     get_heatmap, FLOWER_CODES, FRUIT_CODES,
     START_DATE, END_DATE,
 )
+from analyze_windowed_counts import shift_months
 
 
 YEARS = 4
@@ -83,16 +84,34 @@ def main(inputfile, outputfile, fruit):
         figs.append(fig)
         ax.set_title(sp, fontsize=20)
 
-        im = ax.imshow(Hs, cmap='plasma', norm=LogNorm(vmin=1.0, vmax=1000.))
+        im = ax.imshow(
+            Hs, cmap='plasma', interpolation='nearest',
+            norm=LogNorm(vmin=1.0, vmax=1000.),
+            extent=[0, 365, 0, 1],
+        )
         ax.set_aspect('auto')
         #ax.set_yticks(np.arange(len(ts)))
         #ax.set_yticklabels(ts)
         ax.set_yticks([])
         ax.set_ylabel('Trap / Year', fontsize=16)
-        ax.set_xlabel('Date', fontsize=16)
+        ax.set_xlabel('Month', fontsize=16)
 
-        ax.set_xticks(date_ticks)
-        ax.set_xticklabels(date_labels, rotation=20)
+        #ax.set_xticks(date_ticks)
+        #ax.set_xticklabels(date_labels, rotation=20)
+        sep = pd.to_datetime(f'2021-09-01').dayofyear
+        ticks = []
+        for month in range(1, 13):
+            ticks.append(pd.to_datetime(f'2021-{month:02d}-01').dayofyear)
+        labels = [
+            'Jan', 'Feb', 'Mar',
+            'Apr', 'May', 'Jun',
+            'Jul', 'Aug', 'Sep',
+            'Oct', 'Nov', 'Dec',
+        ]
+
+        ticks, labels = shift_months(sep, ticks, labels)
+        ax.set_xticks(ticks)
+        ax.set_xticklabels(labels)
 
         cbar = fig.colorbar(im)
         cbar.set_label('Quantity', fontsize=16)
