@@ -6,6 +6,7 @@ from datetime import timedelta, timezone
 import matplotlib.pyplot as plt
 from pysolar.solar import get_altitude
 from pysolar.radiation import get_radiation_direct
+from scipy.ndimage import convolve1d
 
 from calc_decid_resolution import (
     CadenceInterp
@@ -29,13 +30,13 @@ def select_hour(df, hour):
 
 
 @click.command()
-@click.argument('cadencefile')
+@click.argument('countfile')
 @click.argument('emeanfile')
 @click.argument('wmeanfile')
-def main(cadencefile, emeanfile, wmeanfile):
-    cdata = np.load(cadencefile)
-    med_idx = np.where(cdata['percentiles'] == 50.)[0][0]
-    cintp = CadenceInterp(cdata['dates'], cdata['cadence'][:, med_idx])
+@click.argument('outputfile')
+def main(countfile, emeanfile, wmeanfile, outputfile):
+    data = np.load(countfile)
+    v = np.average(data['counts'], axis=1) / data['window_size']
 
     df_mean = pd.concat([
         pd.read_csv(emeanfile),
@@ -45,8 +46,7 @@ def main(cadencefile, emeanfile, wmeanfile):
     df_10 = select_hour(df_mean, 10)
     daily_avg = df_10.groupby(df_10['datetime'].dt.dayofyear)['sr'].mean()
 
-    dd = np.arange(0, 365.)
-    v = cintp(dd)
+    dd = np.arange(0, 365.) + 1
 
     latlon = (9.161750812689062, -79.83767928034351)
 
@@ -65,64 +65,38 @@ def main(cadencefile, emeanfile, wmeanfile):
         for d, a in zip(datetimes, altitude)
     ])
 
+    relative = (radiation - daily_avg.values[:-1]) / radiation
     relative = daily_avg.values[:-1] / radiation
+
+    N = 30
+    smoothed = convolve1d(daily_avg.values[:-1], np.ones(N) / N, mode='wrap')
 
     fig, ax = plt.subplots(figsize=(10, 5))
     ax.plot(dd, daily_avg.values[:-1], 'gray')
+    ax.plot(dd, smoothed, 'k')
     #ax.plot(dd, radiation, 'r-')
     #plt.plot(df_mean['date'], df_mean['sr'].ewm(span=30).mean())
     ax.set_ylabel('Avg. Radiation at 10am (W/m$^2$)', fontsize=16)
     ax2 = ax.twinx()
-    ax2.plot(dd, (1 / v), 'r')
+    ax2.plot(dd, v, 'r')
     ax.set_xlabel('Date', fontsize=16)
-    ax2.set_ylabel('Observations / Day', fontsize=16)
+    ax2.set_ylabel('Observations / Day', fontsize=16, color='red')
 
-    plt.show()
+    ticks = []
+    for month in range(1, 13):
+        ticks.append(pd.to_datetime(f'2021-{month:02d}-01').dayofyear)
+    labels = [
+        'Jan', 'Feb', 'Mar',
+        'Apr', 'May', 'Jun',
+        'Jul', 'Aug', 'Sep',
+        'Oct', 'Nov', 'Dec',
+    ]
 
-    exit()
+    ax.set_xticks(ticks)
+    ax.set_xticklabels(labels)
+    ax.set_xlim(1, 365)
 
-    #df_min = select(df_min, '01/01/2022', '31/12/2022')
-    df_mean = select(df_mean, '01/01/2022', '31/12/2022')
-    #df_max = select(df_max, '01/01/2022', '31/12/2022')
-
-    #df_min = select_hour(df_min, '10:00:00')
-    df_mean = select_hour(df_mean, '10:00:00')
-    df_max = select_hour(df_max, '10:00:00')
-
-    rel = (df_mean['sr'] - df_min['srmn']) / (df_max['srmx'] - df_min['srmn'])
-
-    dd = np.linspace(0, 364., 365)
-    v = cintp(dd)
-
-    #plt.plot(df_mean['date'], v)
-    #plt.plot(df_mean['date'], rel)
-    #plt.plot(df_mean['date'], rel.ewm(span=10).mean())
-
-    fig, ax = plt.subplots(figsize=(10, 5))
-    ax.plot(df_mean['date'], df_mean['sr'], 'gray')
-    ax.plot(df_mean['date'], radiation, 'r-')
-    #plt.plot(df_mean['date'], df_mean['sr'].ewm(span=30).mean())
-    ax.set_ylabel('Avg. Radiation at 10am (W/m$^2$)', fontsize=16)
-    ax2 = ax.twinx()
-    ax2.plot(df_mean['date'], (1 / v), 'r')
-    ax.set_xlabel('Date', fontsize=16)
-    ax2.set_ylabel('Observations / Day', fontsize=16)
-
-    plt.show()
-    exit()
-
-    plt.figure()
-    plt.plot(df_mean['date'], 1000 * (1 / v))
-    plt.plot(df_mean['date'], df_mean['sr'])
-    plt.plot(df_mean['date'], df_mean['sr'].ewm(span=30).mean())
-
-    plt.figure()
-    plt.plot(df_max['date'], df_max['srmx'])
-    plt.plot(df_max['date'], df_max['srmx'].ewm(span=30).mean())
-
-    plt.show()
-
-    print(df_mean)
+    fig.savefig(outputfile)
 
 
 if __name__ == '__main__':
