@@ -68,7 +68,7 @@ def main(countfile, modelfile, outputfile):
     ax.set_aspect('auto')
     ax.grid(color='k', linestyle=':', linewidth=2)
 
-    ax.set_xlabel('Day of Year', fontsize=16)
+    ax.set_xlabel('Month', fontsize=16)
     ax.set_ylabel('Event Duration (Days)', fontsize=16)
 
     cbar = fig.colorbar(im)

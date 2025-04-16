@@ -3,6 +3,7 @@ import click
 import numpy as np
 import pandas as pd
 
+from fit_count_models import PoissonMixtureModel
 from calc_decid_resolution import CadenceInterp
 from plot_decid_summary import SPECIES
 
@@ -14,33 +15,40 @@ def get_doy(df, field='event_peak'):
     ])
 
 
-def compute_comparison(cintp, df_s):
+def get_obs_probabilities(models, peak, duration):
+    model_idx = (peak - 1).astype(int)
+    probs = [
+        models[i].capture_prob([d])[0]
+        for i, d in zip(model_idx, duration)
+    ]
+    return probs
+
+
+def compute_comparison(models, df_s):
 
     peak = get_doy(df_s)
-    v = cintp(peak)
     dl = df_s['event_length']
-    return np.average(dl > v)
+    probs = get_obs_probabilities(models, peak, dl)
+    return np.average(probs)
 
 
 @click.command()
-@click.argument('cadencefile')
-@click.argument('decidfile')
+@click.argument('modelfile')
+@click.argument('eventfile')
 @click.argument('outputfile')
-def main(cadencefile, decidfile, outputfile):
+def main(modelfile, eventfile, outputfile):
 
-    cdata = np.load(cadencefile)
-    med_idx = np.where(cdata['percentiles'] == 50.)[0][0]
-    cintp = CadenceInterp(cdata['dates'], cdata['cadence'][:, med_idx])
+    data = np.load(modelfile)
+    models = PoissonMixtureModel.from_dict(data)
 
-    df = pd.read_csv(decidfile)
+    df = pd.read_csv(eventfile)
     unique_species = sorted(np.unique(df['species']))
-    #unique_species = sorted(SPECIES)
 
     data = []
     for sp in unique_species:
         df_s = df.loc[df['species'] == sp]
 
-        frac = compute_comparison(cintp, df_s)
+        frac = compute_comparison(models, df_s)
         data.append({
             'species': sp,
             'frac_obs': frac,
