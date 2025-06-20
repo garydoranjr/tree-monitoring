@@ -2,10 +2,11 @@
 import click
 import numpy as np
 import pandas as pd
+from tqdm import tqdm
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
-from fit_count_models import PoissonMixtureModel
+from fit_empirical_count_models import EmpiricalCountModel
 from analyze_windowed_counts import shift_months
 from event_summary_stats import get_doy, get_obs_probabilities
 
@@ -15,19 +16,12 @@ DMIN = 1
 DMAX = 49.
 
 
-def get_doy(df, field='event_peak'):
-    return np.array([
-        float(p.dayofyear)
-        for p in pd.to_datetime(df[field])
-    ])
-
-
-def make_cadence_plot(fig, ax, models, df_s):
+def make_cadence_plot(fig, ax, model, df_s):
 
     durations = np.linspace(DMIN, DMAX, 100)
     P = np.column_stack([
-        pmm.capture_prob(durations)
-        for pmm in models
+        model.capture_prob(i, durations)
+        for i in np.arange(365)
     ])
     sep = pd.to_datetime(f'2021-09-01').dayofyear
     P = np.hstack([
@@ -63,7 +57,7 @@ def make_cadence_plot(fig, ax, models, df_s):
 
     peak = get_doy(df_s)
     dl = np.minimum(df_s['event_length'], DMAX)
-    probs = get_obs_probabilities(models, peak, df_s['event_length'])
+    probs = get_obs_probabilities(model, peak, df_s['event_length'])
 
     # Shift peaks
     idx_s = (peak >= sep)
@@ -95,21 +89,20 @@ def make_comparison_plot(ax, probs):
 @click.argument('outputfile')
 def main(modelfile, eventfile, outputfile):
 
-    data = np.load(modelfile)
-    models = PoissonMixtureModel.from_dict(data)
+    model = EmpiricalCountModel.load(modelfile)
 
     df = pd.read_csv(eventfile)
     unique_species = sorted(np.unique(df['species']))
     #unique_species = unique_species[:10]
 
     figs = []
-    for sp in unique_species:
+    for sp in tqdm(unique_species, 'Plotting'):
         df_s = df.loc[df['species'] == sp]
 
         fig = plt.figure(figsize=(16, 7))
         ax = fig.add_subplot(121)
         ax.set_title(sp, fontsize=18)
-        probs = make_cadence_plot(fig, ax, models, df_s)
+        probs = make_cadence_plot(fig, ax, model, df_s)
 
         ax = fig.add_subplot(122)
         make_comparison_plot(ax, probs)
@@ -117,7 +110,7 @@ def main(modelfile, eventfile, outputfile):
         figs.append(fig)
 
     with PdfPages(outputfile) as pdf:
-        for fig in figs:
+        for fig in tqdm(figs, 'Saving'):
             pdf.savefig(fig)
 
 

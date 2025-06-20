@@ -3,9 +3,7 @@ import click
 import numpy as np
 import pandas as pd
 
-from fit_count_models import PoissonMixtureModel
-from calc_decid_resolution import CadenceInterp
-from plot_decid_summary import SPECIES
+from fit_empirical_count_models import EmpiricalCountModel
 
 
 def get_doy(df, field='event_peak'):
@@ -15,20 +13,20 @@ def get_doy(df, field='event_peak'):
     ])
 
 
-def get_obs_probabilities(models, peak, duration):
+def get_obs_probabilities(model, peak, duration):
     model_idx = (peak - 1).astype(int)
     probs = [
-        models[i].capture_prob([d])[0]
+        model.capture_prob(i, [d])[0]
         for i, d in zip(model_idx, duration)
     ]
     return probs
 
 
-def compute_comparison(models, df_s):
+def compute_comparison(model, df_s):
 
     peak = get_doy(df_s)
     dl = df_s['event_length']
-    probs = get_obs_probabilities(models, peak, dl)
+    probs = get_obs_probabilities(model, peak, dl)
     return np.average(probs)
 
 
@@ -38,8 +36,7 @@ def compute_comparison(models, df_s):
 @click.argument('outputfile')
 def main(modelfile, eventfile, outputfile):
 
-    data = np.load(modelfile)
-    models = PoissonMixtureModel.from_dict(data)
+    model = EmpiricalCountModel.load(modelfile)
 
     df = pd.read_csv(eventfile)
     unique_species = sorted(np.unique(df['species']))
@@ -48,7 +45,7 @@ def main(modelfile, eventfile, outputfile):
     for sp in unique_species:
         df_s = df.loc[df['species'] == sp]
 
-        frac = compute_comparison(models, df_s)
+        frac = compute_comparison(model, df_s)
         data.append({
             'species': sp,
             'frac_obs': frac,
