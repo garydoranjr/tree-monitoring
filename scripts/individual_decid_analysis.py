@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 def get_peak(dates, decid, n):
     w = np.ones(n)
     conv = convolve1d(decid, w, mode='wrap')
-    return dates.iloc[np.argmin(conv)]
+    return dates.iloc[np.argmax(conv)]
 
 
 @click.command()

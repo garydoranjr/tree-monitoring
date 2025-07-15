@@ -12,7 +12,8 @@ from werkzeug.security import safe_join
 
 
 def parse_info(filename):
-    parts = os.path.splitext(filename)[0].split('_')
+    base = os.path.basename(filename)
+    parts = os.path.splitext(base)[0].split('_')
     return {
         'genus': parts[0],
         'species': parts[1],
@@ -21,7 +22,7 @@ def parse_info(filename):
     }
 
 
-def reformat_image(inputfile, config, outputdir):
+def reformat_image(inputfile, config, outputdir, info_parser):
     video_size = config['video_size']
     date_fmt = config.get('date_format', None)
     species_fmt = config.get('species_format', None)
@@ -32,7 +33,7 @@ def reformat_image(inputfile, config, outputdir):
     )
 
     base = os.path.basename(inputfile)
-    info = parse_info(base)
+    info = info_parser(inputfile)
     outputfile = safe_join(outputdir, base)
 
     total_size = (
@@ -71,6 +72,43 @@ def reformat_image(inputfile, config, outputdir):
     return outputfile
 
 
+def generate_video(images, config, outputfile, info_parser=parse_info):
+
+    # Get common extension
+    exts = set([
+        os.path.splitext(i)[1]
+        for i in images
+    ])
+    assert len(exts) == 1
+    ext = exts.pop()
+
+    with TemporaryDirectory() as tmpdir:
+        reformatted = [
+            reformat_image(i, config, tmpdir, info_parser)
+            for i in images
+        ]
+
+        tmpmov = safe_join(
+            tmpdir,
+            os.path.basename(outputfile)
+        )
+
+        ffmpeg = (
+            FFmpeg()
+            .input(
+                safe_join(tmpdir, f'*{ext}'),
+                pattern_type='glob', framerate=1
+            )
+            .output(
+                tmpmov,
+                {"codec:v": "libx264"}
+            )
+        )
+        ffmpeg.execute()
+
+        shutil.move(tmpmov, outputfile)
+
+
 @click.command()
 @click.argument('inputdir')
 @click.argument('sequence_id', type=int)
@@ -85,31 +123,7 @@ def main(inputdir, sequence_id, configfile, outputfile):
 
     images = glob(safe_join(inputdir, f'*_{sequence_id}_*_*_*.{ext}'))
 
-    with TemporaryDirectory() as tmpdir:
-        reformatted = [
-            reformat_image(i, config, tmpdir)
-            for i in images
-        ]
-
-        tmpmov = safe_join(
-            tmpdir,
-            os.path.basename(outputfile)
-        )
-
-        ffmpeg = (
-            FFmpeg()
-            .input(
-                safe_join(tmpdir, f'*.{ext}'),
-                pattern_type='glob', framerate=1
-            )
-            .output(
-                tmpmov,
-                {"codec:v": "libx264"}
-            )
-        )
-        ffmpeg.execute()
-
-        shutil.move(tmpmov, outputfile)
+    generate_video(images, config, outputfile)
 
 
 if __name__ == '__main__':

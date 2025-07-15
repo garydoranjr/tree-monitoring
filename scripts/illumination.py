@@ -6,6 +6,8 @@ from datetime import timedelta, timezone
 import matplotlib.pyplot as plt
 from pysolar.solar import get_altitude
 from pysolar.radiation import get_radiation_direct
+from pysolar.util import diffuse_underclear, diffuse_underovercast
+from scipy.stats import linregress
 from scipy.ndimage import convolve1d
 
 from calc_decid_resolution import (
@@ -56,31 +58,40 @@ def main(countfile, emeanfile, wmeanfile, outputfile):
         freq='D',
         tz='UTC'  # Ensures timestamps are timezone-aware
     )
-    altitude = [
-        get_altitude(latlon[0], latlon[1], dt)
-        for dt in datetimes
-    ]
     radiation = np.array([
-        get_radiation_direct(d, a)
-        for d, a in zip(datetimes, altitude)
+        diffuse_underclear(latlon[0], latlon[1], dt)
+        for dt in datetimes
     ])
 
     relative = (radiation - daily_avg.values[:-1]) / radiation
     relative = daily_avg.values[:-1] / radiation
 
-    N = 30
+    N = int(data['window_size'])
     smoothed = convolve1d(daily_avg.values[:-1], np.ones(N) / N, mode='wrap')
 
     fig, ax = plt.subplots(figsize=(10, 5))
-    ax.plot(dd, daily_avg.values[:-1], 'gray')
-    ax.plot(dd, smoothed, 'k')
+
+    ax.plot(dd, daily_avg.values[:-1] / radiation, 'gray')
+    ax.plot(dd, smoothed / radiation, 'k')
+    ax.set_ylim(0.35, 1.0)
     #ax.plot(dd, radiation, 'r-')
     #plt.plot(df_mean['date'], df_mean['sr'].ewm(span=30).mean())
-    ax.set_ylabel('Avg. Radiation at 10am (W/m$^2$)', fontsize=16)
+    #ax.set_ylabel('Avg. Radiation at 10am (W/m$^2$)', fontsize=16)
+    ax.set_ylabel('Fraction of Expected Radiation', fontsize=16)
     ax2 = ax.twinx()
     ax2.plot(dd, v, 'r')
     ax.set_xlabel('Date', fontsize=16)
     ax2.set_ylabel('Observations / Day', fontsize=16, color='red')
+
+    ax2.set_ylim(-0.3, 1.2)
+    ax2.set_yticks([0, 0.2, 0.4, 0.6, 0.8, 1.0])
+    ymin, ymax = ax2.get_ylim()
+
+    result = linregress(v, smoothed / radiation)
+    print(f'R = {result.rvalue:.2f}')
+    y1min = result.slope * ymin + result.intercept
+    y1max = result.slope * ymax + result.intercept
+    ax.set_ylim(y1min, y1max)
 
     ticks = []
     for month in range(1, 13):

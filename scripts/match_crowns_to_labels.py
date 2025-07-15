@@ -51,7 +51,7 @@ def rectangle_from_top_left(top, left, width, height):
     ])
 
 
-def match_crowns(labels, filename, crowns, imgfile, plotfile, evalfile):
+def match_crowns(labels, filename, crowns, imgfile, plotfile, matchfile, evalfile):
     # Select relevant rows and drop column
     labels = labels.loc[labels['filename'] == filename]
     labels = labels.drop(columns=['filename'])
@@ -106,6 +106,14 @@ def match_crowns(labels, filename, crowns, imgfile, plotfile, evalfile):
     ]
 
     best_idx, best_scores = match(poly_labels, trans_crowns)
+
+    df = pd.DataFrame({
+        'best_idx': best_idx,
+        'best_scores': best_scores,
+    })
+    df.to_csv(matchfile, index=False)
+    return
+
     valid_idx = set([
         i for i, s in zip(best_idx, best_scores) if s > 0
     ])
@@ -122,9 +130,6 @@ def match_crowns(labels, filename, crowns, imgfile, plotfile, evalfile):
     fig.savefig(plotfile)
 
     evaluate(poly_labels, trans_crowns, evalfile)
-
-    #plt.show()
-    #exit()
 
 
 def random_perturbation(crowns, seed=0, w=10):
@@ -207,36 +212,10 @@ def main(labelfile, shapefile, imagedir, outputdir):
         base = os.path.splitext(f)[0]
         fname = base + '.tif'
         plotfile = safe_join(outputdir, base + '.pdf')
+        matchfile = safe_join(outputdir, base + '_matches.csv')
         evalfile = safe_join(outputdir, base + '.csv')
         imgfile = safe_join(imagedir, fname)
-        match_crowns(labels, f, crowns, imgfile, plotfile, evalfile)
-
-    exit()
-
-
-    focal_crown = crowns.loc[crowns['tag'] == crownid]
-    if len(focal_crown) != 1:
-        raise ValueError(f'{len(focal_crown)} crowns found with id {crownid}')
-
-    poly = focal_crown['geometry']
-
-    keys, offsets = load_offsets(globalregistration)
-
-    with open(droneregistration, 'r') as f:
-        drone = json.load(f)
-
-    offsets = normalize(keys, offsets, drone['planet_map'])
-    drone_offset = np.array([
-        drone['coreg_info']['corrected_shifts_px']['x'],
-        drone['coreg_info']['corrected_shifts_px']['y'],
-    ])
-
-    for key, offset in tqdm(list(zip(keys, offsets))):
-        total_offset = offset + drone_offset
-        try:
-            extract_window(imagedir, outputdir, key, poly, total_offset, radius, draw_poly=drawpoly, ndvi=ndvi)
-        except (ValueError, FileNotFoundError):
-            continue
+        match_crowns(labels, f, crowns, imgfile, plotfile, matchfile, evalfile)
 
 
 if __name__ == '__main__':

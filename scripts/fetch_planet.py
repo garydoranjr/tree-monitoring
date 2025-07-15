@@ -58,6 +58,9 @@ async def fetch(auth, config, year, month, outputdir):
     if len(items) > 100:
         raise ValueError('Too many items ({len(items)}) to fetch!')
 
+    if len(items) == 0:
+        raise ValueError('No items to fetch!')
+
     item_type = config['item_type']
     product_bundle = config['product_bundle']
     order_name = config['order_name_format'].format(year=year, month=month)

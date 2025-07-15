@@ -19,6 +19,7 @@ def parse_id(external_id):
 
 def parse_labels(annotations):
     frames = [v for k, v in sorted(annotations['frames'].items())]
+    if len(frames) == 0: return None
     assert len(frames) == 2
     f1 = frames[0]['objects']
     f2 = frames[1]['objects']
@@ -58,8 +59,13 @@ def main(labelfile, outputfile):
     for row in data:
         project = row['projects'][PROJECT_ID]
         src, tgt = parse_id(row['data_row']['external_id'])
-        labels = project['labels'][0]
-        pairs = parse_labels(labels['annotations'])
+
+        labels = project['labels']
+        if len(labels) == 0: continue
+
+        pairs = parse_labels(labels[0]['annotations'])
+        if pairs is None: continue
+
         diffs = pairs_to_diffs(pairs) / SCALE_FACTOR
         n = len(diffs)
         dx, dy = np.average(diffs, axis=0)

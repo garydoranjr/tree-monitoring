@@ -12,6 +12,7 @@ from matplotlib.backends.backend_pdf import PdfPages
 
 
 FLOWER_CODES = [6, 9]
+FRUIT_CODES = [1, 2, 3, 4, 7, 10]
 START_DATE = '2020-09-01'
 END_DATE = '2024-09-01'
 YEARS = 4

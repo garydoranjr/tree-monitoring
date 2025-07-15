@@ -25,7 +25,7 @@ def parse_date(f):
 def get_rate_pcs(dates, vis, sample, pcs, years=[0, 1, 2]):
     periods = []
     for y in years:
-        sy = sample + np.timedelta64(365, 'D')
+        sy = sample + (y * np.timedelta64(365, 'D'))
         start = sy - WINDOW
         end = sy + WINDOW
         good = np.logical_and(start <= dates, dates <= end)
@@ -73,6 +73,7 @@ def main(inputfile, plotfile, outputfile):
     ).values
 
     pcs = [10., 50., 90.]
+    #pcs = np.linspace(0.5, 99.5, 99)
     pc = np.vstack([
         get_rate_pcs(dates, vis, s, pcs)
         for s in tqdm(samples, 'Windows')

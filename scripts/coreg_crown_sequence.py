@@ -34,7 +34,10 @@ def normalize(keys, offsets, reference_key):
     return (offsets - offsets[i])
 
 
-def extract_window(imagedir, outputdir, key, poly, offset, radius, draw_poly=True):
+def extract_window(imagedir, outputdir, key, poly, offset, radius, draw_poly=True, ndvi=False):
+    if ndvi:
+        key = key.replace('_rgb', '_ndvi')
+
     imagefile = safe_join(imagedir, key + '.tif')
     outputfile = safe_join(outputdir, key + '.png')
 
@@ -67,7 +70,7 @@ def extract_window(imagedir, outputdir, key, poly, offset, radius, draw_poly=Tru
     poly = poly.translate(xoff=-col, yoff=-row)
 
     subframe = np.array(img[row:row+height, col:col+height], dtype=float)
-    maxval = np.max(subframe)
+    maxval = 1.0 if ndvi else np.max(subframe)
     if maxval == 0:
         return
 
@@ -94,7 +97,9 @@ def extract_window(imagedir, outputdir, key, poly, offset, radius, draw_poly=Tru
 @click.argument('outputdir')
 @click.argument('crownid')
 @click.option('-r', '--radius', type=int, default=25)
-def main(droneregistration, globalregistration, shapefile, imagedir, outputdir, crownid, radius):
+@click.option('-d', '--drawpoly', is_flag=True)
+@click.option('-n', '--ndvi', is_flag=True)
+def main(droneregistration, globalregistration, shapefile, imagedir, outputdir, crownid, radius, drawpoly, ndvi):
 
     crowns = gpd.read_file(shapefile)
 
@@ -118,8 +123,8 @@ def main(droneregistration, globalregistration, shapefile, imagedir, outputdir, 
     for key, offset in tqdm(list(zip(keys, offsets))):
         total_offset = offset + drone_offset
         try:
-            extract_window(imagedir, outputdir, key, poly, total_offset, radius, draw_poly=False)
-        except ValueError:
+            extract_window(imagedir, outputdir, key, poly, total_offset, radius, draw_poly=drawpoly, ndvi=ndvi)
+        except (ValueError, FileNotFoundError):
             continue
 
 

@@ -10,6 +10,32 @@ from calc_decid_resolution import CadenceInterp
 
 VMAX = 49.
 
+SPECIES = [
+    'ALSEBL',
+    'ANACEX',
+    'APEIME',
+    'AST2GR',
+    'CAVAPL',
+    'CEIBPE',
+    'CORDAL',
+    'DIPTPA',
+    'GUAPST',
+    'HURACR',
+    'JAC1CO',
+    'LONCLA',
+    'LUEHSE',
+    'PLA1PI',
+    'PLA2EL',
+    'SPONMO',
+    'SPONRA',
+    'STERAP',
+    'TAB1GU',
+    'TAB1RO',
+    'TERMOB',
+    'ZANTBE',
+    'ZANTP1',
+]
+
 
 def get_doy(df, field='decid_peak'):
     return np.array([
@@ -92,7 +118,8 @@ def main(cadencefile, decidfile, outputfile):
     cintp = CadenceInterp(cdata['dates'], cdata['cadence'][:, med_idx])
 
     df = pd.read_csv(decidfile)
-    unique_species = sorted(np.unique(df['species']))
+    #unique_species = sorted(np.unique(df['species']))
+    unique_species = sorted(SPECIES)
 
     figs = []
     for sp in unique_species:
