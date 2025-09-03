@@ -15,10 +15,27 @@ PROJECT_ID = 'cmcgtwkuf0vjn07185e728a0z'
 PROJECT_ID = 'cme1pxuyc0pjk07494fzmff4d'
 
 
+def parse_object(o):
+    cls = o['classifications']
+    if len(cls) == 0:
+        is_event = False
+    else:
+        assert len(cls) == 1
+        cls = cls[0]
+
+        ans = cls['checklist_answers']
+        assert len(ans) == 1
+        ans = ans[0]
+        is_event = ans['value']
+        assert is_event
+
+    return o['bounding_box'] | { 'is_event': is_event }
+
+
 def parse_labels(annotations):
     objects = annotations['objects']
     return [
-        o['bounding_box']
+        parse_object(o)
         for o in objects
     ]
 
@@ -54,7 +71,7 @@ def main(labelfile, outputfile):
             all_annotations += boxes
 
     df = pd.DataFrame.from_dict(all_annotations)
-    df = df[['filename', 'labeler', 'top', 'left', 'width', 'height']]
+    df = df[['filename', 'labeler', 'top', 'left', 'width', 'height', 'is_event']]
     df.to_csv(outputfile, index=False)
 
 
