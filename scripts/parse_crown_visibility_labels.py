@@ -11,11 +11,12 @@ from collections import defaultdict
 
 PROJECT_ID = 'cm9j8546c17vg072p6m3wgnty'
 PROJECT_ID = 'cmc5e6wce09g007zean63g0jh'
+PROJECT_ID = 'cmcgtwkuf0vjn07185e728a0z'
+PROJECT_ID = 'cme1pxuyc0pjk07494fzmff4d'
 
 
 def parse_labels(annotations):
     objects = annotations['objects']
-
     return [
         o['bounding_box']
         for o in objects
@@ -43,14 +44,17 @@ def main(labelfile, outputfile):
         labels = project['labels']
         if len(labels) == 0: continue
 
-        boxes = parse_labels(labels[0]['annotations'])
-        for b in boxes:
-            b['filename'] = filename
+        for label in labels:
+            labeler = label['label_details']['created_by']
+            boxes = parse_labels(label['annotations'])
+            for b in boxes:
+                b['filename'] = filename
+                b['labeler'] = labeler
 
-        all_annotations += boxes
+            all_annotations += boxes
 
     df = pd.DataFrame.from_dict(all_annotations)
-    df = df[['filename', 'top', 'left', 'width', 'height']]
+    df = df[['filename', 'labeler', 'top', 'left', 'width', 'height']]
     df.to_csv(outputfile, index=False)
 
 
