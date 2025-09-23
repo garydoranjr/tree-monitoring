@@ -5,19 +5,34 @@ import click
 from tqdm import tqdm
 from PIL import Image
 import numpy as np
+import pandas as pd
 from torch.utils.data import Dataset, DataLoader
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 from torchvision import transforms
+import torchmetrics
 from transformers import SegformerForSemanticSegmentation, SegformerImageProcessor
 
 
 class TifSegmentationDataset(Dataset):
 
 
-    def __init__(self, img_dir, mask_dir, processor, size=512):
-        self.mask_files = sorted(glob.glob(os.path.join(mask_dir, "*.tif")))
+    def __init__(self, img_dir, mask_dir, processor, foldfile=None, fold=None, size=512):
+        if foldfile is not None:
+            if fold is None: raise ValueError('Must specify fold')
+            df = pd.read_csv(foldfile)
+            relevant = df.loc[df['split'] == fold]
+            relevant = relevant['polygon_id']
+
+            self.mask_files = sorted([
+                os.path.join(mask_dir, f'{fname}.tif')
+                for fname in relevant
+            ])
+        else:
+            self.mask_files = sorted(glob.glob(os.path.join(mask_dir, "*.tif")))
+
         self.img_files = [
             os.path.join(img_dir, os.path.basename(mf))
             for mf in self.mask_files
@@ -55,18 +70,73 @@ class TifSegmentationDataset(Dataset):
         return pixel_values, labels
 
 
+def evaluate_segmentation(model, dataloader, metric, device="cpu", threshold=0.5):
+    """
+    Evaluate binary segmentation model with a given metric object.
+
+    Args:
+        model (torch.nn.Module): Trained segmentation model.
+        dataloader (torch.utils.data.DataLoader): Test/validation dataloader.
+        metric (torchmetrics.Metric): A torchmetrics metric object (e.g., Dice, JaccardIndex).
+        device (str): "cpu" or "cuda".
+        threshold (float): Probability threshold to binarize predictions.
+
+    Returns:
+        float: Metric value
+    """
+    model.eval()
+    metric = metric.to(device)
+    if hasattr(metric, "reset"):  # torchmetrics supports reset()
+        metric.reset()
+
+    with torch.no_grad():
+        for images, masks in dataloader:
+            images, masks = images.to(device), masks.to(device)
+
+            # Forward pass
+            output = model(images)
+            logits = F.interpolate(
+                output.logits, size=masks.shape[-2:],
+                mode="bilinear", align_corners=False,
+            )
+
+            # Sigmoid -> probabilities -> threshold
+            #preds = torch.sigmoid(logits)
+            #preds = (preds > threshold).int()
+            preds = torch.argmax(logits, dim=1)
+
+            # Update metric
+            metric.update(preds, masks.int())
+
+    return metric.compute().item()
+
+
 @click.command()
 @click.argument('imagedir')
 @click.argument('maskdir')
-def main(imagedir, maskdir):
+@click.argument('foldfile')
+def main(imagedir, maskdir, foldfile):
 
     lr = 5e-5
     size = 512
     num_epochs = 10
     device = 'cpu'
+    batch_size = 32
+
     processor = SegformerImageProcessor(do_resize=True, size=size, do_normalize=True)
-    dataset = TifSegmentationDataset(imagedir, maskdir, processor, size)
-    dataloader = DataLoader(dataset, batch_size=4, shuffle=True)
+    dataset = TifSegmentationDataset(
+        imagedir, maskdir, processor,
+        foldfile=foldfile, fold='train',
+        size=size,
+    )
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+
+    test_dataset = TifSegmentationDataset(
+        imagedir, maskdir, processor,
+        foldfile=foldfile, fold='test',
+        size=size,
+    )
+    testloader = DataLoader(test_dataset, batch_size=1, shuffle=True)
 
     # Model: 2 classes (background + foreground)
     model = SegformerForSemanticSegmentation.from_pretrained(
@@ -78,15 +148,14 @@ def main(imagedir, maskdir):
 
     optimizer = optim.AdamW(model.parameters(), lr=lr)
 
-    # Loss: CrossEntropy (model already outputs logits)
-    criterion = nn.CrossEntropyLoss()
+    iou_metric = torchmetrics.JaccardIndex(task="binary").to(device)
 
     # ---------------------------
     # 3. Training loop
     # ---------------------------
-    model.train()
     for epoch in tqdm(range(num_epochs)):
         total_loss = 0
+        model.train()
         for pixel_values, labels in tqdm(dataloader):
             pixel_values = pixel_values.to(device)
             labels = labels.to(device)
@@ -102,6 +171,13 @@ def main(imagedir, maskdir):
 
         avg_loss = total_loss / len(dataloader)
         print(f"Epoch {epoch+1}/{num_epochs} - Loss: {avg_loss:.4f}")
+
+        train_iou = evaluate_segmentation(model, dataloader, iou_metric, device=device)
+        test_iou = evaluate_segmentation(model, testloader, iou_metric, device=device)
+        print(f"Epoch {epoch+1}/{num_epochs} - Train IoU: {train_iou:.4f}")
+        print(f"Epoch {epoch+1}/{num_epochs} - Test IoU: {test_iou:.4f}")
+
+        torch.save(model, 'latest_model.pth')
 
 
 
