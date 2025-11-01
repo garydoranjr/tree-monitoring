@@ -51,8 +51,6 @@ def main(labelfile, outputfile):
 
     labels = gpd.read_file(labelfile, layer='flowering_dataset')
 
-    labels = labels.loc[labels['status'].isna()]
-
     labels = labels.loc[labels['status'] == 'Done']
     labels = labels.drop([
         'geometry',
