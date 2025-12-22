@@ -9,6 +9,40 @@ from tqdm import tqdm
 from glob import glob
 
 
+def gaussian_weight_mask(height, width, sigma):
+    """
+    Generate an unnormalized Gaussian weight mask for a tile.
+
+    Parameters
+    ----------
+    height : int
+        Number of rows in the tile.
+    width : int
+        Number of columns in the tile.
+    sigma : float
+        Standard deviation controlling spatial falloff.
+
+    Returns
+    -------
+    weights : 2D ndarray (height, width)
+        Weight mask with value 1.0 at the center, decreasing towards edges.
+    """
+
+    # Tile center
+    cy = (height - 1) / 2.0
+    cx = (width - 1) / 2.0
+
+    y = np.arange(height)[:, None]
+    x = np.arange(width)[None, :]
+
+    dy = y - cy
+    dx = x - cx
+    dist2 = dx * dx + dy * dy
+
+    weights = np.exp(- dist2 / (2 * sigma * sigma))
+    return weights.astype(np.float32)
+
+
 def mosaic_average_rioxarray(original_path, tile_paths, output_path, dtype=np.float32):
     """
     Mosaic thousands of tiles by streaming them one-by-one and averaging overlapping pixels.
@@ -37,12 +71,16 @@ def mosaic_average_rioxarray(original_path, tile_paths, output_path, dtype=np.fl
         # Convert to numpy for accumulation
         tile_data = tile_aligned.data  # still a numpy array
         
+        h, w = tile.data[0].shape
+        sigma = w / 4.
+        weights = gaussian_weight_mask(h, w, sigma)
+        
         # Mask of valid (non-NaN) pixels
         valid = ~np.isnan(tile_data)
         
         # Accumulate
-        sum_array[valid] += tile_data[valid]
-        count_array[valid] += 1
+        sum_array[valid] += tile_data[valid] * weights.ravel()
+        count_array[valid] += weights.ravel()
     
     # 4. Compute final average
     avg_array = np.zeros_like(sum_array, dtype=dtype)
@@ -68,13 +106,12 @@ def mosaic_average_rioxarray(original_path, tile_paths, output_path, dtype=np.fl
 def main(image_file, classifications_dir, output_file):
 
     tile_paths = sorted(glob(os.path.join(classifications_dir, "*.tif")))
-    #tile_paths = tile_paths[:5]
+    #tile_paths = tile_paths[:250]
 
     mosaic_average_rioxarray(
         original_path=image_file,
         tile_paths=tile_paths,
         output_path=output_file,
-        #chunks={"x": 1024, "y": 1024}  # adjustable
     )
 
 

@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 import os
-import glob
 import click
 from tqdm import tqdm
 from PIL import Image

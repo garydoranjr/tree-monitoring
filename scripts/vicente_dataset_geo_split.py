@@ -50,36 +50,17 @@ def pie(x, title=None):
 def main(labelfile, outputfile):
 
     labels = gpd.read_file(labelfile, layer='flowering_dataset')
+    labels['polyid'] = labels['polygon_id'].apply(lambda i: i.split('_')[0])
+    labels['easting'] = labels['geometry'].apply(lambda g: g.centroid.x)
 
-    labels['isFlowering'] = labels['isFlowering'].apply(lambda v: 'no' if v is None else v)
-    labels['floweringIntensity'] = labels['floweringIntensity'].apply(lambda v: 0.0 if np.isnan(v) else v)
-    labels['isFruiting'] = labels['isFruiting'].apply(lambda v: 'no' if v is None else v)
-    labels['newLeaves'] = labels['newLeaves'].apply(lambda v: 'no' if v is None else v)
+    threshold = np.quantile(labels['easting'].values, 0.8)
 
-    labels = labels.drop([
-        'geometry',
-        'score',
-        'iou',
-        'tag',
-        'isFlowerin',
-        'floweringI',
-        'area',
-    ], axis=1)
-    print(len(labels))
+    labels['split'] = labels['easting'].apply(
+        lambda e: 'train' if e < threshold else 'test'
+    )
 
-    figs = []
-
-    figs.append(hist(labels['leafing'], title='Leafing', yscale='log'))
-    figs.append(hist(labels['floweringIntensity'], title='Flowering Intensity'))
-
-    figs.append(pie(labels['isFlowering'], title='Flowering?'))
-    figs.append(pie(labels['isFruiting'], title='Fruiting?'))
-    figs.append(pie(labels['newLeaves'], title='New Leaves?'))
-    figs.append(pie(labels['latin'], title='Species'))
-
-    with PdfPages(outputfile) as pdf:
-        for fig in tqdm(figs, 'Saving'):
-            pdf.savefig(fig)
+    df_out = labels[['polygon_id', 'split']]
+    df_out.to_csv(outputfile, index=False)
 
 
 if __name__ == '__main__':

@@ -58,7 +58,9 @@ def pairwise_comparison(labels, filename):
 
     return [
         compare_labels(unions, u1, u2)
-        for u1, u2 in combinations(unions.keys(), 2)
+        for u1, u2 in sorted(combinations(sorted(
+            unions.keys(), key=lambda x: 'zzzzz' if x == 'sam2' else x
+        ), 2))
     ]
 
 
@@ -95,7 +97,7 @@ def main(labelfile, outputfile):
     user2_only = fractions[:, 2]
 
     # Plot setup
-    fig, ax = plt.subplots(figsize=(8, 8))
+    fig, ax = plt.subplots(figsize=(8, 16))
 
     # First segment: user1_only
     bars1 = ax.barh(

@@ -247,6 +247,9 @@ def main(modelfile, image_file, shapefile_path, output_dir):
     with rasterio.open(image_file) as src:
         for i, row in tqdm(shp.iterrows(), total=len(shp)):
             tag = row['tag']
+            output_path = os.path.join(output_dir, f'{i:05d}_{tag}.tif')
+            if os.path.exists(output_path): continue
+
             polygon = row['geometry']
             w, img = extract_centered_window(src, polygon)
             mask = polygon_mask(src, w, polygon)
@@ -257,7 +260,6 @@ def main(modelfile, image_file, shapefile_path, output_dir):
 
             conf = apply_model(model, x, resize)
 
-            output_path = os.path.join(output_dir, f'{tag}.tif')
             save_window_geotiff(output_path, conf, src, w)
 
 
