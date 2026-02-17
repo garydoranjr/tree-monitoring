@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 import os
 import click
-import dask
 import rioxarray
 import numpy as np
 import xarray as xr
@@ -51,7 +50,9 @@ def mosaic_average_rioxarray(original_path, tile_paths, output_path, dtype=np.fl
     """
     
     # 1. Open original raster to define target grid
-    original = rioxarray.open_rasterio(original_path)
+    original = rioxarray.open_rasterio(original_path).sel(band=[1, 2, 3])
+    original = original.rio.write_nodata(None, inplace=False)
+    original.attrs.pop("_FillValue", None)
     bands, height, width = original.shape
     
     # 2. Allocate sum and count arrays
@@ -61,6 +62,8 @@ def mosaic_average_rioxarray(original_path, tile_paths, output_path, dtype=np.fl
     # 3. Process each tile one by one
     for tile_path in tqdm(tile_paths, 'Loading'):
         tile = rioxarray.open_rasterio(tile_path)
+        tile = tile.rio.write_nodata(None, inplace=False)
+        tile.attrs.pop("_FillValue", None)
         
         # Align to original raster grid
         tile_aligned = tile.rio.reproject_match(original)
@@ -105,8 +108,14 @@ def mosaic_average_rioxarray(original_path, tile_paths, output_path, dtype=np.fl
 @click.argument('output_file')
 def main(image_file, classifications_dir, output_file):
 
+    if os.path.exists(output_file):
+        print('Output file already exists')
+        return
+
+    if not os.path.exists(classifications_dir):
+        raise ValueError(f'Directory not found: "{classifications_dir}"')
+
     tile_paths = sorted(glob(os.path.join(classifications_dir, "*.tif")))
-    #tile_paths = tile_paths[:250]
 
     mosaic_average_rioxarray(
         original_path=image_file,

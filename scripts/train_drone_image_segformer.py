@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import os
 import glob
+import wandb
 import click
 from tqdm import tqdm
 from PIL import Image
@@ -70,7 +71,7 @@ class TifSegmentationDataset(Dataset):
         return pixel_values, labels
 
 
-def evaluate_segmentation(model, dataloader, metric, device="cpu", threshold=0.5):
+def evaluate_segmentation(model, dataloader, metric, device="gpu", threshold=0.5):
     """
     Evaluate binary segmentation model with a given metric object.
 
@@ -78,7 +79,7 @@ def evaluate_segmentation(model, dataloader, metric, device="cpu", threshold=0.5
         model (torch.nn.Module): Trained segmentation model.
         dataloader (torch.utils.data.DataLoader): Test/validation dataloader.
         metric (torchmetrics.Metric): A torchmetrics metric object (e.g., Dice, JaccardIndex).
-        device (str): "cpu" or "cuda".
+        device (str): "gpu" or "cuda".
         threshold (float): Probability threshold to binarize predictions.
 
     Returns:
@@ -115,12 +116,15 @@ def evaluate_segmentation(model, dataloader, metric, device="cpu", threshold=0.5
 @click.argument('imagedir')
 @click.argument('maskdir')
 @click.argument('foldfile')
-def main(imagedir, maskdir, foldfile):
+@click.argument('outputdir')
+def main(imagedir, maskdir, foldfile, outputdir):
+
+    run = wandb.init(entity='tree-flower', project='drone-segmentation')
 
     lr = 5e-5
     size = 512
-    num_epochs = 10
-    device = 'cpu'
+    num_epochs = 100
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     batch_size = 32
 
     processor = SegformerImageProcessor(do_resize=True, size=size, do_normalize=True)
@@ -177,7 +181,17 @@ def main(imagedir, maskdir, foldfile):
         print(f"Epoch {epoch+1}/{num_epochs} - Train IoU: {train_iou:.4f}")
         print(f"Epoch {epoch+1}/{num_epochs} - Test IoU: {test_iou:.4f}")
 
-        torch.save(model, 'latest_model.pth')
+        run.log({
+            'epoch': epoch,
+            'train_iou': train_iou,
+            'test_iou': test_iou,
+            'train_loss': avg_loss,
+        })
+
+        outputfile = os.path.join(outputdir, f'epoch_{epoch+1:03d}.pth')
+        torch.save(model, outputfile)
+
+    run.finish()
 
 
 

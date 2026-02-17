@@ -238,7 +238,7 @@ def save_window_geotiff(output_path, array, src, window):
 @click.argument('output_dir')
 def main(modelfile, image_file, shapefile_path, output_dir):
 
-    model = torch.load(modelfile, map_location=torch.device('cpu'))
+    model = torch.load(modelfile, weights_only=False, map_location=torch.device('cpu'))
     model.eval()
     model.to('cpu')
 
