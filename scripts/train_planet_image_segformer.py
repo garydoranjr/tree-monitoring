@@ -165,11 +165,11 @@ def evaluate_segmentation(model, dataloader, metric, device="gpu", threshold=0.5
 @click.argument('outputdir')
 def main(imagedir, outputdir):
 
-    run = wandb.init(entity='tree-flower-planet', project='planet-segmentation')
+    run = wandb.init(entity='tree-flower', project='planet-segmentation')
 
-    lr = 5e-5
+    lr = 5e-6
     size = 512
-    num_epochs = 100
+    num_epochs = 200
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     batch_size = 32
 
