@@ -12,7 +12,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-from torchvision import transforms
+from torchvision import transforms as T
 import torchmetrics
 from transformers import SegformerForSemanticSegmentation, SegformerImageProcessor
 
@@ -77,7 +77,7 @@ def get_split(img, mask, split, size):
 class PlanetSegmentationDataset(Dataset):
 
 
-    def __init__(self, img_dir, processor, split, size=512):
+    def __init__(self, img_dir, processor, split, size=512, transforms=None):
         self.mask_files = sorted(glob.glob(os.path.join(img_dir, "*.mask.png")))
         self.img_files = [
             mf.replace('.mask.png', '.png')
@@ -86,6 +86,7 @@ class PlanetSegmentationDataset(Dataset):
         self.processor = processor
         self.split = split
         self.size = size
+        self.transforms = transforms
 
 
     def __len__(self):
@@ -104,6 +105,10 @@ class PlanetSegmentationDataset(Dataset):
 
         img, mask = get_split(img, mask, self.split, self.size)
         img = Image.fromarray(img)
+
+        if self.transforms:
+            for t in self.transforms:
+                img = t(img)
 
         # Use processor to apply resizing, normalization
         encoded_inputs = self.processor(
@@ -167,11 +172,19 @@ def main(imagedir, outputdir):
 
     run = wandb.init(entity='tree-flower', project='planet-segmentation')
 
-    lr = 5e-6
+    lr = 1e-5
     size = 512
     num_epochs = 200
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     batch_size = 32
+
+    transforms = [T.Compose([
+        #T.RandomHorizontalFlip(),
+        #T.RandomVerticalFlip(),
+        T.ColorJitter(
+            brightness=0.2, contrast=0.2,# saturation=0.2, hue=0.1
+        ),
+    ])]
 
     processor = SegformerImageProcessor(do_resize=True, size=size, do_normalize=True)
     dataset = PlanetSegmentationDataset(
@@ -179,8 +192,8 @@ def main(imagedir, outputdir):
         processor,
         split='left',
         size=size,
+        transforms=transforms,
     )
-    mask = dataset[0][1]
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
     test_dataset = PlanetSegmentationDataset(
