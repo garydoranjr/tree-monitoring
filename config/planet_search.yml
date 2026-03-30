@@ -16,7 +16,7 @@ string_filters:
       values: ["standard", "finalized"]
 
 
-asset_types: ["basic_analytic_4b"]
+asset_types: ["basic_analytic_4b", "ortho_analytic_4b"]
 item_type: "PSScene"
 product_bundle: "analytic_udm2"
 
