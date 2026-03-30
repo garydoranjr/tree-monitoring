@@ -56,6 +56,10 @@ def match_crowns(labels, filename, crowns, imgfile, plotfile, matchfile, evalfil
     labels = labels.loc[labels['filename'] == filename]
     labels = labels.drop(columns=['filename'])
 
+    # Select from labelers with most labels (TODO: merge)
+    most_frequent_labeler = labels['labeler'].value_counts().idxmax()
+    labels = labels.loc[labels['labeler'] == most_frequent_labeler]
+
     with rio.open(imgfile) as f:
         I = f.read()
         tform = ~f.transform
@@ -112,7 +116,6 @@ def match_crowns(labels, filename, crowns, imgfile, plotfile, matchfile, evalfil
         'best_scores': best_scores,
     })
     df.to_csv(matchfile, index=False)
-    return
 
     valid_idx = set([
         i for i, s in zip(best_idx, best_scores) if s > 0
@@ -128,6 +131,7 @@ def match_crowns(labels, filename, crowns, imgfile, plotfile, matchfile, evalfil
         ax.add_patch(poly)
 
     fig.savefig(plotfile)
+    return
 
     evaluate(poly_labels, trans_crowns, evalfile)
 
