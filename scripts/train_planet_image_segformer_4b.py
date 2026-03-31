@@ -107,9 +107,10 @@ class PlanetSegmentationDataset4B(Dataset):
         with rasterio.open(self.img_files[idx]) as src:
             data = src.read()  # (4, H, W) uint16
 
-        # Transpose to (H, W, 4) and normalize to [0, 1]
-        img = data.transpose(1, 2, 0).astype(np.float32) / 10000.0
-        img = np.clip(img, 0, 1)
+        # Transpose to (H, W, 4) and percentile stretch to [0, 1]
+        img = data.transpose(1, 2, 0).astype(np.float32)
+        p_low, p_high = np.percentile(img, (0, 99.9))
+        img = np.clip((img - p_low) / (p_high - p_low + 1e-8), 0, 1)
 
         # Load mask (convert 255 -> 1)
         mask = Image.open(self.mask_files[idx])
