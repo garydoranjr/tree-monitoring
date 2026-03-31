@@ -202,6 +202,9 @@ def modify_model_for_4bands(model):
         new_proj.weight[:, :3, :, :] = old_proj.weight
         # Copy red channel (index 0) weights for NIR
         new_proj.weight[:, 3:4, :, :] = old_proj.weight[:, 0:1, :, :]
+        # Rescale all weights so total output magnitude matches the original
+        # 3-channel conv (prevents disrupting pretrained downstream layers)
+        new_proj.weight.mul_(3.0 / 4.0)
         if old_proj.bias is not None:
             new_proj.bias.copy_(old_proj.bias)
     model.segformer.encoder.patch_embeddings[0].proj = new_proj
