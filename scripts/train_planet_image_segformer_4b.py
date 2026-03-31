@@ -118,14 +118,18 @@ class PlanetSegmentationDataset4B(Dataset):
 
         img, mask = get_split(img, mask, self.split, self.size)
 
-        # Apply augmentations to RGB channels only
+        # Apply augmentations to RGB, then IrGB, then combine
         if self.transforms:
             rgb = (img[..., :3] * 255).astype(np.uint8)
+            irgb = (img[..., [3, 1, 2]] * 255).astype(np.uint8)
             rgb_pil = Image.fromarray(rgb)
+            irgb_pil = Image.fromarray(irgb)
             for t in self.transforms:
                 rgb_pil = t(rgb_pil)
+                irgb_pil = t(irgb_pil)
             rgb = np.array(rgb_pil).astype(np.float32) / 255.0
-            img = np.concatenate([rgb, img[..., 3:]], axis=-1)
+            ir = np.array(irgb_pil)[..., 0:1].astype(np.float32) / 255.0
+            img = np.concatenate([rgb, ir], axis=-1)
 
         # Use processor to apply resizing, normalization
         encoded_inputs = self.processor(
