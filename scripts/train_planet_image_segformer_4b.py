@@ -136,6 +136,7 @@ class PlanetSegmentationDataset4B(Dataset):
             images=img,
             segmentation_maps=mask,
             size=self.size,
+            input_data_format="channels_last",
             return_tensors="pt"
         )
 
