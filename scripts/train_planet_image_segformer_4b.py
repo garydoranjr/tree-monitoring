@@ -107,10 +107,13 @@ class PlanetSegmentationDataset4B(Dataset):
         with rasterio.open(self.img_files[idx]) as src:
             data = src.read()  # (4, H, W) uint16
 
-        # Transpose to (H, W, 4) and percentile stretch to [0, 1]
+        # Transpose to (H, W, 4) and percentile stretch per band to [0, 1]
         img = data.transpose(1, 2, 0).astype(np.float32)
-        p_low, p_high = np.percentile(img, (0, 99.9))
-        img = np.clip((img - p_low) / (p_high - p_low + 1e-8), 0, 1)
+        for b in range(img.shape[2]):
+            p_low, p_high = np.percentile(img[..., b], (0, 99.9))
+            img[..., b] = np.clip(
+                (img[..., b] - p_low) / (p_high - p_low + 1e-8), 0, 1
+            )
 
         # Load mask (convert 255 -> 1)
         mask = Image.open(self.mask_files[idx])
@@ -201,11 +204,9 @@ def modify_model_for_4bands(model):
     )
     with torch.no_grad():
         new_proj.weight[:, :3, :, :] = old_proj.weight
-        # Copy red channel (index 0) weights for NIR
-        new_proj.weight[:, 3:4, :, :] = old_proj.weight[:, 0:1, :, :]
-        # Rescale all weights so total output magnitude matches the original
-        # 3-channel conv (prevents disrupting pretrained downstream layers)
-        new_proj.weight.mul_(3.0 / 4.0)
+        # Zero-init NIR channel: model starts equivalent to the pretrained
+        # 3-band model, and NIR gradually learns to contribute
+        new_proj.weight[:, 3:4, :, :] = 0.0
         if old_proj.bias is not None:
             new_proj.bias.copy_(old_proj.bias)
     model.segformer.encoder.patch_embeddings[0].proj = new_proj
