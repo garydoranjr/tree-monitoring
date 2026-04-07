@@ -29,14 +29,14 @@ def load_offsets(coregfile):
     }
 
 
-def offsets_to_matrix(offsets, keys=None):
+def offsets_to_matrix(offsets, filterkeys=None):
     if filterkeys is None:
         keys = set([])
         for src, tgt in offsets.keys():
             keys |= set([src, tgt])
         keys = sorted(keys)
     else:
-        keys = sorted(keys)
+        keys = sorted(filterkeys)
 
     n = len(keys)
 
@@ -58,7 +58,7 @@ def load_offset_matrix(coregfiles, keys=None):
     for f in tqdm(coregfiles, 'Loading'):
         offsets.update(load_offsets(f))
 
-    return offsets_to_matrix(offsets, keys=keys)
+    return offsets_to_matrix(offsets, filterkeys=keys)
 
 
 def iterate(offset, xy):
