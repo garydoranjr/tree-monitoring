@@ -355,8 +355,8 @@ characterization of actual phenological timing and duration.
   via uniform-kernel convolution of the branch-exposure signal (kernel
   width = event length, with wrap-around handling for seasonal continuity).
   Outputs `results/decid_summary.csv` with per-crown records (tag, species,
-  decid_length, decid_peak) used downstream by `plot_decid_summary.py`,
-  `plot_decid_model_summary.py`, and `decid_event_summary_stats.py`.
+  decid_length, decid_peak) used downstream by
+  `plot_decid_model_summary.py` and `decid_event_summary_stats.py`.
 
   **Reproduce:**
   ```bash
@@ -364,24 +364,12 @@ characterization of actual phenological timing and duration.
     data/df_LeafCoverTimeSeries_byTags_all_2024.csv \
     results/decid_summary.csv
   ```
-- `scripts/plot_decid_summary.py` — Original deciduousness event summary
-  using the cadence-based methodology from Step 6. Plots the seasonal median
-  cadence curve alongside per-event points (peak day-of-year vs. event
-  duration) and a cadence-vs-duration scatter. Takes a cadence percentile
-  archive as input rather than the empirical count model.
-
-  **Reproduce:**
-  ```bash
-  python scripts/plot_decid_summary.py \
-    results/cadences_v2.npz \
-    results/decid_summary.csv \
-    results/decid_summary_plots.pdf
-  ```
-- `scripts/plot_decid_model_summary.py` — Deciduousness-event counterpart to
-  `plot_trap_summary.py` that applies the empirical observation model (Step
-  8) to deciduousness events instead of litter-trap events. Thin wrapper that
-  renames `decid_peak`/`decid_length` to `event_peak`/`event_length` and
-  reuses `make_cadence_plot`/`make_comparison_plot` from `plot_trap_summary.py`.
+- `scripts/plot_decid_model_summary.py` — Deciduousness-event summary plotting
+  script. Applies the empirical observation model (Step 8) to deciduousness
+  events, serving as the deciduousness counterpart to `plot_trap_summary.py`.
+  Thin wrapper that renames `decid_peak`/`decid_length` to
+  `event_peak`/`event_length` and reuses
+  `make_cadence_plot`/`make_comparison_plot` from `plot_trap_summary.py`.
 
   **Reproduce:**
   ```bash
@@ -405,11 +393,6 @@ characterization of actual phenological timing and duration.
     results/decid_summary.csv \
     results/decid_event_summary_stats.csv
   ```
-- `scripts/calc_phenology_resolution.py` — Supplementary analysis exploring
-  alternative approaches using pre-fitted von Mises parameters to model
-  phenological patterns. Not used in the final analysis pipeline, which
-  instead uses raw trap event data directly.
-
 **Data:**
 - `results/assessment.npz` — Visibility matrix from Step 5 (crowns × images ×
   confidence scores)

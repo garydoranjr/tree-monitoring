@@ -10,10 +10,6 @@ from pysolar.util import diffuse_underclear, diffuse_underovercast
 from scipy.stats import linregress
 from scipy.ndimage import convolve1d
 
-from calc_decid_resolution import (
-    CadenceInterp
-)
-
 
 def select(df, start_str, end_str):
     df['date'] = pd.to_datetime(
