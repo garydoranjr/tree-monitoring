@@ -71,7 +71,7 @@ def main(countfile, emeanfile, wmeanfile, outputfile):
 
     fig, ax = plt.subplots(figsize=(10, 5))
 
-    ax.plot(dd, daily_avg.values[:-1] / radiation, 'gray')
+    #ax.plot(dd, daily_avg.values[:-1] / radiation, 'gray')
     ax.plot(dd, smoothed / radiation, 'k')
     ax.set_ylim(0.35, 1.0)
     #ax.plot(dd, radiation, 'r-')
