@@ -355,43 +355,26 @@ characterization of actual phenological timing and duration.
   via uniform-kernel convolution of the branch-exposure signal (kernel
   width = event length, with wrap-around handling for seasonal continuity).
   Outputs `results/decid_summary.csv` with per-crown records (tag, species,
-  decid_length, decid_peak) used downstream by
-  `plot_decid_model_summary.py` and `decid_event_summary_stats.py`.
+  event_length, event_peak) — the same schema emitted by
+  `scripts/individual_trap_analysis.py`, so the deciduousness events can be
+  fed directly into `event_summary_stats.py` and `plot_trap_summary.py`
+  without any column-rename shim.
 
   **Reproduce:**
   ```bash
   python scripts/individual_decid_analysis.py \
     data/df_LeafCoverTimeSeries_byTags_all_2024.csv \
     results/decid_summary.csv
-  ```
-- `scripts/plot_decid_model_summary.py` — Deciduousness-event summary plotting
-  script. Applies the empirical observation model (Step 8) to deciduousness
-  events, serving as the deciduousness counterpart to `plot_trap_summary.py`.
-  Thin wrapper that renames `decid_peak`/`decid_length` to
-  `event_peak`/`event_length` and reuses
-  `make_cadence_plot`/`make_comparison_plot` from `plot_trap_summary.py`.
 
-  **Reproduce:**
-  ```bash
-  python scripts/plot_decid_model_summary.py \
-    results/empirical_model.npz \
-    results/decid_summary.csv \
-    results/decid_model_summary_plots.pdf
-  ```
-- `scripts/decid_event_summary_stats.py` — Deciduousness-event counterpart to
-  `event_summary_stats.py` that applies the empirical observation model
-  (Step 8) to deciduousness events instead of litter-trap events. Thin
-  wrapper that renames `decid_peak`/`decid_length` to
-  `event_peak`/`event_length` and reuses `compute_comparison` from
-  `event_summary_stats.py`. Outputs `decid_event_summary_stats.csv` with
-  species-level observability statistics.
-
-  **Reproduce:**
-  ```bash
-  python scripts/decid_event_summary_stats.py \
+  python scripts/event_summary_stats.py \
     results/empirical_model.npz \
     results/decid_summary.csv \
     results/decid_event_summary_stats.csv
+
+  python scripts/plot_trap_summary.py \
+    results/empirical_model.npz \
+    results/decid_summary.csv \
+    results/decid_model_summary_plots.pdf
   ```
 **Data:**
 - `results/assessment.npz` — Visibility matrix from Step 5 (crowns × images ×
@@ -420,7 +403,7 @@ characterization of actual phenological timing and duration.
   `scripts/individual_decid_analysis.py` and is the primary source of
   deciduousness event timing and duration information.
 - `results/decid_summary.csv` — Per-crown deciduousness event records
-  (tag, species, decid_length, decid_peak) extracted from the leaf-cover
+  (tag, species, event_length, event_peak) extracted from the leaf-cover
   time series above.
 - `results/event_summary_stats.csv` — Species-level observability statistics
   (species, frac_obs, n_events)

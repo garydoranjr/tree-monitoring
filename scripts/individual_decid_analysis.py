@@ -44,8 +44,8 @@ def main(inputfile, outputfile):
             data.append({
                 'tag': tag,
                 'species': species,
-                'decid_length': l,
-                'decid_peak': peak,
+                'event_length': l,
+                'event_peak': peak,
             })
             lengths[species].append(l)
             peaks[species].append(peak)
