@@ -222,15 +222,24 @@ window size (1-364 days) and day of year, the model computes the fraction of
 crown-year combinations with at least one clear observation, yielding a
 smooth interpolation surface via SciPy's RegularGridInterpolator.
 
-Phenological events are extracted from BCI's 200-trap litter dataset spanning
-1987-2024 (`data/BCI_TRAP200_20241002_spcorrected.txt`). This dataset was
-provided by project collaborators from the long-running BCI litter trap
-monitoring program; citation is pending as the underlying paper has not yet
-been published. Weekly collections record the presence and quantity of
-flowering and fruiting material (petals, fruits, seeds) that fall from the
-canopy into each trap. The data provides a time series of material counts
-by species, trap, and date, with each observation representing one week's
-accumulated material.
+Phenological events are extracted from BCI's 200-trap litter dataset
+(`data/BCI_TRAP200_20241002_spcorrected.txt`), which spans 1987-2024. This
+dataset was provided by project collaborators from the long-running BCI
+litter trap monitoring program; citation is pending as the underlying paper
+has not yet been published. Weekly collections record the presence and
+quantity of flowering and fruiting material (petals, fruits, seeds) that
+fall from the canopy into each trap. The data provides a time series of
+material counts by species, trap, and date, with each observation
+representing one week's accumulated material.
+
+Although the raw record covers 1987-2024, event extraction is restricted to
+the four phenological years from **2020-09-01 to 2024-09-01** (the
+`START_DATE` / `END_DATE` constants in `scripts/trap_plot.py`, applied by
+`scripts/get_annual_trap_data.py`). This window is aligned to the September
+start of the BCI phenological year and matches the coverage of other
+pipeline inputs. Any per-species event counts, peak-DOY estimates, and
+capture-probability aggregates downstream of this step therefore reflect
+only 2020-2024 trap data, not the full 34-year record.
 
 For each trap, species, and year combination, the analysis identifies whether
 a reproductive event occurred and characterizes its timing and duration. The
@@ -299,9 +308,12 @@ characterization of actual phenological timing and duration.
   (`data/BCI_TRAP200_20241002_spcorrected.txt`), filtering to flowering or
   fruiting material codes (selected via the `-f/--fruit` flag; default is
   flower), aggregating weekly counts by species/trap/date, and structuring
-  into annual time series. Outputs a compressed NumPy archive with
-  per-species trap counts — `results/sp_flower_counts_annual.npz` without
-  the flag, `results/sp_fruit_counts_annual.npz` with it.
+  into annual time series. Applies the `START_DATE` / `END_DATE` constants
+  imported from `scripts/trap_plot.py` (currently 2020-09-01 to 2024-09-01)
+  before aggregation, so the output covers only that four-year window.
+  Outputs a compressed NumPy archive with per-species trap counts —
+  `results/sp_flower_counts_annual.npz` without the flag,
+  `results/sp_fruit_counts_annual.npz` with it.
 - `scripts/windowed_obs_counts.py` — Processes the visibility assessment
   matrix from Step 4, applies 0.5 confidence threshold to binarize
   observations, and computes rolling window observation counts for 365 days

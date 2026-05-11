@@ -21,7 +21,7 @@ rule all:
         f"{FIGS}/assessed_cadence.pdf",
         f"{FIGS}/avg_assessed_cadence.pdf",
         f"{RESULTS}/avg_assessed_cadence.npz",
-        f"{FIGS}/solar_radiation_comparison_v2.pdf",
+        f"{FIGS}/solar_radiation_comparison.pdf",
         f"{FIGS}/sp_flower_counts_annual_stats.pdf",
         f"{FIGS}/sp_fruit_counts_annual_stats.pdf",
         f"{FIGS}/decid_summary.pdf",
@@ -73,7 +73,7 @@ rule illumination:
         east=RAD_EAST,
         west=RAD_WEST,
     output:
-        f"{FIGS}/solar_radiation_comparison_v2.pdf",
+        f"{FIGS}/solar_radiation_comparison.pdf",
     shell:
         "python {SCRIPTS}/illumination.py "
         "{input.counts} {input.east} {input.west} {output}"
