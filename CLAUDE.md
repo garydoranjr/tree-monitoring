@@ -228,6 +228,20 @@ No formal test suite. Validation through:
 - Planet imagery: 3m or 4.7m resolution, 4-band or 8-band
 - Drone imagery: ~4cm resolution
 
+## Git workflow
+
+After implementing any significant change, automatically create a git
+commit for it. A "significant change" is one that meaningfully alters
+behavior, adds or removes functionality, fixes a bug, or modifies more
+than a trivial amount of code or documentation. Trivial edits (fixing
+a typo, tweaking a comment, adjusting formatting) do not need their
+own commit.
+
+If it is unclear whether a change is significant enough to warrant a
+commit, ask the user before committing. When committing, follow the
+existing commit-message style in `git log` and stage only the files
+relevant to the change (do not use `git add -A`).
+
 ## Figure captions
 
 Captions for figures in papers and methodology docs should be
