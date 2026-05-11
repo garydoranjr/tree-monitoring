@@ -232,14 +232,13 @@ No formal test suite. Validation through:
 
 ### Observability pipeline docs
 
-`docs/observability_methodology.md` and `docs/observability_methodology.mmd`
-must stay in sync. Any change that adds, renames, or removes a script, data
-artifact, or script argument in the observability pipeline must be reflected
-in **both** files:
+`docs/observability_methodology.md` and the top-level `Snakefile` must
+stay in sync. Any change that adds, renames, or removes a script, data
+artifact, or script argument in the observability pipeline must be
+reflected in **both** files: the narrative in the `.md` and the
+corresponding rule (inputs, outputs, shell command) in the `Snakefile`.
 
-- the narrative + Reproduce block in the `.md`, and
-- the corresponding node/edge in the `.mmd` flowchart.
-
-When a data file's upstream producer is not documented, mark it with a `?`
-prefix in the Mermaid node (e.g. `"? planet_rgb_dir"`) and a
-`**Reproduce:** TODO — ...` placeholder in the doc.
+When a script is not yet wired into the `Snakefile` (e.g. because its
+upstream inputs are undocumented), list it in the top-level
+"Reproducibility" section of `docs/observability_methodology.md` so
+readers know which parts of the pipeline are not yet automated.

@@ -7,6 +7,27 @@ observability of the forest canopy from Planet satellite imagery as a
 function of season, and to validate the resulting seasonal pattern against
 independent ground-based measurements.
 
+## Reproducibility
+
+The pipeline for Steps 5–7 is implemented in the top-level `Snakefile`.
+`snakemake all` (from the repo root, with the `flower` conda environment
+active) reproduces every artifact referenced below from
+`results/assessment.npz` and the raw inputs in `data/`. Individual
+artifacts can be built by name, e.g.
+`snakemake figs/solar_radiation_comparison_v2.pdf`.
+
+The following are **not** yet covered by the Snakefile because their
+upstream provenance is not documented:
+
+- Steps 1–3 (crown chip extraction, DINOv2 embedding, classifier
+  training) — the crown-folder, embeddings-folder, and trained-model
+  paths are not canonical.
+- Step 4 (`scripts/visibility_assessment.py`) — produces
+  `results/assessment.npz`, which the Snakefile treats as an external
+  input.
+- `scripts/plot_planet_image_fraction_monthly.py` — its input CSV (with
+  a `date` column) is not produced by any documented script.
+
 ## Step 1: Manual Labeling of Crown-Level Image Quality
 
 A preliminary scene-level analysis using Planet's UDM2 masks was conducted
@@ -54,9 +75,6 @@ spectral indices can represent.
   image. Embeddings are saved per crown as files containing image IDs and
   their corresponding 384-dimensional vectors.
 
-  **Reproduce:** TODO — document canonical crown-folder and
-  embeddings-folder paths.
-
 ## Step 3: Visibility Classifier Training
 
 The "unsure" labels were excluded, yielding 477 binary-labeled samples
@@ -90,9 +108,6 @@ is clearly observable in a given scene.
   results into a compressed NumPy archive containing the tag array, file
   array, and values matrix.
 
-  **Reproduce:** TODO — document the trained model file and embeddings
-  folder paths.
-
 ## Step 5: Observation Cadence Analysis
 
 Using the visibility matrix, the observational cadence — the average number
@@ -116,31 +131,13 @@ respectively, with nearly continuous year-round observations).
   full 2020–2024 time series using a 30-day half-window. Outputs a time
   series plot showing the median cadence and the 10th–90th percentile band
   across crowns.
-
-  **Reproduce:**
-  ```bash
-  python scripts/plot_assessed_cadence.py \
-    results/assessment.npz \
-    figs/assessed_cadence.pdf
-  ```
 - `scripts/plot_avg_assessed_cadence.py` — Aggregates cadence across years
   2022–2023 by day of year to produce the seasonal cycle. Outputs both a
   plot and a compressed NumPy archive of cadence percentiles for downstream
   analysis.
-
-  **Reproduce:**
-  ```bash
-  python scripts/plot_avg_assessed_cadence.py \
-    results/assessment.npz \
-    figs/avg_assessed_cadence.pdf \
-    results/avg_assessed_cadence.npz
-  ```
 - `scripts/plot_planet_image_fraction_monthly.py` — Summarizes the fraction
   of images exceeding the 0.5 confidence threshold by calendar month,
   showing median and interquartile range across years.
-
-  **Reproduce:** TODO — input CSV (with a `date` column) is not produced
-  by any documented script.
 
 ## Step 6: Validation Against Ground-Based Solar Radiation
 
@@ -184,15 +181,6 @@ genuine atmospheric variation consistent with BCI's multi-decadal climate.
   using pysolar, and performs a linear regression between the smoothed
   radiation fraction and the observation rate. Produces a dual-axis plot
   showing both quantities across the annual cycle.
-
-  **Reproduce `figs/solar_radiation_comparison_v2.pdf`:**
-  ```bash
-  python scripts/illumination.py \
-    results/windowed_obs_counts_05d.npz \
-    data/radiation/bci_lutz48m_sre_elect.csv \
-    data/radiation/bci_lutz48m_srw_elect.csv \
-    figs/solar_radiation_comparison_v2.pdf
-  ```
 
 **Data:**
 - `data/radiation/bci_lutz48m_sre_elect.csv` — East sensor average solar
@@ -314,17 +302,6 @@ characterization of actual phenological timing and duration.
   into annual time series. Outputs a compressed NumPy archive with
   per-species trap counts — `results/sp_flower_counts_annual.npz` without
   the flag, `results/sp_fruit_counts_annual.npz` with it.
-
-  **Reproduce:**
-  ```bash
-  python scripts/get_annual_trap_data.py \
-    data/BCI_TRAP200_20241002_spcorrected.txt \
-    results/sp_flower_counts_annual.npz
-
-  python scripts/get_annual_trap_data.py -f \
-    data/BCI_TRAP200_20241002_spcorrected.txt \
-    results/sp_fruit_counts_annual.npz
-  ```
 - `scripts/windowed_obs_counts.py` — Processes the visibility assessment
   matrix from Step 4, applies 0.5 confidence threshold to binarize
   observations, and computes rolling window observation counts for 365 days
@@ -334,13 +311,6 @@ characterization of actual phenological timing and duration.
   per-crown counts, and window size (the numeric suffix on the filename tracks
   the `--halfwidth` CLI argument, so the default `halfwidth=5` produces
   `windowed_obs_counts_05d.npz` with `window_size=10.0`).
-
-  **Reproduce:**
-  ```bash
-  python scripts/windowed_obs_counts.py \
-    results/assessment.npz \
-    results/windowed_obs_counts_05d.npz
-  ```
 - `scripts/fit_empirical_count_models.py` — Builds the empirical
   observability model by computing observation rates across 364 window sizes
   and 365 days of year. For each (window_size, day_of_year) cell, calculates
@@ -348,13 +318,6 @@ characterization of actual phenological timing and duration.
   Creates 2D interpolation grid using SciPy's RegularGridInterpolator for
   smooth lookup. Outputs `empirical_model.npz` with dates, window_sizes, and
   probability matrix.
-
-  **Reproduce:**
-  ```bash
-  python scripts/fit_empirical_count_models.py \
-    results/assessment.npz \
-    results/empirical_model.npz
-  ```
 - `scripts/individual_trap_analysis.py` — Extracts individual
   flowering/fruiting events from annual trap count arrays to characterize
   phenological event timing and duration. For each species/trap/year
@@ -363,17 +326,6 @@ characterization of actual phenological timing and duration.
   length is calculated as 7 days × number of consecutive non-zero weeks.
   Outputs CSV with per-event records including trap, species, year,
   event_length, and event_peak.
-
-  **Reproduce:**
-  ```bash
-  python scripts/individual_trap_analysis.py \
-    results/sp_flower_counts_annual.npz \
-    results/sp_flower_counts_annual_stats.csv
-
-  python scripts/individual_trap_analysis.py \
-    results/sp_fruit_counts_annual.npz \
-    results/sp_fruit_counts_annual_stats.csv
-  ```
 - `scripts/event_summary_stats.py` — Determines species-level phenological
   observability by querying the empirical model for each trap event. Loads
   the `EmpiricalCountModel` (exposing `load()` and
@@ -384,24 +336,6 @@ characterization of actual phenological timing and duration.
   for that species) and event count. Outputs a CSV with species-level
   observability statistics; used for the flowering, fruiting, and
   deciduousness pipelines.
-
-  **Reproduce:**
-  ```bash
-  python scripts/event_summary_stats.py \
-    results/empirical_model.npz \
-    results/sp_flower_counts_annual_stats.csv \
-    results/flower_summary_stats.csv
-
-  python scripts/event_summary_stats.py \
-    results/empirical_model.npz \
-    results/sp_fruit_counts_annual_stats.csv \
-    results/fruit_summary_stats.csv
-
-  python scripts/event_summary_stats.py \
-    results/empirical_model.npz \
-    results/decid_summary.csv \
-    results/decid_summary_stats.csv
-  ```
 - `scripts/plot_trap_summary.py` — Generates multi-page PDF visualization
   showing phenological event observability by species. Creates species-level
   heatmaps showing capture probability as a function of event duration and
@@ -409,24 +343,6 @@ characterization of actual phenological timing and duration.
   points, and produces histograms of capture probabilities. Consumes the
   per-event CSV schema (`species`, `event_length`, `event_peak`) shared by
   the flowering, fruiting, and deciduousness pipelines.
-
-  **Reproduce:**
-  ```bash
-  python scripts/plot_trap_summary.py \
-    results/empirical_model.npz \
-    results/sp_flower_counts_annual_stats.csv \
-    figs/sp_flower_counts_annual_stats.pdf
-
-  python scripts/plot_trap_summary.py \
-    results/empirical_model.npz \
-    results/sp_fruit_counts_annual_stats.csv \
-    figs/sp_fruit_counts_annual_stats.pdf
-
-  python scripts/plot_trap_summary.py \
-    results/empirical_model.npz \
-    results/decid_summary.csv \
-    figs/decid_summary.pdf
-  ```
 - `scripts/individual_decid_analysis.py` — Extracts individual deciduousness
   events from the per-crown leaf-cover time series
   (`data/df_LeafCoverTimeSeries_byTags_all_2024.csv`). For each tagged
@@ -440,15 +356,6 @@ characterization of actual phenological timing and duration.
   fed directly into `event_summary_stats.py` and `plot_trap_summary.py`
   without any column-rename shim.
 
-  **Reproduce:**
-  ```bash
-  python scripts/individual_decid_analysis.py \
-    data/df_LeafCoverTimeSeries_byTags_all_2024.csv \
-    results/decid_summary.csv
-  ```
-  (Downstream `event_summary_stats.py` and `plot_trap_summary.py`
-  invocations for the deciduousness path are listed under those scripts
-  above, alongside the flower and fruit variants.)
 **Data:**
 - `results/assessment.npz` — Visibility matrix from Step 4 (crowns × images ×
   confidence scores)
