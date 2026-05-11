@@ -7,22 +7,17 @@
 %%                        in docs/observability_methodology.md (matches a
 %%                        "Reproduce: TODO" placeholder there).
 %%
-%% Subgraphs mirror the eight steps in docs/observability_methodology.md.
+%% Subgraphs mirror the seven steps in docs/observability_methodology.md.
+%% The earlier UDM2 scene-level cloud screening analysis and its scripts
+%% have been retired; see docs/history.md.
 %%
-%% Cross-cutting note: scripts/windowed_obs_counts.py is drawn inside Step 7
+%% Cross-cutting note: scripts/windowed_obs_counts.py is drawn inside Step 6
 %% because its primary consumer (scripts/illumination.py) lives there, but
-%% it also operates on the Step 5 assessment.npz that feeds Step 8.
+%% it also operates on the Step 4 assessment.npz that feeds Step 7.
 
 flowchart TD
 
-  subgraph S1["Step 1: UDM2 Cloud Screening"]
-    s1_dir[("? planet_rgb_dir")] --> s1_cca["scripts/cloud_coverage_analysis.py"]
-    s1_cca --> s1_csv(["results/cloud_coverage.csv"])
-    s1_csv --> s1_ccp["scripts/cloud_coverage_plot.py"]
-    s1_csv --> s1_pcs["scripts/plot_cadence_stats.py"]
-  end
-
-  subgraph S234["Steps 2-4: Labels, Embeddings, Classifier"]
+  subgraph S123["Steps 1-3: Labels, Embeddings, Classifier"]
     s2_labels(["luis/20240723b_individual.csv"])
     s3_chips[("? crown_chip_dir")] --> s3_ie["scripts/image_embedding.py"]
     s3_ie --> s3_emb[("? embeddings_dir/*.json")]
@@ -31,20 +26,20 @@ flowchart TD
     s4_rf --> s4_model(["model.skops"])
   end
 
-  subgraph S5["Step 5: Visibility Assessment"]
+  subgraph S4["Step 4: Visibility Assessment"]
     s4_model --> s5_va["scripts/visibility_assessment.py"]
     s3_emb --> s5_va
     s5_va --> s5_ass(["results/assessment.npz"])
   end
 
-  subgraph S6["Step 6: Cadence"]
+  subgraph S5["Step 5: Cadence"]
     s5_ass --> s6_pac["scripts/plot_assessed_cadence.py"]
     s5_ass --> s6_pavc["scripts/plot_avg_assessed_cadence.py"]
     s6_pavc --> s6_avg(["results/avg_assessed_cadence.npz"])
     s6_frac[("? monthly_fraction_csv")] --> s6_pfm["scripts/plot_planet_image_fraction_monthly.py"]
   end
 
-  subgraph S7["Step 7: Solar Radiation Validation"]
+  subgraph S6["Step 6: Solar Radiation Validation"]
     s5_ass --> s7_woc["scripts/windowed_obs_counts.py"]
     s7_woc --> s7_w05(["results/windowed_obs_counts_05d.npz"])
     s7_w05 --> s7_ill["scripts/illumination.py"]
@@ -52,7 +47,7 @@ flowchart TD
     s7_radw(["data/radiation/bci_lutz48m_srw_elect.csv"]) --> s7_ill
   end
 
-  subgraph S8["Step 8: Phenological Event Observability"]
+  subgraph S7["Step 7: Phenological Event Observability"]
     s5_ass --> s8_fecm["scripts/fit_empirical_count_models.py"]
     s8_fecm --> s8_emp(["results/empirical_model.npz"])
 

@@ -7,40 +7,16 @@ observability of the forest canopy from Planet satellite imagery as a
 function of season, and to validate the resulting seasonal pattern against
 independent ground-based measurements.
 
-## Step 1: Scene-Level Cloud Screening with UDM2
+## Step 1: Manual Labeling of Crown-Level Image Quality
 
-As a preliminary analysis, the clear-sky fraction of each Planet scene was
-computed from the Usable Data Mask (UDM2) products delivered with every
-Planet image. The UDM2 clear band encodes the fraction of each pixel
-classified as cloud-free by Planet's onboard quality pipeline. For each
-scene, the average clear fraction across the 50-hectare study area was
-recorded. However, this metric proved too coarse for crown-level
-observability assessment: the UDM2 mask operates at the scene level and does
-not capture subtler degradation such as thin haze, atmospheric distortion,
-or partial cloud shadows that can render individual tree crowns
-unidentifiable even when the scene is nominally classified as clear. This
-motivated the development of a learned, crown-level visibility classifier.
-
-**Scripts:**
-- `scripts/cloud_coverage_analysis.py` — Computes average UDM2 clear
-  fraction per scene by matching each RGB image to its corresponding UDM2
-  mask file and averaging the first band (clear pixel indicator).
-
-  **Reproduce:** TODO — document canonical Planet RGB directory path.
-- `scripts/cloud_coverage_plot.py` — Visualizes clear fraction over time as
-  a timeline plot showing each scene's clear fraction against the full
-  2020–2024 acquisition period.
-
-  **Reproduce:** TODO — depends on `cloud_coverage.csv` path from
-  `cloud_coverage_analysis.py`.
-- `scripts/plot_cadence_stats.py` — Analyzes the tradeoff between
-  clear-fraction threshold and observation cadence using the empirical
-  survival function of UDM2 clear fractions.
-
-  **Reproduce:** TODO — depends on `cloud_coverage.csv` path from
-  `cloud_coverage_analysis.py`.
-
-## Step 2: Manual Labeling of Crown-Level Image Quality
+A preliminary scene-level analysis using Planet's UDM2 masks was conducted
+prior to the crown-level classifier described below, but proved too coarse
+for individual-crown observability — scene-level "clear" labels miss thin
+haze, atmospheric distortion, and partial cloud shadows that can still
+render individual crowns unidentifiable. Those findings motivated the
+learned, crown-level classifier documented in this step and the next.
+The scripts and figures from the UDM2 exploration have been removed from
+the active pipeline; see `docs/history.md` for their provenance.
 
 To build training data for a crown-level visibility classifier, image
 patches centered on a single reference tree crown (tag 7633) were extracted
@@ -61,7 +37,7 @@ variation across dates.
 The CSV contains columns: `tag` (crown ID), `image_id` (Planet scene
 identifier), and `label` (good/poor/unsure).
 
-## Step 3: Feature Extraction with DINOv2
+## Step 2: Feature Extraction with DINOv2
 
 For each labeled image patch, a feature representation was extracted using
 DINOv2 (`dinov2_vits14`), a self-supervised vision transformer pretrained on
@@ -81,7 +57,7 @@ spectral indices can represent.
   **Reproduce:** TODO — document canonical crown-folder and
   embeddings-folder paths.
 
-## Step 4: Visibility Classifier Training
+## Step 3: Visibility Classifier Training
 
 The "unsure" labels were excluded, yielding 477 binary-labeled samples
 (148 good, 329 poor) with a 2.2:1 class imbalance favoring poor images.
@@ -97,7 +73,7 @@ as a quality predictor via ROC curve analysis.
   curves comparing the DINOv2-based classifier against the NDVI baseline.
   The trained model is serialized using the skops library.
 
-## Step 5: Plot-Wide Visibility Assessment
+## Step 4: Plot-Wide Visibility Assessment
 
 The trained classifier was deployed across the entire 50-hectare plot. For
 each monitored tree crown, DINOv2 embeddings were extracted from all
@@ -117,7 +93,7 @@ is clearly observable in a given scene.
   **Reproduce:** TODO — document the trained model file and embeddings
   folder paths.
 
-## Step 6: Observation Cadence Analysis
+## Step 5: Observation Cadence Analysis
 
 Using the visibility matrix, the observational cadence — the average number
 of days between clear observations — was characterized as a function of time
@@ -166,7 +142,7 @@ respectively, with nearly continuous year-round observations).
   **Reproduce:** TODO — input CSV (with a `date` column) is not produced
   by any documented script.
 
-## Step 7: Validation Against Ground-Based Solar Radiation
+## Step 6: Validation Against Ground-Based Solar Radiation
 
 To independently validate that the seasonal pattern in canopy observability
 reflects genuine atmospheric variation rather than an artifact of satellite
@@ -229,11 +205,11 @@ genuine atmospheric variation consistent with BCI's multi-decadal climate.
   counts with 10-day window (2022–2023, 365 DOYs × 4,452 crown-year
   combinations)
 
-## Step 8: Phenological Event Observability Analysis
+## Step 7: Phenological Event Observability Analysis
 
 This analysis builds directly on the crown-level visibility assessment from
-Steps 1-5. Where Step 6 characterized general observational cadence across
-the annual cycle, Step 8 addresses a specific research question: given a
+Steps 1-4. Where Step 5 characterized general observational cadence across
+the annual cycle, Step 7 addresses a specific research question: given a
 phenological event of known timing and duration, what is the probability of
 observing it in satellite imagery? This quantifies which species and
 phenological strategies are detectable via satellite monitoring.
@@ -251,7 +227,7 @@ determines the probability of observing an event for any given crown as a
 function of species.
 
 The empirical observation model is built by processing the visibility matrix
-from Step 5 with a 0.5 confidence threshold to binarize observations, then
+from Step 4 with a 0.5 confidence threshold to binarize observations, then
 resampling across multiple years (2022-2023) to compute observation counts
 within rolling time windows for each day of the year. For each combination of
 window size (1-364 days) and day of year, the model computes the fraction of
@@ -350,7 +326,7 @@ characterization of actual phenological timing and duration.
     results/sp_fruit_counts_annual.npz
   ```
 - `scripts/windowed_obs_counts.py` — Processes the visibility assessment
-  matrix from Step 5, applies 0.5 confidence threshold to binarize
+  matrix from Step 4, applies 0.5 confidence threshold to binarize
   observations, and computes rolling window observation counts for 365 days
   of year using multi-year resampling (2022-2023). For each sample date,
   counts how many satellite images fell within a specified half-window where
@@ -474,7 +450,7 @@ characterization of actual phenological timing and duration.
   invocations for the deciduousness path are listed under those scripts
   above, alongside the flower and fruit variants.)
 **Data:**
-- `results/assessment.npz` — Visibility matrix from Step 5 (crowns × images ×
+- `results/assessment.npz` — Visibility matrix from Step 4 (crowns × images ×
   confidence scores)
 - `data/BCI_TRAP200_20241002_spcorrected.txt` — Raw litter trap data
   (1987-2024, weekly collections, 200 traps, flowering/fruiting material by
