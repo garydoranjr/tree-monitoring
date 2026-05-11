@@ -9,15 +9,21 @@ from matplotlib.backends.backend_pdf import PdfPages
 from fit_empirical_count_models import EmpiricalCountModel
 from analyze_windowed_counts import shift_months
 from event_summary_stats import get_doy, get_obs_probabilities
+from optcontrast import get_contrast_color
 
 
 VMAX = 49.
 DMIN = 1
 DMAX = 49.
 DAYS_PER_WEEK = 7.
+CMAP = 'magma'
+
+TITLE_FS = 28
+LABEL_FS = 24
+TICK_FS = 14
 
 
-def make_cadence_plot(fig, ax, cax, model, df_s):
+def make_cadence_plot(fig, ax, cax, model, df_s, cmap):
 
     durations = np.linspace(DMIN, DMAX, 100)
     P = np.column_stack([
@@ -31,16 +37,18 @@ def make_cadence_plot(fig, ax, cax, model, df_s):
 
     wmin = DMIN / DAYS_PER_WEEK
     wmax = DMAX / DAYS_PER_WEEK
-    im = ax.imshow(P, extent=[0, 365, wmax, wmin], vmin=0, vmax=1)
+    im = ax.imshow(P, extent=[0, 365, wmax, wmin], vmin=0, vmax=1, cmap=cmap)
     ax.set_ylim(wmin, wmax)
     ax.set_yticks(np.arange(1., wmax + 1, 1.))
-    ax.set_xlabel('Month', fontsize=16)
-    ax.set_ylabel('Duration (Weeks)', fontsize=16)
+    ax.set_xlabel('Month', fontsize=LABEL_FS)
+    ax.set_ylabel('Duration (Weeks)', fontsize=LABEL_FS)
+    ax.tick_params(labelsize=TICK_FS)
 
     cbar = fig.colorbar(im, cax=cax)
     cbar.ax.yaxis.tick_left()
     cbar.ax.yaxis.set_label_position('left')
-    cbar.set_label('Probability of Observing Event', fontsize=16)
+    cbar.set_label('Probability of\nObserving Event', fontsize=LABEL_FS)
+    cbar.ax.tick_params(labelsize=TICK_FS)
 
     ticks = []
     for month in range(1, 13):
@@ -70,25 +78,30 @@ def make_cadence_plot(fig, ax, cax, model, df_s):
     pnew = np.hstack([peak[idx_s], peak[idx_e]])
     pnew = (pnew - sep) % 365.
 
-    ax.plot(pnew, dl, 'ro')
+    ax.plot(
+        pnew, dl, 'o', color=get_contrast_color(cmap),
+        markersize=12, markeredgecolor='white', markeredgewidth=1.5,
+    )
 
     return probs
 
 
-def make_comparison_plot(ax, probs):
+def make_comparison_plot(ax, probs, cmap):
 
     ax.hist(
-        probs, bins=np.linspace(0, 1, 21), density=False,
-        histtype='step', ec='k', orientation='horizontal',
+        probs, bins=np.linspace(0, 1, 11), density=False,
+        histtype='stepfilled', ec='k', fc='lightgray',
+        orientation='horizontal',
     )
     xmin, xmax = ax.get_xlim()
     avg = np.average(probs)
-    ax.plot([xmin, xmax], [avg, avg], 'r-', lw=3)
+    ax.plot([xmin, xmax], [avg, avg], 'r-', lw=5, label=f'Avg. = {avg:.1f}')
     ax.set_xlim(xmin, xmax)
+    ax.legend(loc='lower right', fontsize=TICK_FS)
 
     ax.set_ylim(0, 1)
-    ax.tick_params(left=False, labelleft=False)
-    ax.set_xlabel('Count', fontsize=16)
+    ax.tick_params(left=False, labelleft=False, labelsize=TICK_FS)
+    ax.set_xlabel('Count', fontsize=LABEL_FS)
 
 
 @click.command()
@@ -107,8 +120,8 @@ def main(modelfile, eventfile, outputfile):
     for sp in tqdm(unique_species, 'Plotting'):
         df_s = df.loc[df['species'] == sp]
 
-        fig = plt.figure(figsize=(16, 7))
-        gs_outer = fig.add_gridspec(1, 2, width_ratios=[10, 5], wspace=0.2)
+        fig = plt.figure(figsize=(13, 5))
+        gs_outer = fig.add_gridspec(1, 2, width_ratios=[10, 3], wspace=0.3)
         ax_cadence = fig.add_subplot(gs_outer[0, 0])
         gs_right = gs_outer[0, 1].subgridspec(
             1, 2, width_ratios=[0.5, 5], wspace=0.0,
@@ -116,9 +129,11 @@ def main(modelfile, eventfile, outputfile):
         ax_cbar = fig.add_subplot(gs_right[0, 0])
         ax_hist = fig.add_subplot(gs_right[0, 1])
 
-        ax_cadence.set_title(sp, fontsize=18)
-        probs = make_cadence_plot(fig, ax_cadence, ax_cbar, model, df_s)
-        make_comparison_plot(ax_hist, probs)
+        ax_cadence.set_title(sp, fontsize=TITLE_FS)
+        probs = make_cadence_plot(fig, ax_cadence, ax_cbar, model, df_s, CMAP)
+        make_comparison_plot(ax_hist, probs, CMAP)
+
+        fig.subplots_adjust(bottom=0.2)
 
         figs.append(fig)
 
