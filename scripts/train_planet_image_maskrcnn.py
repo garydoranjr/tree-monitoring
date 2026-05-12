@@ -134,7 +134,19 @@ class PlanetMaskRCNNDataset(Dataset):
             return img_tensor, target
 
         masks_t = torch.from_numpy(inst_masks)  # (N, H, W) uint8
-        boxes = masks_to_boxes(masks_t)         # (N, 4) float
+        boxes = masks_to_boxes(masks_t)         # (N, 4) float, inclusive xmax/ymax
+        keep = (boxes[:, 2] > boxes[:, 0]) & (boxes[:, 3] > boxes[:, 1])
+        masks_t = masks_t[keep]
+        boxes = boxes[keep]
+        if masks_t.shape[0] == 0:
+            return img_tensor, {
+                "boxes": torch.zeros((0, 4), dtype=torch.float32),
+                "labels": torch.zeros((0,), dtype=torch.int64),
+                "masks": torch.zeros((0, self.size, self.size), dtype=torch.uint8),
+                "image_id": torch.tensor([idx]),
+                "area": torch.zeros((0,), dtype=torch.float32),
+                "iscrowd": torch.zeros((0,), dtype=torch.int64),
+            }
         areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
         labels = torch.ones((masks_t.shape[0],), dtype=torch.int64)
         target = {
