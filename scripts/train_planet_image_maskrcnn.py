@@ -275,7 +275,21 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
 
     run = None
     if use_wandb:
-        run = wandb.init(entity='tree-flower', project='planet-maskrcnn')
+        run = wandb.init(
+            entity='tree-flower', project='planet-maskrcnn',
+            config={
+                'imagedir': imagedir,
+                'outputdir': outputdir,
+                'num_epochs': num_epochs,
+                'batch_size': batch_size,
+                'lr': lr,
+                'size': size,
+                'min_instance_size': min_instance_size,
+                'nms_thresh': nms_thresh,
+                'score_thresh': score_thresh,
+                'detections_per_img': detections_per_img,
+            },
+        )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
