@@ -165,7 +165,8 @@ def collate_fn(batch):
     return list(imgs), list(targets)
 
 
-def build_model(num_classes=2):
+def build_model(num_classes=2, nms_thresh=0.3, score_thresh=0.05,
+                detections_per_img=300):
     weights = MaskRCNN_ResNet50_FPN_V2_Weights.COCO_V1
     model = maskrcnn_resnet50_fpn_v2(weights=weights)
 
@@ -186,6 +187,10 @@ def build_model(num_classes=2):
     model.roi_heads.mask_predictor = MaskRCNNPredictor(
         in_features_mask, 256, num_classes,
     )
+
+    model.roi_heads.nms_thresh = nms_thresh
+    model.roi_heads.score_thresh = score_thresh
+    model.roi_heads.detections_per_img = detections_per_img
     return model
 
 
@@ -258,9 +263,13 @@ def evaluate(model, dataloader, device, iou_metric, map_metric,
 @click.option('--lr', default=1e-4, type=float)
 @click.option('--size', default=512, type=int)
 @click.option('--min-instance-size', default=4, type=int)
+@click.option('--nms-thresh', default=0.3, type=float)
+@click.option('--score-thresh', default=0.05, type=float)
+@click.option('--detections-per-img', default=300, type=int)
 @click.option('--wandb/--no-wandb', 'use_wandb', default=True)
 def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
-         min_instance_size, use_wandb):
+         min_instance_size, nms_thresh, score_thresh, detections_per_img,
+         use_wandb):
 
     os.makedirs(outputdir, exist_ok=True)
 
@@ -286,7 +295,10 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
         test_dataset, batch_size=1, shuffle=False, collate_fn=collate_fn,
     )
 
-    model = build_model(num_classes=2).to(device)
+    model = build_model(
+        num_classes=2, nms_thresh=nms_thresh, score_thresh=score_thresh,
+        detections_per_img=detections_per_img,
+    ).to(device)
     optimizer = optim.AdamW(model.parameters(), lr=lr)
 
     iou_metric = torchmetrics.JaccardIndex(task="binary").to(device)
