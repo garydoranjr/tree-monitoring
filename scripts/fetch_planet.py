@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+import csv
 import yaml
 import click
 import asyncio
@@ -8,6 +9,9 @@ from planet import (
     Auth, Session, data_filter, order_request,
     reporting
 )
+
+
+PLANET_ORDER_LIMIT = 100
 
 
 async def search(auth, config, year, month):
@@ -49,21 +53,17 @@ async def search(auth, config, year, month):
         return [i async for i in client.search(item_types, sfilter)]
 
 
-async def fetch(auth, config, year, month, outputdir):
+def read_missing_ids(csv_path):
+    with open(csv_path, 'r', newline='') as f:
+        reader = csv.reader(f)
+        next(reader, None)  # skip header
+        return [row[0] for row in reader if row and row[0]]
 
-    results = await search(auth, config, year, month)
 
-    items = [r['id'] for r in results]
-
-    if len(items) > 100:
-        raise ValueError('Too many items ({len(items)}) to fetch!')
-
-    if len(items) == 0:
-        raise ValueError('No items to fetch!')
+async def submit_order(auth, config, items, order_name, outputdir):
 
     item_type = config['item_type']
     product_bundle = config['product_bundle']
-    order_name = config['order_name_format'].format(year=year, month=month)
 
     geom = config.get('geometry', None)
     tools = [] if geom is None else [order_request.clip_tool(aoi=geom)]
@@ -98,6 +98,44 @@ async def fetch(auth, config, year, month, outputdir):
         )
 
 
+async def fetch(auth, config, year, month, outputdir):
+
+    results = await search(auth, config, year, month)
+
+    items = [r['id'] for r in results]
+
+    if len(items) > PLANET_ORDER_LIMIT:
+        raise ValueError(f'Too many items ({len(items)}) to fetch!')
+
+    if len(items) == 0:
+        raise ValueError('No items to fetch!')
+
+    order_name = config['order_name_format'].format(year=year, month=month)
+    await submit_order(auth, config, items, order_name, outputdir)
+
+
+async def fetch_missing(auth, config, ids, order_name_prefix, outputdir):
+
+    if len(ids) == 0:
+        raise ValueError('No items to fetch!')
+
+    chunks = [
+        ids[i:i + PLANET_ORDER_LIMIT]
+        for i in range(0, len(ids), PLANET_ORDER_LIMIT)
+    ]
+
+    for i, chunk in enumerate(chunks):
+        if len(chunks) == 1:
+            order_name = order_name_prefix
+        else:
+            order_name = f'{order_name_prefix}_{i + 1:02d}'
+        click.echo(
+            f'Submitting order {order_name} '
+            f'({len(chunk)} items, {i + 1}/{len(chunks)})'
+        )
+        await submit_order(auth, config, chunk, order_name, outputdir)
+
+
 @click.command()
 @click.argument('configfile', type=click.Path(
     path_type=Path, exists=True
@@ -105,15 +143,35 @@ async def fetch(auth, config, year, month, outputdir):
 @click.argument('outputdir', type=click.Path(
     path_type=Path, exists=True
 ))
-@click.option('-y', '--year', default=2021, type=int)
-@click.option('-m', '--month', default=1, type=int)
-def main(configfile, outputdir, year, month):
+@click.option('-y', '--year', type=int, default=None)
+@click.option('-m', '--month', type=int, default=None)
+@click.option('--missing-csv', type=click.Path(
+    path_type=Path, exists=True
+), default=None, help='CSV of scene IDs (first column) to fetch.')
+@click.option('--order-name', type=str, default=None,
+              help='Order name (or prefix when batched). '
+                   'Required with --missing-csv.')
+def main(configfile, outputdir, year, month, missing_csv, order_name):
 
     with open(configfile, 'r') as f:
         config = yaml.safe_load(f)
 
     auth = Auth.from_env()
-    asyncio.run(fetch(auth, config, year, month, outputdir))
+
+    if missing_csv is not None:
+        if order_name is None:
+            raise click.UsageError(
+                '--order-name is required when --missing-csv is given.'
+            )
+        ids = read_missing_ids(missing_csv)
+        asyncio.run(fetch_missing(auth, config, ids, order_name, outputdir))
+    else:
+        if year is None or month is None:
+            raise click.UsageError(
+                '--year and --month are required '
+                '(or use --missing-csv with --order-name).'
+            )
+        asyncio.run(fetch(auth, config, year, month, outputdir))
 
 
 if __name__ == '__main__':
