@@ -242,6 +242,16 @@ commit, ask the user before committing. When committing, follow the
 existing commit-message style in `git log` and stage only the files
 relevant to the change (do not use `git add -A`).
 
+Commits from this repo feed a weekly-report generator that summarizes
+recent progress for the section's Confluence page. Write commit
+subjects that would read usefully on a weekly report: start with a
+verb, name the concrete thing that changed (script, model, dataset,
+figure, config), and — when the outcome matters — state the result
+or motivation in one clause. Prefer "Train SegFormer on 4-band
+imagery; F1 0.82 on held-out crowns" over "update training script".
+The body is included too — use it for detail, caveats, numbers,
+and context that won't fit in a scannable subject line.
+
 ## Figure captions
 
 Captions for figures in papers and methodology docs should be
