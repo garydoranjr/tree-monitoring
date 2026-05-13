@@ -14,11 +14,14 @@ dependencies:
   - rasterio
   - tqdm
   - scikit-learn
+  - scikit-image
   - geopandas
   - Pillow
   - click
   - arosics
   - planet
   - werkzeug
+  - dash
+  - plotly
   - pip:
       - python-ffmpeg
