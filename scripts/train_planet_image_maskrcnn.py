@@ -87,24 +87,11 @@ def binary_mask_to_instances(bin_mask, min_instance_size=4):
     return np.stack(instances, axis=0)
 
 
-def classify_instances(gt_masks, pred_masks, pred_scores, iou_thresh=0.5):
-    """Greedy IoU matching between predicted and GT instance masks.
-
-    Returns per-instance TP/FP/FN labels plus the raw IoU matrix. The
-    UI filter hook for TP/FP/FN lives off of this dict."""
-    P = pred_masks.shape[0]
-    G = gt_masks.shape[0]
-    iou = np.zeros((P, G), dtype=np.float32)
-    if P and G:
-        p_flat = pred_masks.reshape(P, -1).astype(np.int32)
-        g_flat = gt_masks.reshape(G, -1).astype(np.int32)
-        inter = p_flat @ g_flat.T
-        p_area = p_flat.sum(axis=1)[:, None]
-        g_area = g_flat.sum(axis=1)[None, :]
-        union = p_area + g_area - inter
-        with np.errstate(divide='ignore', invalid='ignore'):
-            iou = np.where(union > 0, inter / union, 0.0).astype(np.float32)
-
+def _greedy_match(iou, pred_scores, iou_thresh=0.5):
+    """Greedy TP/FP/FN labeling given a (P, G) IoU matrix and predicted
+    confidence scores. Inputs are NumPy; the loop is small (P*G entries)
+    so CPU is fine even when the IoU itself was built on GPU."""
+    P, G = iou.shape
     pred_labels = ['FP'] * P
     gt_labels = ['FN'] * G
     pred_to_gt = [-1] * P
@@ -128,6 +115,63 @@ def classify_instances(gt_masks, pred_masks, pred_scores, iou_thresh=0.5):
         'pred_to_gt': pred_to_gt,
         'iou': iou,
     }
+
+
+def iou_matrix_torch(pred_masks, gt_masks):
+    """Compute the (P, G) instance-mask IoU matrix on whatever device the
+    inputs live on. Inputs are (P, H, W) and (G, H, W) tensors (bool or
+    numeric). Returns a (P, G) float32 tensor on the same device.
+
+    Casting to float32 lets the matmul go through BLAS/cuBLAS; integer
+    matmul has no fast path in either NumPy or torch."""
+    P = pred_masks.shape[0]
+    G = gt_masks.shape[0]
+    device = pred_masks.device
+    if P == 0 or G == 0:
+        return torch.zeros((P, G), dtype=torch.float32, device=device)
+    p_flat = pred_masks.reshape(P, -1).to(torch.float32)
+    g_flat = gt_masks.reshape(G, -1).to(torch.float32)
+    inter = p_flat @ g_flat.t()
+    p_area = p_flat.sum(dim=1, keepdim=True)
+    g_area = g_flat.sum(dim=1, keepdim=True).t()
+    union = p_area + g_area - inter
+    iou = torch.where(union > 0, inter / union.clamp(min=1.0),
+                      torch.zeros_like(inter))
+    return iou
+
+
+def classify_instances_torch(gt_masks, pred_masks, pred_scores,
+                             iou_thresh=0.5):
+    """Torch-tensor entry point used by the training-loop evaluator.
+
+    `gt_masks` and `pred_masks` are (G, H, W) and (P, H, W) tensors on
+    the model's device; `pred_scores` is a (P,) tensor. Only the small
+    (P, G) IoU matrix and (P,) scores cross the GPU->CPU boundary."""
+    iou_t = iou_matrix_torch(pred_masks, gt_masks)
+    iou = iou_t.detach().cpu().numpy().astype(np.float32)
+    scores = pred_scores.detach().cpu().numpy()
+    return _greedy_match(iou, scores, iou_thresh=iou_thresh)
+
+
+def classify_instances(gt_masks, pred_masks, pred_scores, iou_thresh=0.5):
+    """Greedy IoU matching between predicted and GT instance masks.
+
+    NumPy entry point used by the interactive viewer. Returns per-instance
+    TP/FP/FN labels plus the raw IoU matrix. The UI filter hook for
+    TP/FP/FN lives off of this dict."""
+    P = pred_masks.shape[0]
+    G = gt_masks.shape[0]
+    iou = np.zeros((P, G), dtype=np.float32)
+    if P and G:
+        p_flat = pred_masks.reshape(P, -1).astype(np.float32)
+        g_flat = gt_masks.reshape(G, -1).astype(np.float32)
+        inter = p_flat @ g_flat.T
+        p_area = p_flat.sum(axis=1)[:, None]
+        g_area = g_flat.sum(axis=1)[None, :]
+        union = p_area + g_area - inter
+        with np.errstate(divide='ignore', invalid='ignore'):
+            iou = np.where(union > 0, inter / union, 0.0).astype(np.float32)
+    return _greedy_match(iou, pred_scores, iou_thresh=iou_thresh)
 
 
 class PlanetMaskRCNNDataset(Dataset):
@@ -296,11 +340,9 @@ def evaluate(model, dataloader, device, iou_metric, map_metric,
             )
             iou_metric.update(pred_union.int(), gt_union.int())
 
-            pred_masks_np = pred["masks"].detach().cpu().numpy().astype(np.uint8)
-            gt_masks_np = tgt["masks"].detach().cpu().numpy().astype(np.uint8)
-            scores_np = pred["scores"].detach().cpu().numpy()
-            cls = classify_instances(
-                gt_masks_np, pred_masks_np, scores_np, iou_thresh=iou_thresh,
+            cls = classify_instances_torch(
+                tgt["masks"], pred["masks"], pred["scores"],
+                iou_thresh=iou_thresh,
             )
             tp += cls['pred_labels'].count('TP')
             fp += cls['pred_labels'].count('FP')
