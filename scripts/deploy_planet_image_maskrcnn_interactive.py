@@ -28,6 +28,7 @@ from dash import Dash, Input, Output, Patch, State, ctx, dcc, html
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from deploy_planet_image_maskrcnn import load_image_and_gt  # noqa: E402
+from train_planet_image_maskrcnn import classify_instances  # noqa: E402
 
 
 @dataclass
@@ -131,49 +132,6 @@ class InferenceWorker(threading.Thread):
             masks=pred_masks, boxes=boxes, scores=scores,
             classifications=classifications,
         )
-
-
-def classify_instances(gt_masks, pred_masks, pred_scores, iou_thresh=0.5):
-    """Greedy IoU matching between predicted and GT instance masks.
-
-    Returns per-instance TP/FP/FN labels plus the raw IoU matrix. The
-    UI filter hook for TP/FP/FN lives off of this dict."""
-    P = pred_masks.shape[0]
-    G = gt_masks.shape[0]
-    iou = np.zeros((P, G), dtype=np.float32)
-    if P and G:
-        p_flat = pred_masks.reshape(P, -1).astype(np.int32)
-        g_flat = gt_masks.reshape(G, -1).astype(np.int32)
-        inter = p_flat @ g_flat.T
-        p_area = p_flat.sum(axis=1)[:, None]
-        g_area = g_flat.sum(axis=1)[None, :]
-        union = p_area + g_area - inter
-        with np.errstate(divide='ignore', invalid='ignore'):
-            iou = np.where(union > 0, inter / union, 0.0).astype(np.float32)
-
-    pred_labels = ['FP'] * P
-    gt_labels = ['FN'] * G
-    pred_to_gt = [-1] * P
-    if P and G:
-        order = np.argsort(-pred_scores)
-        gt_used = np.zeros(G, dtype=bool)
-        for pi in order:
-            if gt_used.all():
-                break
-            avail = np.where(~gt_used)[0]
-            best_local = int(np.argmax(iou[pi, avail]))
-            gi = int(avail[best_local])
-            if iou[pi, gi] >= iou_thresh:
-                gt_used[gi] = True
-                pred_labels[pi] = 'TP'
-                gt_labels[gi] = 'TP'
-                pred_to_gt[pi] = gi
-    return {
-        'pred_labels': pred_labels,
-        'gt_labels': gt_labels,
-        'pred_to_gt': pred_to_gt,
-        'iou': iou,
-    }
 
 
 def _mask_to_polygon_xy(mask):

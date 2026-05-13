@@ -87,6 +87,49 @@ def binary_mask_to_instances(bin_mask, min_instance_size=4):
     return np.stack(instances, axis=0)
 
 
+def classify_instances(gt_masks, pred_masks, pred_scores, iou_thresh=0.5):
+    """Greedy IoU matching between predicted and GT instance masks.
+
+    Returns per-instance TP/FP/FN labels plus the raw IoU matrix. The
+    UI filter hook for TP/FP/FN lives off of this dict."""
+    P = pred_masks.shape[0]
+    G = gt_masks.shape[0]
+    iou = np.zeros((P, G), dtype=np.float32)
+    if P and G:
+        p_flat = pred_masks.reshape(P, -1).astype(np.int32)
+        g_flat = gt_masks.reshape(G, -1).astype(np.int32)
+        inter = p_flat @ g_flat.T
+        p_area = p_flat.sum(axis=1)[:, None]
+        g_area = g_flat.sum(axis=1)[None, :]
+        union = p_area + g_area - inter
+        with np.errstate(divide='ignore', invalid='ignore'):
+            iou = np.where(union > 0, inter / union, 0.0).astype(np.float32)
+
+    pred_labels = ['FP'] * P
+    gt_labels = ['FN'] * G
+    pred_to_gt = [-1] * P
+    if P and G:
+        order = np.argsort(-pred_scores)
+        gt_used = np.zeros(G, dtype=bool)
+        for pi in order:
+            if gt_used.all():
+                break
+            avail = np.where(~gt_used)[0]
+            best_local = int(np.argmax(iou[pi, avail]))
+            gi = int(avail[best_local])
+            if iou[pi, gi] >= iou_thresh:
+                gt_used[gi] = True
+                pred_labels[pi] = 'TP'
+                gt_labels[gi] = 'TP'
+                pred_to_gt[pi] = gi
+    return {
+        'pred_labels': pred_labels,
+        'gt_labels': gt_labels,
+        'pred_to_gt': pred_to_gt,
+        'iou': iou,
+    }
+
+
 class PlanetMaskRCNNDataset(Dataset):
 
     def __init__(self, img_dir, split, size=512, color_jitter=False,
@@ -196,11 +239,16 @@ def build_model(num_classes=2, nms_thresh=0.3, score_thresh=0.05,
 
 @torch.no_grad()
 def evaluate(model, dataloader, device, iou_metric, map_metric,
-             score_thresh=0.5):
-    """Compute binary-IoU (union of masks) and mask mAP on the dataloader."""
+             score_thresh=0.5, iou_thresh=0.5):
+    """Compute binary-IoU (union of masks), mask mAP, and event-level
+    precision/recall/accuracy on the dataloader."""
     model.eval()
     iou_metric.reset()
     map_metric.reset()
+
+    tp = 0
+    fp = 0
+    fn = 0
 
     for imgs, targets in dataloader:
         imgs = [img.to(device) for img in imgs]
@@ -248,11 +296,35 @@ def evaluate(model, dataloader, device, iou_metric, map_metric,
             )
             iou_metric.update(pred_union.int(), gt_union.int())
 
+            pred_masks_np = pred["masks"].detach().cpu().numpy().astype(np.uint8)
+            gt_masks_np = tgt["masks"].detach().cpu().numpy().astype(np.uint8)
+            scores_np = pred["scores"].detach().cpu().numpy()
+            cls = classify_instances(
+                gt_masks_np, pred_masks_np, scores_np, iou_thresh=iou_thresh,
+            )
+            tp += cls['pred_labels'].count('TP')
+            fp += cls['pred_labels'].count('FP')
+            fn += cls['gt_labels'].count('FN')
+
         map_metric.update(preds_for_map, gts_for_map)
 
     iou = iou_metric.compute().item()
     map_results = map_metric.compute()
-    return iou, map_results
+
+    precision = tp / (tp + fp) if (tp + fp) > 0 else float('nan')
+    recall = tp / (tp + fn) if (tp + fn) > 0 else float('nan')
+    accuracy = (
+        tp / (tp + fp + fn) if (tp + fp + fn) > 0 else float('nan')
+    )
+    event_metrics = {
+        'precision': precision,
+        'recall': recall,
+        'accuracy': accuracy,
+        'tp': tp,
+        'fp': fp,
+        'fn': fn,
+    }
+    return iou, map_results, event_metrics
 
 
 @click.command()
@@ -348,7 +420,7 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
 
         avg_losses = {k: v / max(n_batches, 1) for k, v in loss_totals.items()}
 
-        test_iou, test_map = evaluate(
+        test_iou, test_map, test_event = evaluate(
             model, test_loader, device, iou_metric, map_metric,
         )
 
@@ -357,10 +429,13 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
         for k, v in test_map.items():
             if isinstance(v, torch.Tensor) and v.numel() == 1:
                 log[f'test_map/{k}'] = v.item()
+        log.update({f'test_event/{k}': v for k, v in test_event.items()})
         print(
             f"Epoch {epoch+1}/{num_epochs} - loss: {avg_losses['loss_total']:.4f}"
             f" - test_iou: {test_iou:.4f}"
             f" - test_map50: {log.get('test_map/map_50', float('nan')):.4f}"
+            f" - P/R/A: {test_event['precision']:.3f}"
+            f"/{test_event['recall']:.3f}/{test_event['accuracy']:.3f}"
         )
         if run is not None:
             run.log(log)
