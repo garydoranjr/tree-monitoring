@@ -273,6 +273,17 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
 
     os.makedirs(outputdir, exist_ok=True)
 
+    params = {
+        'num_epochs': num_epochs,
+        'batch_size': batch_size,
+        'lr': lr,
+        'size': size,
+        'min_instance_size': min_instance_size,
+        'nms_thresh': nms_thresh,
+        'score_thresh': score_thresh,
+        'detections_per_img': detections_per_img,
+    }
+
     run = None
     if use_wandb:
         run = wandb.init(
@@ -280,14 +291,7 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
             config={
                 'imagedir': imagedir,
                 'outputdir': outputdir,
-                'num_epochs': num_epochs,
-                'batch_size': batch_size,
-                'lr': lr,
-                'size': size,
-                'min_instance_size': min_instance_size,
-                'nms_thresh': nms_thresh,
-                'score_thresh': score_thresh,
-                'detections_per_img': detections_per_img,
+                **params,
             },
         )
 
@@ -362,7 +366,7 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
             run.log(log)
 
         outputfile = os.path.join(outputdir, f'epoch_{epoch+1:03d}.pth')
-        torch.save(model, outputfile)
+        torch.save({'model': model, 'params': params}, outputfile)
 
     if run is not None:
         run.finish()

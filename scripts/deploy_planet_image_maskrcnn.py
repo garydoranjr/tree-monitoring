@@ -105,7 +105,9 @@ def main(modelfile, imagedir, outputdir, score_thresh, mask_thresh, split,
     os.makedirs(outputdir, exist_ok=True)
 
     device = torch.device('cpu')
-    model = torch.load(modelfile, map_location=device)
+    ckpt = torch.load(modelfile, map_location=device)
+    model = ckpt['model']
+    min_instance_size = ckpt['params']['min_instance_size']
     model.eval()
     model.to(device)
 
@@ -122,6 +124,7 @@ def main(modelfile, imagedir, outputdir, score_thresh, mask_thresh, split,
 
         img_np, gt_masks, img_tensor = load_image_and_gt(
             imgfile, split=split, size=size,
+            min_instance_size=min_instance_size,
         )
 
         with torch.no_grad():

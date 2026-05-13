@@ -68,7 +68,7 @@ class InferenceWorker(threading.Thread):
     _STOP = object()
 
     def __init__(self, model, device, cache, image_paths, split, size,
-                 score_thresh, mask_thresh, iou_thresh):
+                 score_thresh, mask_thresh, iou_thresh, min_instance_size):
         super().__init__(daemon=True)
         self.model = model
         self.device = device
@@ -79,6 +79,7 @@ class InferenceWorker(threading.Thread):
         self.score_thresh = score_thresh
         self.mask_thresh = mask_thresh
         self.iou_thresh = iou_thresh
+        self.min_instance_size = min_instance_size
 
         self._queue = queue.PriorityQueue()
         self._bump_counter = itertools.count(0, -1)
@@ -114,6 +115,7 @@ class InferenceWorker(threading.Thread):
     def _run_inference(self, path):
         _, gt_masks, img_tensor = load_image_and_gt(
             path, split=self.split, size=self.size,
+            min_instance_size=self.min_instance_size,
         )
         with torch.no_grad():
             output = self.model([img_tensor.to(self.device)])[0]
@@ -464,14 +466,16 @@ def main(modelfile, imagedir, outputdir, score_thresh, mask_thresh, split,
         raise click.ClickException(f'no *rgb.png files in {imagedir}')
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model = torch.load(modelfile, map_location='cpu')
+    ckpt = torch.load(modelfile, map_location='cpu')
+    model = ckpt['model']
+    min_instance_size = ckpt['params']['min_instance_size']
 
     cache = PredictionCache()
     worker = InferenceWorker(
         model=model, device=device, cache=cache,
         image_paths=image_paths, split=split, size=size,
         score_thresh=score_thresh, mask_thresh=mask_thresh,
-        iou_thresh=iou_thresh,
+        iou_thresh=iou_thresh, min_instance_size=min_instance_size,
     )
     worker.start()
     atexit.register(worker.stop)
