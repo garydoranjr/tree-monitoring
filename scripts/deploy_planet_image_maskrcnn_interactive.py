@@ -21,7 +21,6 @@ import click
 import numpy as np
 import plotly.graph_objects as go
 import torch
-from plotly.colors import qualitative as qual_colors
 from skimage import measure
 
 import dash
@@ -199,44 +198,43 @@ def _hex_rgba(hex_color, alpha):
     return f'rgba({r},{g},{b},{alpha})'
 
 
+GT_COLOR = '#00E5FF'    # cyan
+PRED_COLOR = '#FF00E5'  # magenta
+
+
 def build_figure(img, gt_masks, pred_result, show_gt, show_pred):
     fig = go.Figure()
     fig.add_trace(go.Image(z=img, hoverinfo='skip'))
 
-    palette = qual_colors.Alphabet
-
     for i in range(gt_masks.shape[0]):
-        color = palette[i % len(palette)]
         xs, ys = _mask_to_polygon_xy(gt_masks[i])
         if not xs:
             continue
         fig.add_trace(go.Scatter(
             x=xs, y=ys,
             mode='lines', fill='toself',
-            line=dict(color=color, width=1.5),
-            fillcolor=_hex_rgba(color, 0.25),
+            line=dict(color=GT_COLOR, width=1.5),
+            fillcolor=_hex_rgba(GT_COLOR, 0.2),
             legendgroup='gt',
-            name=f'gt #{i}',
-            showlegend=(i == 0),
-            hoverinfo='name',
+            name='ground truth',
+            showlegend=False,
+            hoverinfo='skip',
             visible=show_gt,
         ))
 
     if pred_result is not None:
         for i in range(pred_result.masks.shape[0]):
-            color = palette[i % len(palette)]
             xs, ys = _mask_to_polygon_xy(pred_result.masks[i])
             score = float(pred_result.scores[i])
-            name = f'pred #{i} s={score:.2f}'
             if xs:
                 fig.add_trace(go.Scatter(
                     x=xs, y=ys,
                     mode='lines', fill='toself',
-                    line=dict(color=color, width=1.5),
-                    fillcolor=_hex_rgba(color, 0.25),
+                    line=dict(color=PRED_COLOR, width=1.5),
+                    fillcolor=_hex_rgba(PRED_COLOR, 0.2),
                     legendgroup='pred',
-                    name=name,
-                    showlegend=(i == 0),
+                    name=f'pred s={score:.2f}',
+                    showlegend=False,
                     hoverinfo='name',
                     visible=show_pred,
                 ))
@@ -245,11 +243,11 @@ def build_figure(img, gt_masks, pred_result, show_gt, show_pred):
                 x=[x1, x2, x2, x1, x1],
                 y=[y1, y1, y2, y2, y1],
                 mode='lines',
-                line=dict(color=color, width=1.2),
+                line=dict(color=PRED_COLOR, width=1.2),
                 legendgroup='pred',
-                name=name + ' bbox',
+                name=f'pred bbox s={score:.2f}',
                 showlegend=False,
-                hoverinfo='name',
+                hoverinfo='skip',
                 visible=show_pred,
             ))
 
@@ -265,8 +263,7 @@ def build_figure(img, gt_masks, pred_result, show_gt, show_pred):
             scaleanchor='x', scaleratio=1,
         ),
         dragmode='pan',
-        showlegend=True,
-        legend=dict(itemclick='toggle', itemdoubleclick='toggleothers'),
+        showlegend=False,
     )
     return fig
 
