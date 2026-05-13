@@ -202,30 +202,50 @@ GT_COLOR = '#00E5FF'    # cyan
 PRED_COLOR = '#FF00E5'  # magenta
 
 
-def build_figure(img, gt_masks, pred_result, show_gt, show_pred):
+def _trace_visible(kind, label, show_gt, show_pred, filter_val):
+    show_kind = show_gt if kind == 'gt' else show_pred
+    if not show_kind:
+        return False
+    if filter_val == 'all' or label is None:
+        return True
+    return label == filter_val
+
+
+def build_figure(img, gt_masks, pred_result, show_gt, show_pred,
+                 filter_val='all'):
     fig = go.Figure()
     fig.add_trace(go.Image(z=img, hoverinfo='skip'))
+
+    gt_labels = None
+    pred_labels = None
+    if pred_result is not None and pred_result.classifications is not None:
+        gt_labels = pred_result.classifications['gt_labels']
+        pred_labels = pred_result.classifications['pred_labels']
 
     for i in range(gt_masks.shape[0]):
         xs, ys = _mask_to_polygon_xy(gt_masks[i])
         if not xs:
             continue
+        label = gt_labels[i] if gt_labels is not None else None
         fig.add_trace(go.Scatter(
             x=xs, y=ys,
             mode='lines', fill='toself',
             line=dict(color=GT_COLOR, width=1.5),
             fillcolor=_hex_rgba(GT_COLOR, 0.2),
             legendgroup='gt',
+            meta=label,
             name='ground truth',
             showlegend=False,
             hoverinfo='skip',
-            visible=show_gt,
+            visible=_trace_visible('gt', label, show_gt, show_pred, filter_val),
         ))
 
     if pred_result is not None:
         for i in range(pred_result.masks.shape[0]):
             xs, ys = _mask_to_polygon_xy(pred_result.masks[i])
             score = float(pred_result.scores[i])
+            label = pred_labels[i] if pred_labels is not None else None
+            vis = _trace_visible('pred', label, show_gt, show_pred, filter_val)
             if xs:
                 fig.add_trace(go.Scatter(
                     x=xs, y=ys,
@@ -233,10 +253,11 @@ def build_figure(img, gt_masks, pred_result, show_gt, show_pred):
                     line=dict(color=PRED_COLOR, width=1.5),
                     fillcolor=_hex_rgba(PRED_COLOR, 0.2),
                     legendgroup='pred',
+                    meta=label,
                     name=f'pred s={score:.2f}',
                     showlegend=False,
                     hoverinfo='name',
-                    visible=show_pred,
+                    visible=vis,
                 ))
             x1, y1, x2, y2 = pred_result.boxes[i]
             fig.add_trace(go.Scatter(
@@ -245,10 +266,11 @@ def build_figure(img, gt_masks, pred_result, show_gt, show_pred):
                 mode='lines',
                 line=dict(color=PRED_COLOR, width=1.2),
                 legendgroup='pred',
+                meta=label,
                 name=f'pred bbox s={score:.2f}',
                 showlegend=False,
                 hoverinfo='skip',
-                visible=show_pred,
+                visible=vis,
             ))
 
     h, w = img.shape[:2]
@@ -321,6 +343,17 @@ def make_app(image_paths, cache, worker, split, size):
                 options=[{'label': ' Show ground truth', 'value': 'gt'}],
                 value=['gt'], inline=True,
             ),
+            dcc.Dropdown(
+                id='dd-filter',
+                options=[
+                    {'label': 'All', 'value': 'all'},
+                    {'label': 'True Positive', 'value': 'TP'},
+                    {'label': 'False Positive', 'value': 'FP'},
+                    {'label': 'False Negative', 'value': 'FN'},
+                ],
+                value='all', clearable=False,
+                style={'minWidth': '180px'},
+            ),
             html.Div(id='pred-toggle-slot', style={'display': 'inline-block'},
                      children=[
                 dcc.Checklist(
@@ -383,8 +416,9 @@ def make_app(image_paths, cache, worker, split, size):
         State('store-last-rendered', 'data'),
         State('toggle-gt', 'value'),
         State('toggle-pred', 'value'),
+        State('dd-filter', 'value'),
     )
-    def render(idx, _tick, last, gt_val, pred_val):
+    def render(idx, _tick, last, gt_val, pred_val, filter_val):
         idx = idx or 0
         path = image_paths[idx]
         if ctx.triggered_id == 'store-current-idx':
@@ -401,7 +435,8 @@ def make_app(image_paths, cache, worker, split, size):
         img, gt_masks, _ = load_image_and_gt(path, split=split, size=size)
         show_gt = 'gt' in (gt_val or [])
         show_pred = 'pred' in (pred_val or []) and pred_available
-        fig = build_figure(img, gt_masks, pred, show_gt, show_pred)
+        fig = build_figure(img, gt_masks, pred, show_gt, show_pred,
+                           filter_val=filter_val or 'all')
 
         if pred_available:
             spinner_style = {'display': 'none'}
@@ -417,21 +452,25 @@ def make_app(image_paths, cache, worker, split, size):
         Output('viewer', 'figure', allow_duplicate=True),
         Input('toggle-gt', 'value'),
         Input('toggle-pred', 'value'),
+        Input('dd-filter', 'value'),
         State('viewer', 'figure'),
         prevent_initial_call=True,
     )
-    def on_toggle(gt_val, pred_val, fig):
+    def on_toggle(gt_val, pred_val, filter_val, fig):
         if not fig or 'data' not in fig:
             raise dash.exceptions.PreventUpdate
         show_gt = 'gt' in (gt_val or [])
         show_pred = 'pred' in (pred_val or [])
+        filter_val = filter_val or 'all'
         patched = Patch()
         for i, trace in enumerate(fig['data']):
             lg = trace.get('legendgroup')
-            if lg == 'gt':
-                patched['data'][i]['visible'] = show_gt
-            elif lg == 'pred':
-                patched['data'][i]['visible'] = show_pred
+            if lg not in ('gt', 'pred'):
+                continue
+            label = trace.get('meta')
+            patched['data'][i]['visible'] = _trace_visible(
+                lg, label, show_gt, show_pred, filter_val,
+            )
         return patched
 
     return app
@@ -449,7 +488,7 @@ def make_app(image_paths, cache, worker, split, size):
               type=click.Choice(['left', 'right']),
               help='Which half of each tile to visualize (test=right).')
 @click.option('--size', default=512, type=int)
-@click.option('--iou-thresh', default=0.5, type=float,
+@click.option('--iou-thresh', default=0.25, type=float,
               help='IoU threshold for TP/FP/FN matching.')
 @click.option('--host', default='127.0.0.1', type=str)
 @click.option('--port', default=8050, type=int)
