@@ -89,37 +89,37 @@ def main():
         )
 
         mask_pngs_with = list(with_dir.glob("*.mask.png"))
-        failures_json  = with_dir / "coreg_failures.json"
+        coreg_log      = with_dir / "coreg_log.json"
 
         print(f"\nMask PNGs written (with mask): {len(mask_pngs_with)}")
 
-        if failures_json.exists():
-            with open(failures_json) as f:
-                failures = json.load(f)
-            assert_ok(isinstance(failures, list), "coreg_failures.json is a JSON list")
+        assert_ok(coreg_log.exists(), "coreg_log.json written")
+        with open(coreg_log) as f:
+            records = json.load(f)
+        assert_ok(isinstance(records, list), "coreg_log.json is a JSON list")
 
-            for entry in failures:
-                assert_ok("scene" in entry, f"failure entry has 'scene' key: {entry}")
-                assert_ok("label" in entry, f"failure entry has 'label' key: {entry}")
-                assert_ok("clear_fraction" in entry, f"failure entry has 'clear_fraction' key: {entry}")
-                cf = entry["clear_fraction"]
-                if cf is not None:
-                    assert_ok(
-                        0.0 <= cf <= 1.0,
-                        f"clear_fraction in [0,1] for {entry['scene']}: {cf}",
-                    )
+        for entry in records:
+            for key in ("scene", "label", "coreg_ok", "clear_fraction"):
+                assert_ok(key in entry, f"record has '{key}' key: {entry}")
+            cf = entry["clear_fraction"]
+            if cf is not None:
+                assert_ok(
+                    0.0 <= cf <= 1.0,
+                    f"clear_fraction in [0,1] for {entry['scene']}: {cf}",
+                )
 
-            # No mask.png should exist for any failed scene
-            for entry in failures:
+        # No mask.png should exist for any failed scene
+        for entry in records:
+            if not entry["coreg_ok"]:
                 mask_png = with_dir / f"{entry['scene']}.mask.png"
                 assert_ok(
                     not mask_png.exists(),
                     f"No mask.png written for failed COREG scene {entry['scene']}",
                 )
-            print(f"Failures recorded: {len(failures)}")
-        else:
-            print("No coreg_failures.json written (all scenes succeeded or no matching scenes)")
-            failures = []
+
+        n_ok  = sum(1 for r in records if r["coreg_ok"])
+        n_bad = sum(1 for r in records if not r["coreg_ok"])
+        print(f"Scenes logged: {len(records)} total, {n_ok} succeeded, {n_bad} failed")
 
         # --- Run WITHOUT --maskdir ---
         run(

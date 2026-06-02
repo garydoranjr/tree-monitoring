@@ -227,24 +227,28 @@ def create_mask(dronedir, labelfile, planetfile, planetdir, outputdir, resize, m
 
     dronefile = find_drone(labelfile, dronedir)
 
+    clear_fraction = None
+    if maskdir is not None:
+        ocm_path = find_ocm_mask(planetfile, planetdir, maskdir)
+        if ocm_path is not None:
+            clear_fraction = compute_clear_fraction(ocm_path)
+
     x_shift, y_shift, coreg_ok = compute_coreg_shift(dronefile, planetfile)
 
+    record = {
+        'scene': Path(planetfile).stem,
+        'label': Path(labelfile).name,
+        'coreg_ok': coreg_ok,
+        'clear_fraction': clear_fraction,
+    }
+
     if not coreg_ok:
-        clear_fraction = None
-        if maskdir is not None:
-            ocm_path = find_ocm_mask(planetfile, planetdir, maskdir)
-            if ocm_path is not None:
-                clear_fraction = compute_clear_fraction(ocm_path)
         log.warning(
             "Coregistration failed for %s (clear_fraction=%s)",
             Path(planetfile).stem,
             f"{clear_fraction:.3f}" if clear_fraction is not None else "n/a",
         )
-        return {
-            'scene': Path(planetfile).stem,
-            'label': Path(labelfile).name,
-            'clear_fraction': clear_fraction,
-        }
+        return record
 
     pimg = load_planet(planetfile, resize)
     conf = load_label(labelfile, mode)
@@ -255,12 +259,8 @@ def create_mask(dronedir, labelfile, planetfile, planetdir, outputdir, resize, m
         resampling=Resampling.average,
     )
 
-    if maskdir is not None:
-        ocm_path = find_ocm_mask(planetfile, planetdir, maskdir)
-        if ocm_path is not None:
-            mask_array = crown_filter_by_ocm(conf_resampled, ocm_path, pimg)
-        else:
-            mask_array = (conf_resampled.values > 0.5).astype(np.uint8) * 255
+    if maskdir is not None and ocm_path is not None:
+        mask_array = crown_filter_by_ocm(conf_resampled, ocm_path, pimg)
     else:
         mask_array = (conf_resampled.values > 0.5).astype(np.uint8) * 255
 
@@ -274,7 +274,7 @@ def create_mask(dronedir, labelfile, planetfile, planetdir, outputdir, resize, m
     iio.imwrite(outputdir / f"{basename}.png", rgb_array)
     iio.imwrite(outputdir / f"{basename}.mask.png", mask_array)
 
-    return None
+    return record
 
 
 def process_label(dronedir, labelfile, planet_df, planetdir, outputdir, timewindow, resize, mode, maskdir=None):
@@ -286,12 +286,10 @@ def process_label(dronedir, labelfile, planet_df, planetdir, outputdir, timewind
     date_mask = (planet_df["date"] - label_date).abs() <= pd.Timedelta(days=timewindow)
     planetfiles = planet_df.loc[date_mask]["path"]
 
-    failures = []
-    for planetfile in planetfiles.tolist():
-        result = create_mask(dronedir, labelfile, planetfile, planetdir, outputdir, resize, mode, maskdir)
-        if result is not None:
-            failures.append(result)
-    return failures
+    return [
+        create_mask(dronedir, labelfile, planetfile, planetdir, outputdir, resize, mode, maskdir)
+        for planetfile in planetfiles.tolist()
+    ]
 
 
 def filter_files(planetfiles, filterdir):
@@ -334,20 +332,24 @@ def main(labelfiles, dronedir, planetdir, outputdir, timewindow, resize, filterd
         format="%Y%m%d",
     )
 
-    all_failures = []
+    all_records = []
     for labelfile in tqdm(labelfiles):
-        failures = process_label(
+        records = process_label(
             dronedir, labelfile, planet_df, planetdir,
             outputdir, timewindow, resize, mode, maskdir,
         )
-        all_failures.extend(failures)
+        all_records.extend(records)
 
-    if all_failures:
-        out_path = Path(outputdir) / 'coreg_failures.json'
+    if all_records:
+        out_path = Path(outputdir) / 'coreg_log.json'
         Path(outputdir).mkdir(parents=True, exist_ok=True)
         with open(out_path, 'w') as f:
-            json.dump(all_failures, f, indent=2)
-        log.info("Wrote %d coregistration failures to %s", len(all_failures), out_path)
+            json.dump(all_records, f, indent=2)
+        n_failed = sum(1 for r in all_records if not r['coreg_ok'])
+        log.info(
+            "Wrote %d records (%d succeeded, %d failed) to %s",
+            len(all_records), len(all_records) - n_failed, n_failed, out_path,
+        )
 
 
 if __name__ == '__main__':
