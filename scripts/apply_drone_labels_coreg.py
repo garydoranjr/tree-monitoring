@@ -1,4 +1,6 @@
 #!/usr/bin/env python
+import json
+import logging
 import os
 import re
 import click
@@ -10,6 +12,7 @@ import imageio.v3 as iio
 from pathlib import Path
 from skimage import color
 from skimage import exposure
+from skimage.measure import label as label_components
 from rasterio.enums import Resampling
 import pandas as pd
 from glob import glob
@@ -17,6 +20,7 @@ from affine import Affine
 from arosics import COREG
 from geoarray import GeoArray
 
+log = logging.getLogger(__name__)
 
 DATE_PATTERN = r"\d{4}_\d{2}_\d{2}"
 
@@ -129,14 +133,18 @@ def compute_coreg_shift(dronefile, planetfile):
         ignore_errors=True,
         q=True,
     )
-    coreg.calculate_spatial_shifts()
-    info = coreg.coreg_info
+    try:
+        coreg.calculate_spatial_shifts()
+    except Exception:
+        return 0.0, 0.0, False
 
+    info = coreg.coreg_info
+    success = bool(info.get('success', False))
     shift = info.get('corrected_shifts_map', {})
     x_shift = shift.get('x', 0.0)
     y_shift = shift.get('y', 0.0)
 
-    return x_shift, y_shift
+    return x_shift, y_shift, success
 
 
 def find_drone(labelfile, dronedir):
@@ -146,6 +154,47 @@ def find_drone(labelfile, dronedir):
         if base.startswith(os.path.splitext(os.path.basename(d))[0]):
             return d
     raise ValueError(f"No drone file found for {labelfile}")
+
+
+def find_ocm_mask(planetfile, planetdir, maskdir):
+    try:
+        rel = Path(planetfile).relative_to(planetdir)
+    except ValueError:
+        log.warning("Cannot make %s relative to %s; skipping OCM mask", planetfile, planetdir)
+        return None
+    stem = Path(planetfile).stem
+    if stem.endswith('_rgb'):
+        stem = stem[:-4]
+    ocm_path = Path(maskdir) / rel.parent / f"{stem}_ocm.tif"
+    if not ocm_path.exists():
+        log.warning("OCM mask not found: %s", ocm_path)
+        return None
+    return ocm_path
+
+
+def compute_clear_fraction(ocm_path):
+    with rasterio.open(ocm_path) as src:
+        band1 = src.read(1)
+    valid = band1 != 255
+    total_valid = int(valid.sum())
+    if total_valid == 0:
+        return None
+    return float((band1 == 0).sum() / total_valid)
+
+
+def crown_filter_by_ocm(conf_resampled, ocm_path, pimg):
+    ocm = rxr.open_rasterio(ocm_path).sel(band=1)
+    ocm_rep = ocm.rio.reproject_match(pimg, resampling=Resampling.nearest)
+    clear_pixels = (ocm_rep.values == 0)
+
+    binary = (conf_resampled.values > 0.5)
+    labeled = label_components(binary)
+    for comp_id in range(1, labeled.max() + 1):
+        comp_mask = (labeled == comp_id)
+        if not clear_pixels[comp_mask].all():
+            binary[comp_mask] = False
+
+    return (binary.astype(np.uint8) * 255)
 
 
 def apply_shift_to_label(label_da, x_shift, y_shift):
@@ -174,14 +223,31 @@ def apply_shift_to_label(label_da, x_shift, y_shift):
     return shifted
 
 
-def create_mask(dronedir, labelfile, planetfile, outputdir, resize, mode):
+def create_mask(dronedir, labelfile, planetfile, planetdir, outputdir, resize, mode, maskdir=None):
 
     dronefile = find_drone(labelfile, dronedir)
 
+    x_shift, y_shift, coreg_ok = compute_coreg_shift(dronefile, planetfile)
+
+    if not coreg_ok:
+        clear_fraction = None
+        if maskdir is not None:
+            ocm_path = find_ocm_mask(planetfile, planetdir, maskdir)
+            if ocm_path is not None:
+                clear_fraction = compute_clear_fraction(ocm_path)
+        log.warning(
+            "Coregistration failed for %s (clear_fraction=%s)",
+            Path(planetfile).stem,
+            f"{clear_fraction:.3f}" if clear_fraction is not None else "n/a",
+        )
+        return {
+            'scene': Path(planetfile).stem,
+            'label': Path(labelfile).name,
+            'clear_fraction': clear_fraction,
+        }
+
     pimg = load_planet(planetfile, resize)
     conf = load_label(labelfile, mode)
-
-    x_shift, y_shift = compute_coreg_shift(dronefile, planetfile)
     conf = apply_shift_to_label(conf, x_shift, y_shift)
 
     conf_resampled = conf.rio.reproject_match(
@@ -189,35 +255,43 @@ def create_mask(dronedir, labelfile, planetfile, outputdir, resize, mode):
         resampling=Resampling.average,
     )
 
-    mask = (conf_resampled > 0.5)
+    if maskdir is not None:
+        ocm_path = find_ocm_mask(planetfile, planetdir, maskdir)
+        if ocm_path is not None:
+            mask_array = crown_filter_by_ocm(conf_resampled, ocm_path, pimg)
+        else:
+            mask_array = (conf_resampled.values > 0.5).astype(np.uint8) * 255
+    else:
+        mask_array = (conf_resampled.values > 0.5).astype(np.uint8) * 255
 
     outputdir = Path(outputdir)
     outputdir.mkdir(parents=True, exist_ok=True)
     basename = Path(planetfile).stem
 
     rgb_array = np.moveaxis(pimg.values, 0, -1)
-
     rgb_array = percentile_stretch_global(rgb_array, lower_pct=0, upper_pct=99.9)
 
-    rgb_path = outputdir / f"{basename}.png"
-    iio.imwrite(rgb_path, rgb_array)
+    iio.imwrite(outputdir / f"{basename}.png", rgb_array)
+    iio.imwrite(outputdir / f"{basename}.mask.png", mask_array)
 
-    mask_array = (mask.astype(np.uint8) * 255).values
-    mask_path = outputdir / f"{basename}.mask.png"
-    iio.imwrite(mask_path, mask_array)
+    return None
 
 
-def process_label(dronedir, labelfile, planet_df, outputdir, timewindow, resize, mode):
+def process_label(dronedir, labelfile, planet_df, planetdir, outputdir, timewindow, resize, mode, maskdir=None):
     label_date = pd.to_datetime(
         get_cls_date(labelfile),
         format="%Y_%m_%d",
     )
 
-    mask = (planet_df["date"] - label_date).abs() <= pd.Timedelta(days=timewindow)
-    planetfiles = planet_df.loc[mask]["path"]
+    date_mask = (planet_df["date"] - label_date).abs() <= pd.Timedelta(days=timewindow)
+    planetfiles = planet_df.loc[date_mask]["path"]
 
+    failures = []
     for planetfile in planetfiles.tolist():
-        create_mask(dronedir, labelfile, planetfile, outputdir, resize, mode)
+        result = create_mask(dronedir, labelfile, planetfile, planetdir, outputdir, resize, mode, maskdir)
+        if result is not None:
+            failures.append(result)
+    return failures
 
 
 def filter_files(planetfiles, filterdir):
@@ -245,21 +319,35 @@ def filter_files(planetfiles, filterdir):
 @click.option('-r', '--resize', default=None, type=float)
 @click.option('-f', '--filterdir', default=None)
 @click.option('-m', '--mode', default='both')
-def main(labelfiles, dronedir, planetdir, outputdir, timewindow, resize, filterdir, mode):
-    planetfiles = glob(os.path.join(planetdir, '*rgb.tif'))
+@click.option('-k', '--maskdir', default=None, type=click.Path())
+def main(labelfiles, dronedir, planetdir, outputdir, timewindow, resize, filterdir, mode, maskdir):
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
+    planetfiles = list(Path(planetdir).rglob('*rgb.tif'))
     planetfiles = filter_files(planetfiles, filterdir)
 
     planet_df = pd.DataFrame({
-        "path": planetfiles,
+        "path": [str(p) for p in planetfiles],
     })
     planet_df["date"] = pd.to_datetime(
         planet_df["path"].apply(get_planet_date),
         format="%Y%m%d",
     )
 
+    all_failures = []
     for labelfile in tqdm(labelfiles):
-        process_label(dronedir, labelfile, planet_df, outputdir, timewindow, resize, mode)
+        failures = process_label(
+            dronedir, labelfile, planet_df, planetdir,
+            outputdir, timewindow, resize, mode, maskdir,
+        )
+        all_failures.extend(failures)
+
+    if all_failures:
+        out_path = Path(outputdir) / 'coreg_failures.json'
+        Path(outputdir).mkdir(parents=True, exist_ok=True)
+        with open(out_path, 'w') as f:
+            json.dump(all_failures, f, indent=2)
+        log.info("Wrote %d coregistration failures to %s", len(all_failures), out_path)
 
 
 if __name__ == '__main__':
