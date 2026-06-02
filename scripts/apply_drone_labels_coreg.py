@@ -125,15 +125,15 @@ def compute_coreg_shift(dronefile, planetfile):
     drone_ga = load_as_geoarray(dronefile)
     planet_ga = load_as_geoarray(planetfile)
 
-    coreg = COREG(
-        drone_ga, planet_ga,
-        ws=(200, 200),
-        align_grids=True,
-        max_shift=10,
-        ignore_errors=True,
-        q=True,
-    )
     try:
+        coreg = COREG(
+            drone_ga, planet_ga,
+            ws=(200, 200),
+            align_grids=True,
+            max_shift=10,
+            ignore_errors=True,
+            q=True,
+        )
         coreg.calculate_spatial_shifts()
     except Exception:
         return 0.0, 0.0, False
