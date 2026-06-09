@@ -543,8 +543,14 @@ def make_app(image_paths, cache, worker, split, size, min_instance_size,
         )
 
         scene_q = urllib.parse.quote(scene, safe='')
-        drone_url = f'/drone/{scene_q}' if drone_available else None
-        ocm_url = f'/ocm/{scene_q}' if ocm_available else None
+        drone_url = None
+        if drone_available:
+            v = int(os.path.getmtime(drone_paths[scene]))
+            drone_url = f'/drone/{scene_q}?v={v}'
+        ocm_url = None
+        if ocm_available:
+            v = int(os.path.getmtime(ocm_paths[scene]))
+            ocm_url = f'/ocm/{scene_q}?v={v}'
 
         show_gt = 'gt' in (gt_val or [])
         show_pred = 'pred' in (pred_val or []) and pred_available
