@@ -179,7 +179,8 @@ def _trace_visible(kind, label, show_gt, show_pred, filter_val):
 
 def build_figure(img, gt_masks, pred_result, show_gt, show_pred,
                  filter_val='all', drone_url=None, show_drone=False,
-                 ocm_url=None, show_ocm=False, coreg_meta=None):
+                 ocm_url=None, show_ocm=False, coreg_meta=None,
+                 overlay_opacity=0.5):
     h, w = img.shape[:2]
     fig = go.Figure()
     fig.add_trace(go.Image(z=img, hoverinfo='skip'))
@@ -282,7 +283,7 @@ def build_figure(img, gt_masks, pred_result, show_gt, show_pred,
             x=0, y=0, sizex=w, sizey=h,
             xanchor='left', yanchor='top',
             sizing='stretch',
-            opacity=0.5,
+            opacity=overlay_opacity,
             layer='above',
         ))
     if show_ocm and ocm_url is not None:
@@ -292,6 +293,7 @@ def build_figure(img, gt_masks, pred_result, show_gt, show_pred,
             x=0, y=0, sizex=w, sizey=h,
             xanchor='left', yanchor='top',
             sizing='stretch',
+            opacity=overlay_opacity,
             layer='above',
         ))
     fig.update_layout(images=overlays)
@@ -438,6 +440,22 @@ def make_app(image_paths, cache, worker, split, size, min_instance_size,
                     style={'display': 'inline-block'},
                 ),
             ]),
+            html.Div(id='overlay-opacity-slot', style={'display': 'none'},
+                     children=[
+                html.Span('Overlay opacity:',
+                          style={'fontSize': '13px', 'marginRight': '8px'}),
+                html.Div(
+                    dcc.Slider(
+                        id='slider-overlay-opacity',
+                        min=0, max=1, step=0.05, value=0.5,
+                        marks=None,
+                        tooltip={'always_visible': False,
+                                 'placement': 'bottom'},
+                    ),
+                    style={'width': '160px', 'display': 'inline-block',
+                           'verticalAlign': 'middle'},
+                ),
+            ]),
             html.Div(id='header'),
         ]),
         dcc.Graph(
@@ -481,6 +499,7 @@ def make_app(image_paths, cache, worker, split, size, min_instance_size,
         Output('toggle-pred', 'style'),
         Output('drone-toggle-slot', 'style'),
         Output('ocm-toggle-slot', 'style'),
+        Output('overlay-opacity-slot', 'style'),
         Output('store-last-rendered', 'data'),
         Input('store-current-idx', 'data'),
         Input('poll-cache', 'n_intervals'),
@@ -490,8 +509,10 @@ def make_app(image_paths, cache, worker, split, size, min_instance_size,
         State('toggle-gt', 'value'),
         State('toggle-pred', 'value'),
         State('dd-filter', 'value'),
+        State('slider-overlay-opacity', 'value'),
     )
-    def render(idx, _tick, drone_val, ocm_val, last, gt_val, pred_val, filter_val):
+    def render(idx, _tick, drone_val, ocm_val, last, gt_val, pred_val,
+               filter_val, opacity_val):
         idx = idx or 0
         path = image_paths[idx]
         scene = os.path.splitext(os.path.basename(path))[0]
@@ -528,11 +549,13 @@ def make_app(image_paths, cache, worker, split, size, min_instance_size,
         show_gt = 'gt' in (gt_val or [])
         show_pred = 'pred' in (pred_val or []) and pred_available
         coreg_meta = (coreg_info or {}).get(scene)
+        opacity = 0.5 if opacity_val is None else float(opacity_val)
         fig = build_figure(img, gt_masks, pred, show_gt, show_pred,
                            filter_val=filter_val or 'all',
                            drone_url=drone_url, show_drone=show_drone,
                            ocm_url=ocm_url, show_ocm=show_ocm,
-                           coreg_meta=coreg_meta)
+                           coreg_meta=coreg_meta,
+                           overlay_opacity=opacity)
 
         if pred_available:
             spinner_style = {'display': 'none'}
@@ -543,11 +566,35 @@ def make_app(image_paths, cache, worker, split, size, min_instance_size,
 
         drone_slot_style = {'display': 'inline-block'} if drone_available else {'display': 'none'}
         ocm_slot_style = {'display': 'inline-block'} if ocm_available else {'display': 'none'}
+        any_overlay = drone_available or ocm_available
+        opacity_slot_style = (
+            {'display': 'inline-flex', 'alignItems': 'center'}
+            if any_overlay else {'display': 'none'}
+        )
 
         return (fig, spinner_style, toggle_style, drone_slot_style, ocm_slot_style,
+                opacity_slot_style,
                 {'path': path, 'pred_available': pred_available,
                  'drone_available': drone_available, 'ocm_available': ocm_available,
                  'show_drone': show_drone, 'show_ocm': show_ocm})
+
+    @app.callback(
+        Output('viewer', 'figure', allow_duplicate=True),
+        Input('slider-overlay-opacity', 'value'),
+        State('viewer', 'figure'),
+        prevent_initial_call=True,
+    )
+    def on_opacity(opacity_val, fig):
+        if not fig:
+            raise dash.exceptions.PreventUpdate
+        images = (fig.get('layout') or {}).get('images') or []
+        if not images:
+            raise dash.exceptions.PreventUpdate
+        value = 0.5 if opacity_val is None else float(opacity_val)
+        patched = Patch()
+        for i in range(len(images)):
+            patched['layout']['images'][i]['opacity'] = value
+        return patched
 
     @app.callback(
         Output('viewer', 'figure', allow_duplicate=True),
