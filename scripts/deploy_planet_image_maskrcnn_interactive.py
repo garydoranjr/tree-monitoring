@@ -9,15 +9,20 @@ seconds.
 """
 import atexit
 import itertools
+import json
 import os
 import queue
 import sys
 import threading
+import urllib.parse
 from dataclasses import dataclass
 from glob import glob
 from typing import Optional
 
+from PIL import Image as _PILImage
+
 import click
+import flask
 import numpy as np
 import plotly.graph_objects as go
 import torch
@@ -170,9 +175,33 @@ def _trace_visible(kind, label, show_gt, show_pred, filter_val):
 
 
 def build_figure(img, gt_masks, pred_result, show_gt, show_pred,
-                 filter_val='all'):
+                 filter_val='all', drone_url=None, drone_dims=None,
+                 show_drone=False, ocm_url=None, show_ocm=False,
+                 coreg_meta=None):
+    h, w = img.shape[:2]
     fig = go.Figure()
     fig.add_trace(go.Image(z=img, hoverinfo='skip'))
+
+    if drone_url is not None and drone_dims is not None:
+        w_drone, h_drone = drone_dims
+        fig.add_trace(go.Image(
+            source=drone_url,
+            x0=0, y0=0,
+            dx=w / w_drone,
+            dy=h / h_drone,
+            hoverinfo='skip',
+            opacity=0.5,
+            legendgroup='drone',
+            visible=show_drone,
+        ))
+
+    if ocm_url is not None:
+        fig.add_trace(go.Image(
+            source=ocm_url,
+            hoverinfo='skip',
+            legendgroup='ocm',
+            visible=show_ocm,
+        ))
 
     gt_labels = None
     pred_labels = None
@@ -231,7 +260,25 @@ def build_figure(img, gt_masks, pred_result, show_gt, show_pred,
                 visible=vis,
             ))
 
-    h, w = img.shape[:2]
+    if coreg_meta is not None:
+        x_m = coreg_meta.get('x_shift_m', 0.0)
+        y_m = coreg_meta.get('y_shift_m', 0.0)
+        ok = coreg_meta.get('coreg_ok', False)
+        p_res = coreg_meta.get('planet_res_m')
+        d_res = coreg_meta.get('drone_res_m')
+        parts = [f'Δx={x_m:+.2f}m  Δy={y_m:+.2f}m  coreg={"OK" if ok else "FAIL"}']
+        if p_res is not None and d_res is not None:
+            parts.append(f'Planet {p_res:.1f}m/px  Drone {d_res:.3f}m/px')
+        fig.add_annotation(
+            text='<br>'.join(parts),
+            xref='paper', yref='paper',
+            x=0.01, y=0.99, xanchor='left', yanchor='top',
+            showarrow=False,
+            font=dict(size=11, color='white'),
+            bgcolor='rgba(0,0,0,0.55)',
+            borderpad=4,
+        )
+
     fig.update_layout(
         margin=dict(l=0, r=0, t=0, b=0),
         xaxis=dict(
@@ -276,9 +323,31 @@ button { padding: 4px 10px; }
 '''
 
 
-def make_app(image_paths, cache, worker, split, size):
+def make_app(image_paths, cache, worker, split, size, min_instance_size,
+             coreg_info=None, drone_paths=None, drone_dims=None,
+             ocm_paths=None):
     app = Dash(__name__)
     app.index_string = _INDEX_HTML
+
+    drone_paths = drone_paths or {}
+    drone_dims = drone_dims or {}
+    ocm_paths = ocm_paths or {}
+
+    @app.server.route('/drone/<scene>')
+    def _serve_drone(scene):
+        path = drone_paths.get(urllib.parse.unquote(scene))
+        if path is None:
+            flask.abort(404)
+        return flask.send_file(path, mimetype='image/png',
+                               conditional=True, max_age=86400)
+
+    @app.server.route('/ocm/<scene>')
+    def _serve_ocm(scene):
+        path = ocm_paths.get(urllib.parse.unquote(scene))
+        if path is None:
+            flask.abort(404)
+        return flask.send_file(path, mimetype='image/png',
+                               conditional=True, max_age=86400)
 
     filenames = [os.path.basename(p) for p in image_paths]
 
@@ -327,6 +396,24 @@ def make_app(image_paths, cache, worker, split, size):
                               style={'marginLeft': '6px'}),
                 ]),
             ]),
+            html.Div(id='drone-toggle-slot', style={'display': 'none'},
+                     children=[
+                dcc.Checklist(
+                    id='toggle-drone',
+                    options=[{'label': ' Show drone overlay', 'value': 'drone'}],
+                    value=[], inline=True,
+                    style={'display': 'inline-block'},
+                ),
+            ]),
+            html.Div(id='ocm-toggle-slot', style={'display': 'none'},
+                     children=[
+                dcc.Checklist(
+                    id='toggle-ocm',
+                    options=[{'label': ' Show cloud mask', 'value': 'ocm'}],
+                    value=[], inline=True,
+                    style={'display': 'inline-block'},
+                ),
+            ]),
             html.Div(id='header'),
         ]),
         dcc.Graph(
@@ -368,33 +455,59 @@ def make_app(image_paths, cache, worker, split, size):
         Output('viewer', 'figure'),
         Output('pred-spinner', 'style'),
         Output('toggle-pred', 'style'),
+        Output('drone-toggle-slot', 'style'),
+        Output('ocm-toggle-slot', 'style'),
         Output('store-last-rendered', 'data'),
         Input('store-current-idx', 'data'),
         Input('poll-cache', 'n_intervals'),
         State('store-last-rendered', 'data'),
         State('toggle-gt', 'value'),
         State('toggle-pred', 'value'),
+        State('toggle-drone', 'value'),
+        State('toggle-ocm', 'value'),
         State('dd-filter', 'value'),
     )
-    def render(idx, _tick, last, gt_val, pred_val, filter_val):
+    def render(idx, _tick, last, gt_val, pred_val, drone_val, ocm_val, filter_val):
         idx = idx or 0
         path = image_paths[idx]
+        scene = os.path.splitext(os.path.basename(path))[0]
         if ctx.triggered_id == 'store-current-idx':
             worker.bump(path)
 
         pred = cache.get(path)
         pred_available = pred is not None
 
+        drone_available = scene in drone_paths
+        ocm_available = scene in ocm_paths
+
         if last is not None:
             if (last.get('path') == path
-                    and last.get('pred_available') == pred_available):
+                    and last.get('pred_available') == pred_available
+                    and last.get('drone_available') == drone_available
+                    and last.get('ocm_available') == ocm_available):
                 raise dash.exceptions.PreventUpdate
 
-        img, gt_masks, _ = load_image_and_gt(path, split=split, size=size)
+        img, gt_masks, _ = load_image_and_gt(
+            path, split=split, size=size,
+            min_instance_size=min_instance_size,
+        )
+
+        scene_q = urllib.parse.quote(scene, safe='')
+        drone_url = f'/drone/{scene_q}' if drone_available else None
+        drone_d = drone_dims.get(scene) if drone_available else None
+        ocm_url = f'/ocm/{scene_q}' if ocm_available else None
+
         show_gt = 'gt' in (gt_val or [])
         show_pred = 'pred' in (pred_val or []) and pred_available
+        show_drone = 'drone' in (drone_val or []) and drone_available
+        show_ocm = 'ocm' in (ocm_val or []) and ocm_available
+        coreg_meta = (coreg_info or {}).get(scene)
         fig = build_figure(img, gt_masks, pred, show_gt, show_pred,
-                           filter_val=filter_val or 'all')
+                           filter_val=filter_val or 'all',
+                           drone_url=drone_url, drone_dims=drone_d,
+                           show_drone=show_drone,
+                           ocm_url=ocm_url, show_ocm=show_ocm,
+                           coreg_meta=coreg_meta)
 
         if pred_available:
             spinner_style = {'display': 'none'}
@@ -403,32 +516,43 @@ def make_app(image_paths, cache, worker, split, size):
             spinner_style = {'display': 'inline-block'}
             toggle_style = {'display': 'none'}
 
-        return (fig, spinner_style, toggle_style,
-                {'path': path, 'pred_available': pred_available})
+        drone_slot_style = {'display': 'inline-block'} if drone_available else {'display': 'none'}
+        ocm_slot_style = {'display': 'inline-block'} if ocm_available else {'display': 'none'}
+
+        return (fig, spinner_style, toggle_style, drone_slot_style, ocm_slot_style,
+                {'path': path, 'pred_available': pred_available,
+                 'drone_available': drone_available, 'ocm_available': ocm_available})
 
     @app.callback(
         Output('viewer', 'figure', allow_duplicate=True),
         Input('toggle-gt', 'value'),
         Input('toggle-pred', 'value'),
+        Input('toggle-drone', 'value'),
+        Input('toggle-ocm', 'value'),
         Input('dd-filter', 'value'),
         State('viewer', 'figure'),
         prevent_initial_call=True,
     )
-    def on_toggle(gt_val, pred_val, filter_val, fig):
+    def on_toggle(gt_val, pred_val, drone_val, ocm_val, filter_val, fig):
         if not fig or 'data' not in fig:
             raise dash.exceptions.PreventUpdate
         show_gt = 'gt' in (gt_val or [])
         show_pred = 'pred' in (pred_val or [])
+        show_drone = 'drone' in (drone_val or [])
+        show_ocm = 'ocm' in (ocm_val or [])
         filter_val = filter_val or 'all'
         patched = Patch()
         for i, trace in enumerate(fig['data']):
             lg = trace.get('legendgroup')
-            if lg not in ('gt', 'pred'):
-                continue
-            label = trace.get('meta')
-            patched['data'][i]['visible'] = _trace_visible(
-                lg, label, show_gt, show_pred, filter_val,
-            )
+            if lg == 'drone':
+                patched['data'][i]['visible'] = show_drone
+            elif lg == 'ocm':
+                patched['data'][i]['visible'] = show_ocm
+            elif lg in ('gt', 'pred'):
+                label = trace.get('meta')
+                patched['data'][i]['visible'] = _trace_visible(
+                    lg, label, show_gt, show_pred, filter_val,
+                )
         return patched
 
     return app
@@ -437,7 +561,6 @@ def make_app(image_paths, cache, worker, split, size):
 @click.command()
 @click.argument('modelfile')
 @click.argument('imagedir')
-@click.argument('outputdir')
 @click.option('--score-thresh', default=0.5, type=float,
               help='Minimum score for a prediction to be kept.')
 @click.option('--mask-thresh', default=0.5, type=float,
@@ -450,17 +573,54 @@ def make_app(image_paths, cache, worker, split, size):
               help='IoU threshold for TP/FP/FN matching.')
 @click.option('--host', default='127.0.0.1', type=str)
 @click.option('--port', default=8050, type=int)
-def main(modelfile, imagedir, outputdir, score_thresh, mask_thresh, split,
-         size, iou_thresh, host, port):
-    os.makedirs(outputdir, exist_ok=True)
+@click.option('--logfile', default=None, type=click.Path(exists=False),
+              help='Path to coreg_log.json (default: imagedir/coreg_log.json).')
+def main(modelfile, imagedir, score_thresh, mask_thresh, split,
+         size, iou_thresh, host, port, logfile):
 
     image_paths = sorted(glob(os.path.join(imagedir, '*rgb.png')))
     image_paths = [p for p in image_paths if not p.endswith('.mask.png')]
     if not image_paths:
         raise click.ClickException(f'no *rgb.png files in {imagedir}')
 
+    def _meets_size(p):
+        from PIL import Image as _Image
+        with _Image.open(p) as im:
+            h, w = im.height, im.width
+        return h >= size and w >= 2 * size
+
+    skipped = [p for p in image_paths if not _meets_size(p)]
+    image_paths = [p for p in image_paths if _meets_size(p)]
+    if skipped:
+        print(f'Skipping {len(skipped)} image(s) smaller than {size}x{2*size}: '
+              + ', '.join(os.path.basename(p) for p in skipped))
+    if not image_paths:
+        raise click.ClickException(f'no images meet the minimum size ({size}x{2*size})')
+
+    if logfile is None:
+        logfile = os.path.join(imagedir, 'coreg_log.json')
+    coreg_info = None
+    if os.path.exists(logfile):
+        with open(logfile) as f:
+            records = json.load(f)
+        coreg_info = {rec['scene']: rec for rec in records}
+
+    drone_paths = {}
+    drone_dims = {}
+    ocm_paths = {}
+    for p in image_paths:
+        scene = os.path.splitext(os.path.basename(p))[0]
+        drone_png = os.path.join(imagedir, f'{scene}.drone.png')
+        if os.path.exists(drone_png):
+            drone_paths[scene] = drone_png
+            with _PILImage.open(drone_png) as im:
+                drone_dims[scene] = im.size
+        ocm_png = os.path.join(imagedir, f'{scene}.ocm.png')
+        if os.path.exists(ocm_png):
+            ocm_paths[scene] = ocm_png
+
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    ckpt = torch.load(modelfile, map_location='cpu')
+    ckpt = torch.load(modelfile, map_location='cpu', weights_only=False)
     model = ckpt['model']
     min_instance_size = ckpt['params']['min_instance_size']
 
@@ -474,9 +634,13 @@ def main(modelfile, imagedir, outputdir, score_thresh, mask_thresh, split,
     worker.start()
     atexit.register(worker.stop)
 
-    app = make_app(image_paths, cache, worker, split=split, size=size)
+    app = make_app(image_paths, cache, worker, split=split, size=size,
+                   min_instance_size=min_instance_size,
+                   coreg_info=coreg_info, drone_paths=drone_paths,
+                   drone_dims=drone_dims, ocm_paths=ocm_paths)
     print(f'Serving on http://{host}:{port} (device={device}, '
-          f'{len(image_paths)} images)')
+          f'{len(image_paths)} images, {len(drone_paths)} drone overlays, '
+          f'{len(ocm_paths)} cloud masks)')
     app.run(host=host, port=port, debug=False)
 
 
