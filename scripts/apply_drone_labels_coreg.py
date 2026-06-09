@@ -223,7 +223,47 @@ def apply_shift_to_label(label_da, x_shift, y_shift):
     return shifted
 
 
-def create_mask(dronedir, labelfile, planetfile, planetdir, outputdir, resize, mode, maskdir=None):
+def generate_drone_png(dronefile, pimg, x_shift_m, y_shift_m, drone_scale, outputpath):
+    drone_da = rxr.open_rasterio(dronefile)
+    drone_shifted = apply_shift_to_label(drone_da, x_shift_m, y_shift_m)
+    drone_clipped = drone_shifted.rio.clip_box(*pimg.rio.bounds())
+
+    # Reproject onto a grid that exactly matches the Planet bounds at
+    # drone_scale times finer resolution. Specifying bounds via transform+shape
+    # (rather than resolution alone) keeps the drone pixel grid an exact
+    # integer subdivision of the Planet grid, so downstream fractional crops
+    # (e.g. the Mask R-CNN viewer) line up pixel-for-pixel.
+    p_transform = pimg.rio.transform()
+    p_h, p_w = pimg.rio.height, pimg.rio.width
+    target_transform = Affine(
+        p_transform.a / drone_scale, p_transform.b, p_transform.c,
+        p_transform.d, p_transform.e / drone_scale, p_transform.f,
+    )
+    drone_reprojected = drone_clipped.rio.reproject(
+        pimg.rio.crs,
+        transform=target_transform,
+        shape=(int(p_h * drone_scale), int(p_w * drone_scale)),
+        resampling=Resampling.bilinear,
+    )
+
+    rgb_arr = np.moveaxis(drone_reprojected.isel(band=slice(0, 3)).values, 0, -1)
+    if rgb_arr.dtype not in (np.uint8, np.uint16):
+        rgb_arr = np.clip(rgb_arr, 0, 65535).astype(np.uint16)
+    rgb_arr = percentile_stretch_global(rgb_arr, lower_pct=0, upper_pct=99.9)
+    iio.imwrite(outputpath, rgb_arr)
+
+
+def generate_ocm_png(ocm_path, pimg, outputpath):
+    ocm = rxr.open_rasterio(ocm_path).sel(band=1)
+    ocm_rep = ocm.rio.reproject_match(pimg, resampling=Resampling.nearest)
+    vals = ocm_rep.values
+    rgba = np.zeros((*vals.shape, 4), dtype=np.uint8)
+    cloudy = (vals != 0) & (vals != 255)
+    rgba[cloudy] = [255, 80, 0, 150]
+    iio.imwrite(outputpath, rgba)
+
+
+def create_mask(dronedir, labelfile, planetfile, planetdir, outputdir, resize, mode, maskdir=None, drone_scale=None):
 
     dronefile = find_drone(labelfile, dronedir)
 
@@ -235,11 +275,21 @@ def create_mask(dronedir, labelfile, planetfile, planetdir, outputdir, resize, m
 
     x_shift, y_shift, coreg_ok = compute_coreg_shift(dronefile, planetfile)
 
+    with rasterio.open(planetfile) as src:
+        planet_res_m = src.res[0]
+    with rasterio.open(dronefile) as src:
+        drone_res_m = src.res[0]
+
     record = {
         'scene': Path(planetfile).stem,
         'label': Path(labelfile).name,
         'coreg_ok': coreg_ok,
         'clear_fraction': clear_fraction,
+        'drone_file': str(Path(dronefile).resolve()),
+        'x_shift_m': x_shift,
+        'y_shift_m': y_shift,
+        'planet_res_m': planet_res_m,
+        'drone_res_m': drone_res_m,
     }
 
     if not coreg_ok:
@@ -274,10 +324,19 @@ def create_mask(dronedir, labelfile, planetfile, planetdir, outputdir, resize, m
     iio.imwrite(outputdir / f"{basename}.png", rgb_array)
     iio.imwrite(outputdir / f"{basename}.mask.png", mask_array)
 
+    if drone_scale is not None:
+        generate_drone_png(
+            dronefile, pimg, x_shift, y_shift, drone_scale,
+            outputdir / f"{basename}.drone.png",
+        )
+
+    if maskdir is not None and ocm_path is not None:
+        generate_ocm_png(ocm_path, pimg, outputdir / f"{basename}.ocm.png")
+
     return record
 
 
-def process_label(dronedir, labelfile, planet_df, planetdir, outputdir, timewindow, resize, mode, maskdir=None):
+def process_label(dronedir, labelfile, planet_df, planetdir, outputdir, timewindow, resize, mode, maskdir=None, drone_scale=None):
     label_date = pd.to_datetime(
         get_cls_date(labelfile),
         format="%Y_%m_%d",
@@ -287,7 +346,7 @@ def process_label(dronedir, labelfile, planet_df, planetdir, outputdir, timewind
     planetfiles = planet_df.loc[date_mask]["path"]
 
     return [
-        create_mask(dronedir, labelfile, planetfile, planetdir, outputdir, resize, mode, maskdir)
+        create_mask(dronedir, labelfile, planetfile, planetdir, outputdir, resize, mode, maskdir, drone_scale)
         for planetfile in planetfiles.tolist()
     ]
 
@@ -318,7 +377,9 @@ def filter_files(planetfiles, filterdir):
 @click.option('-f', '--filterdir', default=None)
 @click.option('-m', '--mode', default='both')
 @click.option('-k', '--maskdir', default=None, type=click.Path())
-def main(labelfiles, dronedir, planetdir, outputdir, timewindow, resize, filterdir, mode, maskdir):
+@click.option('-d', '--drone-scale', default=None, type=float,
+              help='If set, generate {scene}.drone.png at this multiple of the resized Planet pixel size.')
+def main(labelfiles, dronedir, planetdir, outputdir, timewindow, resize, filterdir, mode, maskdir, drone_scale):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
     planetfiles = list(Path(planetdir).rglob('*rgb.tif'))
@@ -336,7 +397,7 @@ def main(labelfiles, dronedir, planetdir, outputdir, timewindow, resize, filterd
     for labelfile in tqdm(labelfiles):
         records = process_label(
             dronedir, labelfile, planet_df, planetdir,
-            outputdir, timewindow, resize, mode, maskdir,
+            outputdir, timewindow, resize, mode, maskdir, drone_scale,
         )
         all_records.extend(records)
 
