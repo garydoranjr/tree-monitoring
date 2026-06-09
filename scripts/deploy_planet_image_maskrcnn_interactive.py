@@ -191,7 +191,7 @@ def build_figure(img, gt_masks, pred_result, show_gt, show_pred,
             dy=h / h_drone,
             hoverinfo='skip',
             opacity=0.5,
-            legendgroup='drone',
+            meta='drone',
             visible=show_drone,
         ))
 
@@ -199,7 +199,7 @@ def build_figure(img, gt_masks, pred_result, show_gt, show_pred,
         fig.add_trace(go.Image(
             source=ocm_url,
             hoverinfo='skip',
-            legendgroup='ocm',
+            meta='ocm',
             visible=show_ocm,
         ))
 
@@ -544,14 +544,14 @@ def make_app(image_paths, cache, worker, split, size, min_instance_size,
         patched = Patch()
         for i, trace in enumerate(fig['data']):
             lg = trace.get('legendgroup')
-            if lg == 'drone':
+            meta = trace.get('meta')
+            if meta == 'drone':
                 patched['data'][i]['visible'] = show_drone
-            elif lg == 'ocm':
+            elif meta == 'ocm':
                 patched['data'][i]['visible'] = show_ocm
             elif lg in ('gt', 'pred'):
-                label = trace.get('meta')
                 patched['data'][i]['visible'] = _trace_visible(
-                    lg, label, show_gt, show_pred, filter_val,
+                    lg, meta, show_gt, show_pred, filter_val,
                 )
         return patched
 
