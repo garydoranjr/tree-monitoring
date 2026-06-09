@@ -478,11 +478,17 @@ def main(clip_config, search_config, output_root, csdap_root, planet_root,
         w.writerows(inv_rows)
     print(f'Wrote {inv_csv}')
 
-    # Locally usable scene IDs = those with at least an OK 4-band clip
+    # Locally accounted-for scene IDs: those with an OK 4-band clip on
+    # disk, plus those whose source has been confirmed empty over the
+    # 50ha polygon (TERMINAL_NEGATIVE_STATUSES). The latter would never
+    # produce a 4band file but should not be reported as "missing at
+    # Planet" — re-fetching won't help.
     fourband_dir = output_root / '4band'
     local_ids = {p.name.split('_4band.tif')[0]
                  for p in fourband_dir.rglob('*_4band.tif')
                  if p.stat().st_size > 0}
+    local_ids |= {row['scene_id'] for row in inv_rows
+                  if row['status'] in TERMINAL_NEGATIVE_STATUSES}
 
     if not no_api_check:
         try:
