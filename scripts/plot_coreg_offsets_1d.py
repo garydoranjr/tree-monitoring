@@ -48,7 +48,14 @@ def main(coregdir, configfile, outputfile, nbins):
 
     fig, ax = plt.subplots(figsize=(8, 6))
 
-    ax.hist(delta, bins=np.linspace(0, 40, 41), density=True, cumulative=True)
+    ax.hist(delta, bins=np.linspace(0, 20, nbins),
+        density=True, cumulative=True,
+        histtype='step', lw=2, edgecolor='k')
+    ax.set_xlim(0, 20)
+    ax.set_ylim(0, 1)
+    ax.set_xlabel('Offset (m)', fontsize=14)
+    ax.set_ylabel('Cumulative Fraction', fontsize=14)
+
     plt.show()
     exit()
 

@@ -49,7 +49,7 @@ def compute_residuals(xy, offset):
     return residual, magnitude
 
 
-def print_statistics(residual, magnitude, keys):
+def print_statistics(residual, magnitude, keys, units='pixels'):
     """
     Print diagnostic statistics about residual errors.
 
@@ -61,6 +61,8 @@ def print_statistics(residual, magnitude, keys):
         Magnitude of residual vectors
     keys : list
         Image keys/names
+    units : str
+        Units for display (default: 'pixels')
     """
     # Mask diagonal and get valid residuals
     magnitude_masked = magnitude.copy()
@@ -71,24 +73,24 @@ def print_statistics(residual, magnitude, keys):
     print("Residual Alignment Error Statistics")
     print("="*60)
     print(f"Total valid pairs: {len(valid_residuals)}")
-    print(f"Mean residual: {np.mean(valid_residuals):.3f} pixels")
-    print(f"Median residual: {np.median(valid_residuals):.3f} pixels")
-    print(f"Std residual: {np.std(valid_residuals):.3f} pixels")
-    print(f"95th percentile: {np.percentile(valid_residuals, 95):.3f} pixels")
-    print(f"99th percentile: {np.percentile(valid_residuals, 99):.3f} pixels")
-    print(f"Max residual: {np.max(valid_residuals):.3f} pixels")
+    print(f"Mean residual: {np.mean(valid_residuals):.3f} {units}")
+    print(f"Median residual: {np.median(valid_residuals):.3f} {units}")
+    print(f"Std residual: {np.std(valid_residuals):.3f} {units}")
+    print(f"95th percentile: {np.percentile(valid_residuals, 95):.3f} {units}")
+    print(f"99th percentile: {np.percentile(valid_residuals, 99):.3f} {units}")
+    print(f"Max residual: {np.max(valid_residuals):.3f} {units}")
 
     # Identify worst pair
     worst_idx = np.unravel_index(np.nanargmax(magnitude_masked), magnitude_masked.shape)
     print(f"\nWorst pair:")
     print(f"  Images: {keys[worst_idx[0]]} -> {keys[worst_idx[1]]}")
-    print(f"  Residual magnitude: {magnitude_masked[worst_idx]:.3f} pixels")
-    print(f"  X residual: {residual[worst_idx][0]:.3f} pixels")
-    print(f"  Y residual: {residual[worst_idx][1]:.3f} pixels")
+    print(f"  Residual magnitude: {magnitude_masked[worst_idx]:.3f} {units}")
+    print(f"  X residual: {residual[worst_idx][0]:.3f} {units}")
+    print(f"  Y residual: {residual[worst_idx][1]:.3f} {units}")
     print("="*60 + "\n")
 
 
-def plot_residual_heatmap(magnitude, keys, outputfile, figsize=12, dpi=150, vmax=None):
+def plot_residual_heatmap(magnitude, keys, outputfile, figsize=12, dpi=150, vmax=None, units='pixels'):
     """
     Create residual magnitude heatmap.
 
@@ -106,6 +108,8 @@ def plot_residual_heatmap(magnitude, keys, outputfile, figsize=12, dpi=150, vmax
         Figure DPI
     vmax : float or None
         Max colorbar value (auto 99th percentile if None)
+    units : str
+        Units for display (default: 'pixels')
     """
     fig, ax = plt.subplots(figsize=(figsize, figsize))
 
@@ -129,7 +133,7 @@ def plot_residual_heatmap(magnitude, keys, outputfile, figsize=12, dpi=150, vmax
 
     # Colorbar
     cbar = fig.colorbar(im, ax=ax)
-    cbar.set_label('Residual Magnitude (pixels)', fontsize=14)
+    cbar.set_label(f'Residual Magnitude ({units})', fontsize=14)
 
     # Labels and title
     ax.set_xlabel('Target Image Index', fontsize=12)
@@ -160,8 +164,9 @@ def plot_residual_heatmap(magnitude, keys, outputfile, figsize=12, dpi=150, vmax
 @click.option('-t', '--tolerance', type=float, default=1e-6, help='Convergence tolerance')
 @click.option('--figsize', type=float, default=12, help='Figure size in inches')
 @click.option('--dpi', type=int, default=150, help='Figure DPI')
-@click.option('--vmax', type=float, default=None, help='Max colorbar value in pixels')
-def main(coregdir, outputfile, cloudfile, minclear, maxiter, tolerance, figsize, dpi, vmax):
+@click.option('--vmax', type=float, default=None, help='Max colorbar value in meters')
+@click.option('--pixel-scale', type=float, default=3.0, help='Meters per pixel (default: 3.0)')
+def main(coregdir, outputfile, cloudfile, minclear, maxiter, tolerance, figsize, dpi, vmax, pixel_scale):
     """
     Visualize residual alignment errors after global coregistration.
 
@@ -215,12 +220,16 @@ def main(coregdir, outputfile, cloudfile, minclear, maxiter, tolerance, figsize,
     if np.all(np.isnan(magnitude)):
         raise ValueError("All residuals are NaN - check input data")
 
+    # Convert to meters
+    residual_meters = residual * pixel_scale
+    magnitude_meters = magnitude * pixel_scale
+
     # Print statistics
-    print_statistics(residual, magnitude, keys)
+    print_statistics(residual_meters, magnitude_meters, keys, units='meters')
 
     # Create heatmap
     print(f"Creating heatmap: {outputfile}")
-    plot_residual_heatmap(magnitude, keys, outputfile, figsize, dpi, vmax)
+    plot_residual_heatmap(magnitude_meters, keys, outputfile, figsize, dpi, vmax, units='meters')
 
     print(f"Done! Heatmap saved to {outputfile}")
 

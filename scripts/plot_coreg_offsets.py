@@ -36,6 +36,9 @@ def main(coregdir, configfile, outputfile, nbins):
     config = load_config(configfile)
     coreg_args = config.get('coreg_args', {})
     vmax = coreg_args.get('max_shift', 5)
+    vmax = 10
+    vmax *= 3
+    vmax = 20
 
     files = sorted(glob(safe_join(coregdir, '*.json')))
 
@@ -49,13 +52,14 @@ def main(coregdir, configfile, outputfile, nbins):
 
     ax.set_facecolor('k')
     h = ax.hist2d(
-        xy[:, 0], xy[:, 1],
-        bins=(bins, bins), norm=LogNorm(), cmap='magma'
+        3*xy[:, 0], 3*xy[:, 1],
+        bins=(bins, bins), norm=LogNorm(vmin=1e0, vmax=1e2),
+        cmap='magma',
     )
     cbar = fig.colorbar(h[3])
     cbar.set_label('Count', fontsize=14)
-    ax.set_xlabel('x Shift', fontsize=14)
-    ax.set_ylabel('y Shift', fontsize=14)
+    ax.set_xlabel('x Shift (m)', fontsize=14)
+    ax.set_ylabel('y Shift (m)', fontsize=14)
     ax.set_aspect('equal')
 
     fig.savefig(outputfile)
