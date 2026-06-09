@@ -23,16 +23,7 @@ import torchmetrics
 from torchmetrics.detection import MeanAveragePrecision
 
 
-def get_split(img, mask, split, size):
-    img = np.asarray(img)
-    mask = np.asarray(mask)
-
-    if img.ndim < 2 or mask.ndim < 2:
-        raise ValueError("img and mask must have at least 2 dimensions")
-    if img.shape[:2] != mask.shape[:2]:
-        raise ValueError("img and mask must match in their first two dimensions")
-
-    h, w = img.shape[:2]
+def _split_window(h, w, split, size):
     if h < size:
         raise ValueError(f"Height must be at least {size}, got {h}")
     if w < 2 * size:
@@ -60,6 +51,21 @@ def get_split(img, mask, split, size):
 
     if col_start < 0 or col_end > w:
         raise ValueError("Computed window exceeds image bounds")
+
+    return row_start, row_end, col_start, col_end
+
+
+def get_split(img, mask, split, size):
+    img = np.asarray(img)
+    mask = np.asarray(mask)
+
+    if img.ndim < 2 or mask.ndim < 2:
+        raise ValueError("img and mask must have at least 2 dimensions")
+    if img.shape[:2] != mask.shape[:2]:
+        raise ValueError("img and mask must match in their first two dimensions")
+
+    h, w = img.shape[:2]
+    row_start, row_end, col_start, col_end = _split_window(h, w, split, size)
 
     img_crop = img[row_start:row_end, col_start:col_end, ...]
     mask_crop = mask[row_start:row_end, col_start:col_end, ...]
