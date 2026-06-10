@@ -414,6 +414,7 @@ def make_app(image_paths, cache, worker, split, size, min_instance_size,
     app.layout = html.Div([
         dcc.Store(id='store-current-idx', data=0),
         dcc.Store(id='store-last-rendered', data=None),
+        dcc.Store(id='store-zoom', data=None),
         dcc.Interval(id='poll-cache', interval=500),
         html.Div(className='toolbar', children=[
             html.Button('◀ Prev', id='btn-prev', n_clicks=0),
@@ -544,9 +545,10 @@ def make_app(image_paths, cache, worker, split, size, min_instance_size,
         State('toggle-pred', 'value'),
         State('dd-filter', 'value'),
         State('slider-overlay-opacity', 'value'),
+        State('store-zoom', 'data'),
     )
     def render(idx, _tick, drone_val, ocm_val, last, gt_val, pred_val,
-               filter_val, opacity_val):
+               filter_val, opacity_val, zoom):
         idx = idx or 0
         path = image_paths[idx]
         scene = os.path.splitext(os.path.basename(path))[0]
@@ -600,6 +602,12 @@ def make_app(image_paths, cache, worker, split, size, min_instance_size,
                            ocm_array=ocm_array, show_ocm=show_ocm,
                            coreg_meta=coreg_meta,
                            overlay_opacity=opacity)
+
+        if ctx.triggered_id != 'store-current-idx' and zoom is not None:
+            fig.update_layout(
+                xaxis_range=[zoom['x0'], zoom['x1']],
+                yaxis_range=[zoom['y0'], zoom['y1']],
+            )
 
         if pred_available:
             spinner_style = {'display': 'none'}
@@ -668,6 +676,25 @@ def make_app(image_paths, cache, worker, split, size, min_instance_size,
                     lg, label, show_gt, show_pred, filter_val,
                 )
         return patched
+
+    @app.callback(
+        Output('store-zoom', 'data'),
+        Input('viewer', 'relayoutData'),
+        prevent_initial_call=True,
+    )
+    def save_zoom(relayout_data):
+        if not relayout_data:
+            raise dash.exceptions.PreventUpdate
+        if 'xaxis.range[0]' in relayout_data and 'yaxis.range[0]' in relayout_data:
+            return {
+                'x0': relayout_data['xaxis.range[0]'],
+                'x1': relayout_data['xaxis.range[1]'],
+                'y0': relayout_data['yaxis.range[0]'],
+                'y1': relayout_data['yaxis.range[1]'],
+            }
+        if 'xaxis.autorange' in relayout_data:
+            return None
+        raise dash.exceptions.PreventUpdate
 
     return app
 
