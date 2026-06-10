@@ -178,12 +178,26 @@ def _trace_visible(kind, label, show_gt, show_pred, filter_val):
 
 
 def build_figure(img, gt_masks, pred_result, show_gt, show_pred,
-                 filter_val='all', drone_url=None, show_drone=False,
-                 ocm_url=None, show_ocm=False, coreg_meta=None,
+                 planet_url, filter_val='all',
+                 drone_url=None, show_drone=False,
+                 ocm_array=None, show_ocm=False, coreg_meta=None,
                  overlay_opacity=0.5):
     h, w = img.shape[:2]
     fig = go.Figure()
-    fig.add_trace(go.Image(z=img, hoverinfo='skip'))
+
+    # OCM is a go.Image trace so its alpha composites correctly above the
+    # layer='below' Planet/Drone images, while polygon traces added after
+    # still render on top of it.
+    if show_ocm and ocm_array is not None:
+        oh, ow = ocm_array.shape[:2]
+        fig.add_trace(go.Image(
+            z=ocm_array,
+            colormodel='rgba256',
+            x0=0, y0=0, dx=w / ow, dy=h / oh,
+            opacity=overlay_opacity,
+            hoverinfo='skip',
+            name='ocm',
+        ))
 
     gt_labels = None
     pred_labels = None
@@ -275,6 +289,8 @@ def build_figure(img, gt_masks, pred_result, show_gt, show_pred,
         showlegend=False,
     )
 
+    # Within layer='below', the first entry in `images` is painted last
+    # (visually on top), so order [Drone, Planet] gives Drone over Planet.
     overlays = []
     if show_drone and drone_url is not None:
         overlays.append(dict(
@@ -284,18 +300,16 @@ def build_figure(img, gt_masks, pred_result, show_gt, show_pred,
             xanchor='left', yanchor='top',
             sizing='stretch',
             opacity=overlay_opacity,
-            layer='above',
+            layer='below',
         ))
-    if show_ocm and ocm_url is not None:
-        overlays.append(dict(
-            source=ocm_url,
-            xref='x', yref='y',
-            x=0, y=0, sizex=w, sizey=h,
-            xanchor='left', yanchor='top',
-            sizing='stretch',
-            opacity=overlay_opacity,
-            layer='above',
-        ))
+    overlays.append(dict(
+        source=planet_url,
+        xref='x', yref='y',
+        x=0, y=0, sizex=w, sizey=h,
+        xanchor='left', yanchor='top',
+        sizing='stretch',
+        layer='below',
+    ))
     fig.update_layout(images=overlays)
 
     return fig
@@ -329,6 +343,23 @@ button { padding: 4px 10px; }
 '''
 
 
+def _cropped_rgba_array(path, fracs):
+    with _PILImage.open(path) as im:
+        if fracs is not None:
+            y0f, y1f, x0f, x1f = fracs
+            w_im, h_im = im.size
+            box = (
+                int(round(x0f * w_im)),
+                int(round(y0f * h_im)),
+                int(round(x1f * w_im)),
+                int(round(y1f * h_im)),
+            )
+            im = im.crop(box)
+        if im.mode != 'RGBA':
+            im = im.convert('RGBA')
+        return np.array(im)
+
+
 def _serve_cropped(path, fracs):
     if fracs is None:
         return flask.send_file(path, mimetype='image/png',
@@ -358,19 +389,22 @@ def make_app(image_paths, cache, worker, split, size, min_instance_size,
     drone_paths = drone_paths or {}
     ocm_paths = ocm_paths or {}
     crop_fracs = crop_fracs or {}
+    planet_paths = {
+        os.path.splitext(os.path.basename(p))[0]: p for p in image_paths
+    }
+
+    @app.server.route('/planet/<scene>')
+    def _serve_planet(scene):
+        scene_key = urllib.parse.unquote(scene)
+        path = planet_paths.get(scene_key)
+        if path is None:
+            flask.abort(404)
+        return _serve_cropped(path, crop_fracs.get(scene_key))
 
     @app.server.route('/drone/<scene>')
     def _serve_drone(scene):
         scene_key = urllib.parse.unquote(scene)
         path = drone_paths.get(scene_key)
-        if path is None:
-            flask.abort(404)
-        return _serve_cropped(path, crop_fracs.get(scene_key))
-
-    @app.server.route('/ocm/<scene>')
-    def _serve_ocm(scene):
-        scene_key = urllib.parse.unquote(scene)
-        path = ocm_paths.get(scene_key)
         if path is None:
             flask.abort(404)
         return _serve_cropped(path, crop_fracs.get(scene_key))
@@ -543,23 +577,27 @@ def make_app(image_paths, cache, worker, split, size, min_instance_size,
         )
 
         scene_q = urllib.parse.quote(scene, safe='')
+        v_planet = int(os.path.getmtime(path))
+        planet_url = f'/planet/{scene_q}?v={v_planet}'
         drone_url = None
         if drone_available:
             v = int(os.path.getmtime(drone_paths[scene]))
             drone_url = f'/drone/{scene_q}?v={v}'
-        ocm_url = None
-        if ocm_available:
-            v = int(os.path.getmtime(ocm_paths[scene]))
-            ocm_url = f'/ocm/{scene_q}?v={v}'
+        ocm_array = None
+        if show_ocm:
+            ocm_array = _cropped_rgba_array(
+                ocm_paths[scene], crop_fracs.get(scene),
+            )
 
         show_gt = 'gt' in (gt_val or [])
         show_pred = 'pred' in (pred_val or []) and pred_available
         coreg_meta = (coreg_info or {}).get(scene)
         opacity = 0.5 if opacity_val is None else float(opacity_val)
         fig = build_figure(img, gt_masks, pred, show_gt, show_pred,
+                           planet_url=planet_url,
                            filter_val=filter_val or 'all',
                            drone_url=drone_url, show_drone=show_drone,
-                           ocm_url=ocm_url, show_ocm=show_ocm,
+                           ocm_array=ocm_array, show_ocm=show_ocm,
                            coreg_meta=coreg_meta,
                            overlay_opacity=opacity)
 
@@ -594,12 +632,17 @@ def make_app(image_paths, cache, worker, split, size, min_instance_size,
         if not fig:
             raise dash.exceptions.PreventUpdate
         images = (fig.get('layout') or {}).get('images') or []
-        if not images:
-            raise dash.exceptions.PreventUpdate
+        data = fig.get('data') or []
         value = 0.5 if opacity_val is None else float(opacity_val)
         patched = Patch()
-        for i in range(len(images)):
+        for i, im in enumerate(images):
+            src = im.get('source') or ''
+            if src.startswith('/planet/'):
+                continue
             patched['layout']['images'][i]['opacity'] = value
+        for i, trace in enumerate(data):
+            if trace.get('type') == 'image':
+                patched['data'][i]['opacity'] = value
         return patched
 
     @app.callback(
