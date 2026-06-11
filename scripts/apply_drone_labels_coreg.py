@@ -165,6 +165,8 @@ def find_ocm_mask(planetfile, planetdir, maskdir):
     stem = Path(planetfile).stem
     if stem.endswith('_rgb'):
         stem = stem[:-4]
+    elif stem.endswith('_4band'):
+        stem = stem[:-6]
     ocm_path = Path(maskdir) / rel.parent / f"{stem}_ocm.tif"
     if not ocm_path.exists():
         log.warning("OCM mask not found: %s", ocm_path)
@@ -182,9 +184,12 @@ def compute_clear_fraction(ocm_path):
     return float((band1 == 0).sum() / total_valid)
 
 
-def crown_filter_by_ocm(conf_resampled, ocm_path, pimg):
+def reproject_ocm_to_grid(ocm_path, pimg):
     ocm = rxr.open_rasterio(ocm_path).sel(band=1)
-    ocm_rep = ocm.rio.reproject_match(pimg, resampling=Resampling.nearest)
+    return ocm.rio.reproject_match(pimg, resampling=Resampling.nearest)
+
+
+def crown_filter_by_ocm(conf_resampled, ocm_rep):
     clear_pixels = (ocm_rep.values == 0)
 
     binary = (conf_resampled.values > 0.5)
@@ -195,6 +200,40 @@ def crown_filter_by_ocm(conf_resampled, ocm_path, pimg):
             binary[comp_mask] = False
 
     return (binary.astype(np.uint8) * 255)
+
+
+def render_rgb_from_4band(pimg, clear_mask, lower_pct=2.0, upper_pct=98.0):
+    """Per-band percentile stretch on a 4-band Planet DataArray. Percentiles
+    are computed using only clear (cloud-free, non-nodata) pixels, but the
+    stretch is then applied to *every* non-nodata pixel — cloudy regions stay
+    visible (they typically saturate near 255 since they exceed the upper
+    percentile of clear pixels). Planet AnalyticMS band order is
+    [Blue, Green, Red, NIR] (1,2,3,4). Returns a uint8 (H, W, 3) array in
+    R, G, B order."""
+    nodata = pimg.rio.nodata
+    arr = pimg.values  # (bands, H, W)
+    if arr.shape[0] < 4:
+        raise ValueError(f"Expected 4-band Planet imagery, got {arr.shape[0]} bands")
+
+    red = arr[2].astype(np.float32)
+    green = arr[1].astype(np.float32)
+    blue = arr[0].astype(np.float32)
+
+    height, width = red.shape
+    out = np.zeros((height, width, 3), dtype=np.uint8)
+    for i, b in enumerate((red, green, blue)):
+        not_nodata = np.ones_like(b, dtype=bool) if nodata is None else (b != nodata)
+        clear_valid = clear_mask & not_nodata
+        if not clear_valid.any():
+            continue
+        lo, hi = np.percentile(b[clear_valid], (lower_pct, upper_pct))
+        if hi <= lo:
+            continue
+        scaled = np.clip((b - lo) * (255.0 / (hi - lo)), 0, 255)
+        scaled = np.where(not_nodata, scaled, 0)
+        out[..., i] = scaled.astype(np.uint8)
+
+    return out
 
 
 def apply_shift_to_label(label_da, x_shift, y_shift):
@@ -309,17 +348,26 @@ def create_mask(dronedir, labelfile, planetfile, planetdir, outputdir, resize, m
         resampling=Resampling.average,
     )
 
+    ocm_rep = None
     if maskdir is not None and ocm_path is not None:
-        mask_array = crown_filter_by_ocm(conf_resampled, ocm_path, pimg)
+        ocm_rep = reproject_ocm_to_grid(ocm_path, pimg)
+
+    if ocm_rep is not None:
+        mask_array = crown_filter_by_ocm(conf_resampled, ocm_rep)
+        clear_mask = (ocm_rep.values == 0)
     else:
         mask_array = (conf_resampled.values > 0.5).astype(np.uint8) * 255
+        clear_mask = np.ones(pimg.values.shape[1:], dtype=bool)
 
     outputdir = Path(outputdir)
     outputdir.mkdir(parents=True, exist_ok=True)
     basename = Path(planetfile).stem
+    if basename.endswith('_4band'):
+        basename = basename[:-6]
+    elif basename.endswith('_rgb'):
+        basename = basename[:-4]
 
-    rgb_array = np.moveaxis(pimg.values, 0, -1)
-    rgb_array = percentile_stretch_global(rgb_array, lower_pct=0, upper_pct=99.9)
+    rgb_array = render_rgb_from_4band(pimg, clear_mask)
 
     iio.imwrite(outputdir / f"{basename}.png", rgb_array)
     iio.imwrite(outputdir / f"{basename}.mask.png", mask_array)
@@ -382,7 +430,7 @@ def filter_files(planetfiles, filterdir):
 def main(labelfiles, dronedir, planetdir, outputdir, timewindow, resize, filterdir, mode, maskdir, drone_scale):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-    planetfiles = list(Path(planetdir).rglob('*rgb.tif'))
+    planetfiles = list(Path(planetdir).rglob('*_4band.tif'))
     planetfiles = filter_files(planetfiles, filterdir)
 
     planet_df = pd.DataFrame({
