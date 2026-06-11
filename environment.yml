@@ -23,5 +23,10 @@ dependencies:
   - werkzeug
   - dash
   - plotly
+  - pytorch
+  - torchvision
+  - pycocotools
+  - wandb
+  - torchmetrics
   - pip:
       - python-ffmpeg

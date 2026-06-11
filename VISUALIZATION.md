@@ -41,16 +41,6 @@ conda activate flower
 
 This only needs to be done once. On subsequent sessions, just run `conda activate flower`.
 
-## Install PyTorch
-
-PyTorch is required but is not included in `environment.yml`. With the `flower` environment active, install the CPU version:
-
-```bash
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-```
-
-This also only needs to be done once.
-
 ## Run the visualization
 
 ```bash
