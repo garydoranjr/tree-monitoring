@@ -1,0 +1,23 @@
+# Image size filter.
+# Use exact_sizes (list of [width, height] pairs) OR min_width/min_height, not both.
+# exact_sizes takes precedence when present.
+exact_sizes:
+  - [1468, 820]
+  - [1412, 764]
+# min_width: 1400
+# min_height: 750
+
+# Minimum fraction of clear pixels (0.0–1.0); null disables this filter.
+# allow_null_clear_fraction: false → scenes with null clear_fraction are skipped.
+min_clear_fraction: 0.10
+allow_null_clear_fraction: false
+
+# Minimum mean Pearson correlation across the 6 band pairs (higher = better spectral
+# quality); null disables this filter.
+# allow_null_band_corr_mean: false → scenes with null band_corr_mean are skipped.
+min_band_corr_mean: null
+allow_null_band_corr_mean: false
+
+# Require coreg_ok=true; normally redundant since only successful scenes have PNG
+# outputs, but provides an explicit guard.
+require_coreg_ok: false
