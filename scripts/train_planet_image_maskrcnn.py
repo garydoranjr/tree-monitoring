@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import os
 import glob
+import warnings
 import wandb
 import click
 from tqdm import tqdm
@@ -8,6 +9,7 @@ from PIL import Image
 import numpy as np
 from scipy import ndimage
 import torch
+import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms as T
@@ -17,8 +19,9 @@ from torchvision.models.detection import (
     MaskRCNN_ResNet50_FPN_V2_Weights,
 )
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
-from torchvision.models.detection.mask_rcnn import MaskRCNNPredictor
-from torchvision.models.detection.rpn import AnchorGenerator
+from torchvision.models.detection.mask_rcnn import MaskRCNN, MaskRCNNPredictor
+from torchvision.models.detection.rpn import AnchorGenerator, RegionProposalNetwork
+from torchvision.models.detection.roi_heads import RoIHeads
 import torchmetrics
 from torchmetrics.detection import MeanAveragePrecision
 
@@ -55,7 +58,7 @@ def _split_window(h, w, split, size):
     return row_start, row_end, col_start, col_end
 
 
-def get_split(img, mask, split, size):
+def get_split(img, mask, split, size, *extra):
     img = np.asarray(img)
     mask = np.asarray(mask)
 
@@ -63,13 +66,20 @@ def get_split(img, mask, split, size):
         raise ValueError("img and mask must have at least 2 dimensions")
     if img.shape[:2] != mask.shape[:2]:
         raise ValueError("img and mask must match in their first two dimensions")
+    extra = [np.asarray(a) for a in extra]
+    for a in extra:
+        if a.shape[:2] != img.shape[:2]:
+            raise ValueError("extra arrays must match img in first two dims")
 
     h, w = img.shape[:2]
     row_start, row_end, col_start, col_end = _split_window(h, w, split, size)
 
     img_crop = img[row_start:row_end, col_start:col_end, ...]
     mask_crop = mask[row_start:row_end, col_start:col_end, ...]
-    return img_crop, mask_crop
+    if not extra:
+        return img_crop, mask_crop
+    extra_crops = [a[row_start:row_end, col_start:col_end, ...] for a in extra]
+    return (img_crop, mask_crop, *extra_crops)
 
 
 def binary_mask_to_instances(bin_mask, min_instance_size=4):
@@ -180,10 +190,39 @@ def classify_instances(gt_masks, pred_masks, pred_scores, iou_thresh=0.5):
     return _greedy_match(iou, pred_scores, iou_thresh=iou_thresh)
 
 
+_warned_missing_ocm = False
+
+
+def _load_clear_mask(img_path, expected_shape):
+    """Load the OCM sidecar `{stem}.ocm.png` and return a bool clear-mask of
+    `expected_shape` (H, W). The sidecar is RGBA with alpha=150 over cloudy
+    pixels and alpha=0 elsewhere, so `clear = (alpha == 0)`. Missing files
+    fall back to all-clear with a one-shot warning."""
+    global _warned_missing_ocm
+    ocm_path = img_path.replace('.png', '.ocm.png')
+    if not os.path.exists(ocm_path):
+        if not _warned_missing_ocm:
+            warnings.warn(
+                f"OCM sidecar not found (e.g. {ocm_path}); treating affected "
+                "samples as fully clear. This warning is shown once.",
+                stacklevel=2,
+            )
+            _warned_missing_ocm = True
+        return np.ones(expected_shape, dtype=bool)
+    arr = np.array(Image.open(ocm_path).convert('RGBA'))
+    alpha = arr[..., 3]
+    if alpha.shape != expected_shape:
+        raise ValueError(
+            f"OCM sidecar {ocm_path} shape {alpha.shape} does not match "
+            f"image shape {expected_shape}"
+        )
+    return (alpha == 0)
+
+
 class PlanetMaskRCNNDataset(Dataset):
 
     def __init__(self, img_dir, split, size=512, color_jitter=False,
-                 min_instance_size=4):
+                 min_instance_size=4, use_ocm_masks=False):
         self.mask_files = sorted(glob.glob(os.path.join(img_dir, "*.mask.png")))
         self.img_files = [
             mf.replace('.mask.png', '.png') for mf in self.mask_files
@@ -191,6 +230,7 @@ class PlanetMaskRCNNDataset(Dataset):
         self.split = split
         self.size = size
         self.min_instance_size = min_instance_size
+        self.use_ocm_masks = use_ocm_masks
         self.jitter = (
             T.ColorJitter(brightness=0.2, contrast=0.2) if color_jitter else None
         )
@@ -199,12 +239,34 @@ class PlanetMaskRCNNDataset(Dataset):
     def __len__(self):
         return len(self.img_files)
 
+    def _empty_target(self, idx, clear_crop):
+        target = {
+            "boxes": torch.zeros((0, 4), dtype=torch.float32),
+            "labels": torch.zeros((0,), dtype=torch.int64),
+            "masks": torch.zeros((0, self.size, self.size), dtype=torch.uint8),
+            "image_id": torch.tensor([idx]),
+            "area": torch.zeros((0,), dtype=torch.float32),
+            "iscrowd": torch.zeros((0,), dtype=torch.int64),
+        }
+        if self.use_ocm_masks:
+            target["clear_mask"] = torch.from_numpy(
+                clear_crop.astype(np.uint8)
+            )
+        return target
+
     def __getitem__(self, idx):
         img = np.array(Image.open(self.img_files[idx]))[..., :3]
         mask = np.array(Image.open(self.mask_files[idx]))
         mask = (mask == 255).astype(np.uint8)
 
-        img_crop, mask_crop = get_split(img, mask, self.split, self.size)
+        if self.use_ocm_masks:
+            clear = _load_clear_mask(self.img_files[idx], mask.shape)
+            img_crop, mask_crop, clear_crop = get_split(
+                img, mask, self.split, self.size, clear,
+            )
+        else:
+            img_crop, mask_crop = get_split(img, mask, self.split, self.size)
+            clear_crop = None
 
         inst_masks = binary_mask_to_instances(
             mask_crop, min_instance_size=self.min_instance_size,
@@ -216,15 +278,7 @@ class PlanetMaskRCNNDataset(Dataset):
         img_tensor = self.to_tensor(img_pil)  # (3, H, W) float32 in [0,1]
 
         if inst_masks.shape[0] == 0:
-            target = {
-                "boxes": torch.zeros((0, 4), dtype=torch.float32),
-                "labels": torch.zeros((0,), dtype=torch.int64),
-                "masks": torch.zeros((0, self.size, self.size), dtype=torch.uint8),
-                "image_id": torch.tensor([idx]),
-                "area": torch.zeros((0,), dtype=torch.float32),
-                "iscrowd": torch.zeros((0,), dtype=torch.int64),
-            }
-            return img_tensor, target
+            return img_tensor, self._empty_target(idx, clear_crop)
 
         masks_t = torch.from_numpy(inst_masks)  # (N, H, W) uint8
         boxes = masks_to_boxes(masks_t)         # (N, 4) float, inclusive xmax/ymax
@@ -232,14 +286,7 @@ class PlanetMaskRCNNDataset(Dataset):
         masks_t = masks_t[keep]
         boxes = boxes[keep]
         if masks_t.shape[0] == 0:
-            return img_tensor, {
-                "boxes": torch.zeros((0, 4), dtype=torch.float32),
-                "labels": torch.zeros((0,), dtype=torch.int64),
-                "masks": torch.zeros((0, self.size, self.size), dtype=torch.uint8),
-                "image_id": torch.tensor([idx]),
-                "area": torch.zeros((0,), dtype=torch.float32),
-                "iscrowd": torch.zeros((0,), dtype=torch.int64),
-            }
+            return img_tensor, self._empty_target(idx, clear_crop)
         areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
         labels = torch.ones((masks_t.shape[0],), dtype=torch.int64)
         target = {
@@ -250,6 +297,10 @@ class PlanetMaskRCNNDataset(Dataset):
             "area": areas.to(torch.float32),
             "iscrowd": torch.zeros((masks_t.shape[0],), dtype=torch.int64),
         }
+        if self.use_ocm_masks:
+            target["clear_mask"] = torch.from_numpy(
+                clear_crop.astype(np.uint8)
+            )
         return img_tensor, target
 
 
@@ -258,8 +309,161 @@ def collate_fn(batch):
     return list(imgs), list(targets)
 
 
+def _lookup_clear_at_centers(clear_masks_per_image, boxes_per_image,
+                             image_index):
+    """Sample the clear-mask at each box's center pixel. `clear_masks_per_image`
+    is a list of (H, W) bool tensors aligned with the post-transform image
+    coordinates; `boxes_per_image` is an (N, 4) tensor of [x1, y1, x2, y2].
+    Out-of-bounds centers (in padding regions) are treated as cloudy
+    (returned False) so the corresponding anchors/proposals are ignored."""
+    cm = clear_masks_per_image[image_index]
+    H, W = cm.shape
+    if boxes_per_image.numel() == 0:
+        return torch.ones((0,), dtype=torch.bool, device=cm.device)
+    cx = ((boxes_per_image[:, 0] + boxes_per_image[:, 2]) * 0.5).long()
+    cy = ((boxes_per_image[:, 1] + boxes_per_image[:, 3]) * 0.5).long()
+    in_bounds = (cx >= 0) & (cx < W) & (cy >= 0) & (cy < H)
+    cx = cx.clamp(0, W - 1)
+    cy = cy.clamp(0, H - 1)
+    sampled = cm[cy, cx]
+    return sampled & in_bounds
+
+
+class OCMRPN(RegionProposalNetwork):
+    """RPN that marks anchors centered on cloudy pixels as ignore (label=-1)
+    so they're skipped by `BalancedPositiveNegativeSampler` and contribute
+    to neither `loss_objectness` nor `loss_rpn_box_reg`. The cloudy mask is
+    read from `self._clear_masks`, populated by `OCMMaskRCNN.forward`."""
+
+    def assign_targets_to_anchors(self, anchors, targets):
+        labels, matched_gt_boxes = super().assign_targets_to_anchors(
+            anchors, targets,
+        )
+        clear_masks = getattr(self, '_clear_masks', None)
+        if clear_masks is None:
+            return labels, matched_gt_boxes
+        for i, anchors_i in enumerate(anchors):
+            keep_clear = _lookup_clear_at_centers(clear_masks, anchors_i, i)
+            labels[i] = torch.where(
+                keep_clear, labels[i], torch.full_like(labels[i], -1.0),
+            )
+        return labels, matched_gt_boxes
+
+
+class OCMRoIHeads(RoIHeads):
+    """RoI heads that mark proposals centered on cloudy pixels as ignore
+    (label=-1) before subsampling, so they contribute to none of
+    `loss_classifier`, `loss_box_reg`, or `loss_mask`."""
+
+    def assign_targets_to_proposals(self, proposals, gt_boxes, gt_labels):
+        matched_idxs, labels = super().assign_targets_to_proposals(
+            proposals, gt_boxes, gt_labels,
+        )
+        clear_masks = getattr(self, '_clear_masks', None)
+        if clear_masks is None:
+            return matched_idxs, labels
+        for i, proposals_i in enumerate(proposals):
+            keep_clear = _lookup_clear_at_centers(clear_masks, proposals_i, i)
+            labels[i] = torch.where(
+                keep_clear, labels[i], torch.full_like(labels[i], -1),
+            )
+        return matched_idxs, labels
+
+
+class OCMMaskRCNN(MaskRCNN):
+    """Mask R-CNN wrapper that pulls per-image `clear_mask` tensors out of
+    the targets, resizes them to match the post-transform image size, and
+    stashes them on the RPN and RoI heads so anchors/proposals over cloudy
+    pixels are ignored in every loss term."""
+
+    def forward(self, images, targets=None):
+        clear_masks = None
+        if self.training and targets is not None:
+            popped = []
+            any_present = False
+            for t in targets:
+                cm = t.pop('clear_mask', None)
+                popped.append(cm)
+                if cm is not None:
+                    any_present = True
+            if any_present:
+                clear_masks = popped
+
+        if clear_masks is None or not self.training:
+            return super().forward(images, targets)
+
+        original_image_sizes = [tuple(img.shape[-2:]) for img in images]
+        images_t, targets_t = self.transform(images, targets)
+
+        post_h, post_w = images_t.tensors.shape[-2:]
+        cm_resized = []
+        for cm, orig_hw, post_hw in zip(
+            clear_masks, original_image_sizes, images_t.image_sizes,
+        ):
+            if cm is None:
+                cm_t = torch.ones(
+                    orig_hw, dtype=torch.bool, device=images_t.tensors.device,
+                )
+            else:
+                cm_t = cm.to(
+                    device=images_t.tensors.device, dtype=torch.bool,
+                )
+                if cm_t.shape != orig_hw:
+                    raise ValueError(
+                        f"clear_mask shape {tuple(cm_t.shape)} does not match "
+                        f"image shape {orig_hw}"
+                    )
+            cm_resized_unpadded = F.interpolate(
+                cm_t[None, None].float(), size=post_hw, mode='nearest',
+            )[0, 0].bool()
+            padded = torch.zeros(
+                (post_h, post_w), dtype=torch.bool,
+                device=images_t.tensors.device,
+            )
+            ph, pw = post_hw
+            padded[:ph, :pw] = cm_resized_unpadded
+            cm_resized.append(padded)
+
+        if targets_t is not None:
+            for target_idx, target in enumerate(targets_t):
+                boxes = target["boxes"]
+                degenerate_boxes = boxes[:, 2:] <= boxes[:, :2]
+                if degenerate_boxes.any():
+                    bb_idx = torch.where(degenerate_boxes.any(dim=1))[0][0]
+                    degen_bb = boxes[bb_idx].tolist()
+                    raise ValueError(
+                        "All bounding boxes should have positive height and "
+                        f"width. Found invalid box {degen_bb} for target at "
+                        f"index {target_idx}."
+                    )
+
+        from collections import OrderedDict
+        features = self.backbone(images_t.tensors)
+        if isinstance(features, torch.Tensor):
+            features = OrderedDict([('0', features)])
+
+        self.rpn._clear_masks = cm_resized
+        self.roi_heads._clear_masks = cm_resized
+        try:
+            proposals, proposal_losses = self.rpn(images_t, features, targets_t)
+            detections, detector_losses = self.roi_heads(
+                features, proposals, images_t.image_sizes, targets_t,
+            )
+        finally:
+            self.rpn._clear_masks = None
+            self.roi_heads._clear_masks = None
+
+        detections = self.transform.postprocess(
+            detections, images_t.image_sizes, original_image_sizes,
+        )
+        losses = {}
+        losses.update(detector_losses)
+        losses.update(proposal_losses)
+        return self.eager_outputs(losses, detections)
+
+
 def build_model(num_classes=2, nms_thresh=0.3, score_thresh=0.05,
-                detections_per_img=300):
+                detections_per_img=300, use_ocm_masks=False):
     weights = MaskRCNN_ResNet50_FPN_V2_Weights.COCO_V1
     model = maskrcnn_resnet50_fpn_v2(weights=weights)
 
@@ -284,14 +488,24 @@ def build_model(num_classes=2, nms_thresh=0.3, score_thresh=0.05,
     model.roi_heads.nms_thresh = nms_thresh
     model.roi_heads.score_thresh = score_thresh
     model.roi_heads.detections_per_img = detections_per_img
+
+    if use_ocm_masks:
+        model.__class__ = OCMMaskRCNN
+        model.rpn.__class__ = OCMRPN
+        model.roi_heads.__class__ = OCMRoIHeads
+        model.rpn._clear_masks = None
+        model.roi_heads._clear_masks = None
     return model
 
 
 @torch.no_grad()
 def evaluate(model, dataloader, device, iou_metric, map_metric,
-             score_thresh=0.5, iou_thresh=0.5):
+             score_thresh=0.5, iou_thresh=0.5, use_ocm_masks=False):
     """Compute binary-IoU (union of masks), mask mAP, and event-level
-    precision/recall/accuracy on the dataloader."""
+    precision/recall/accuracy on the dataloader. When `use_ocm_masks` is
+    True, predictions whose box centers fall in cloudy pixels are dropped
+    before metrics are accumulated, and the binary-IoU metric is restricted
+    to clear pixels."""
     model.eval()
     iou_metric.reset()
     map_metric.reset()
@@ -304,8 +518,14 @@ def evaluate(model, dataloader, device, iou_metric, map_metric,
         imgs = [img.to(device) for img in imgs]
         outputs = model(imgs)
 
+        clear_masks = None
+        if use_ocm_masks:
+            clear_masks = [
+                tgt['clear_mask'].to(device).bool() for tgt in targets
+            ]
+
         preds_for_map = []
-        for out in outputs:
+        for i, out in enumerate(outputs):
             masks = out["masks"]  # (N, 1, H, W) float
             scores = out["scores"]
             labels = out["labels"]
@@ -317,6 +537,14 @@ def evaluate(model, dataloader, device, iou_metric, map_metric,
                 )
             else:
                 bin_masks = (masks[:, 0] >= score_thresh)
+
+            if clear_masks is not None and boxes.shape[0] > 0:
+                keep = _lookup_clear_at_centers(clear_masks, boxes, i)
+                bin_masks = bin_masks[keep]
+                scores = scores[keep]
+                labels = labels[keep]
+                boxes = boxes[keep]
+
             preds_for_map.append({
                 "masks": bin_masks,
                 "scores": scores,
@@ -332,7 +560,7 @@ def evaluate(model, dataloader, device, iou_metric, map_metric,
                 "boxes": tgt["boxes"].to(device),
             })
 
-        for pred, tgt in zip(preds_for_map, gts_for_map):
+        for i, (pred, tgt) in enumerate(zip(preds_for_map, gts_for_map)):
             h, w = imgs[0].shape[-2:]
             pred_union = (
                 pred["masks"].any(dim=0)
@@ -344,6 +572,10 @@ def evaluate(model, dataloader, device, iou_metric, map_metric,
                 if tgt["masks"].shape[0] > 0
                 else torch.zeros((h, w), dtype=torch.bool, device=device)
             )
+            if clear_masks is not None:
+                cm = clear_masks[i]
+                pred_union = pred_union & cm
+                gt_union = gt_union & cm
             iou_metric.update(pred_union.int(), gt_union.int())
 
             cls = classify_instances_torch(
@@ -386,10 +618,14 @@ def evaluate(model, dataloader, device, iou_metric, map_metric,
 @click.option('--nms-thresh', default=0.3, type=float)
 @click.option('--score-thresh', default=0.05, type=float)
 @click.option('--detections-per-img', default=300, type=int)
+@click.option('--ocm-masks/--no-ocm-masks', 'use_ocm_masks', default=False,
+              help='Use OCM cloud-mask sidecars (.ocm.png) to ignore '
+                   'anchors/proposals/predictions over cloudy pixels in '
+                   'every loss term and in crown-level TP/FP/FN.')
 @click.option('--wandb/--no-wandb', 'use_wandb', default=True)
 def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
          min_instance_size, nms_thresh, score_thresh, detections_per_img,
-         use_wandb):
+         use_ocm_masks, use_wandb):
 
     os.makedirs(outputdir, exist_ok=True)
 
@@ -402,6 +638,7 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
         'nms_thresh': nms_thresh,
         'score_thresh': score_thresh,
         'detections_per_img': detections_per_img,
+        'use_ocm_masks': use_ocm_masks,
     }
 
     run = None
@@ -419,11 +656,11 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
 
     train_dataset = PlanetMaskRCNNDataset(
         imagedir, split='left', size=size, color_jitter=True,
-        min_instance_size=min_instance_size,
+        min_instance_size=min_instance_size, use_ocm_masks=use_ocm_masks,
     )
     test_dataset = PlanetMaskRCNNDataset(
         imagedir, split='right', size=size, color_jitter=False,
-        min_instance_size=min_instance_size,
+        min_instance_size=min_instance_size, use_ocm_masks=use_ocm_masks,
     )
     train_loader = DataLoader(
         train_dataset, batch_size=batch_size, shuffle=True,
@@ -435,7 +672,7 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
 
     model = build_model(
         num_classes=2, nms_thresh=nms_thresh, score_thresh=score_thresh,
-        detections_per_img=detections_per_img,
+        detections_per_img=detections_per_img, use_ocm_masks=use_ocm_masks,
     ).to(device)
     optimizer = optim.AdamW(model.parameters(), lr=lr)
 
@@ -455,6 +692,12 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
             loss_dict = model(imgs, targets)
             loss = sum(loss_dict.values())
 
+            if not torch.isfinite(loss):
+                # OCM filtering can leave a fully-cloudy sample with no
+                # surviving anchors/proposals, giving NaN losses; drop the
+                # batch rather than corrupt the optimizer state.
+                continue
+
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -470,6 +713,7 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
 
         test_iou, test_map, test_event = evaluate(
             model, test_loader, device, iou_metric, map_metric,
+            use_ocm_masks=use_ocm_masks,
         )
 
         log = {'epoch': epoch, 'test_iou': test_iou}
