@@ -15,9 +15,9 @@ allow_null_clear_fraction: false
 # Minimum mean Pearson correlation across the 6 band pairs (higher = better spectral
 # quality); null disables this filter.
 # allow_null_band_corr_mean: false → scenes with null band_corr_mean are skipped.
-min_band_corr_mean: null
+min_band_corr_mean: 0.3
 allow_null_band_corr_mean: false
 
 # Require coreg_ok=true; normally redundant since only successful scenes have PNG
 # outputs, but provides an explicit guard.
-require_coreg_ok: false
+require_coreg_ok: true

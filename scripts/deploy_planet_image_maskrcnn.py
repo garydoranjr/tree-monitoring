@@ -11,21 +11,36 @@ from torchvision.ops import masks_to_boxes
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 
-from train_planet_image_maskrcnn import get_split, binary_mask_to_instances
+from train_planet_image_maskrcnn import (
+    OCMMaskRCNN,  # noqa: F401  -- needed for torch.load to unpickle ckpt
+    _load_clear_mask,
+    binary_mask_to_instances,
+    get_split,
+)
 
 
-def load_image_and_gt(imagefile, split, size=512, min_instance_size=4):
+def load_image_and_gt(imagefile, split, size=512, min_instance_size=4,
+                      load_ocm_mask=False):
     maskfile = imagefile.replace('.png', '.mask.png')
     img = np.array(Image.open(imagefile))[..., :3]
     mask = np.array(Image.open(maskfile))
     mask = (mask == 255).astype(np.uint8)
 
-    img_crop, mask_crop = get_split(img, mask, split, size)
+    if load_ocm_mask:
+        clear = _load_clear_mask(imagefile, mask.shape)
+        img_crop, mask_crop, clear_crop = get_split(
+            img, mask, split, size, clear,
+        )
+    else:
+        img_crop, mask_crop = get_split(img, mask, split, size)
+
     inst_masks = binary_mask_to_instances(
         mask_crop, min_instance_size=min_instance_size,
     )
 
     img_tensor = T.ToTensor()(Image.fromarray(img_crop))
+    if load_ocm_mask:
+        return img_crop, inst_masks, img_tensor, clear_crop
     return img_crop, inst_masks, img_tensor
 
 

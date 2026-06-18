@@ -14,6 +14,7 @@ from skimage import color
 from skimage import exposure
 from skimage.measure import label as label_components
 from rasterio.enums import Resampling
+from scipy.ndimage import median_filter
 import pandas as pd
 from glob import glob
 from affine import Affine
@@ -236,6 +237,92 @@ def render_rgb_from_4band(pimg, clear_mask, lower_pct=2.0, upper_pct=98.0):
     return out
 
 
+def _round_sig(x, sig=5):
+    if x is None or not np.isfinite(x):
+        return None
+    return float(f"{float(x):.{sig}g}")
+
+
+def compute_noise_metrics(pimg, clear_mask, min_pixels=200):
+    """Per-scene image-quality metrics computed on a 4-band Planet DataArray
+    (B, G, R, NIR), restricted to clear OCM pixels.
+
+    Returns a dict with:
+      - noise_mad_sigma: per-band robust noise std (uint16 DN units)
+      - noise_mad_cv: per-band sigma normalized by mean clear-pixel signal
+      - noise_mad_cv_mean: mean of noise_mad_cv across bands
+      - band_corr_mean: mean Pearson r across the six band pairs
+      - band_decorrelation: 1 - band_corr_mean
+
+    Estimates:
+      sigma via 1.4826 * MAD of (band - 3x3 median(band)). The 3x3 median
+      preserves crown edges, so the residual is closer to pure noise.
+      Inter-channel correlation is computed on raw clear-pixel band values
+      (the rainbow-noise failure mode breaks band correlation directly)."""
+    nodata = pimg.rio.nodata
+    arr = pimg.values  # (bands, H, W)
+    n_bands = arr.shape[0]
+
+    valid = clear_mask.copy() if clear_mask is not None else np.ones(arr.shape[1:], dtype=bool)
+    if nodata is not None:
+        for b in range(n_bands):
+            valid &= (arr[b] != nodata)
+
+    none_result = {
+        'noise_mad_sigma': None,
+        'noise_mad_cv': None,
+        'noise_mad_cv_mean': None,
+        'band_corr_mean': None,
+        'band_decorrelation': None,
+    }
+    if int(valid.sum()) < min_pixels:
+        return none_result
+
+    sigmas = []
+    cvs = []
+    flat_clear = []
+    for b in range(n_bands):
+        band = arr[b].astype(np.float32)
+        smoothed = median_filter(band, size=3)
+        residual = band - smoothed
+        r = residual[valid]
+        med = np.median(r)
+        mad = np.median(np.abs(r - med))
+        sigma = float(1.4826 * mad)
+
+        signal_mean = float(np.mean(band[valid]))
+        cv = sigma / signal_mean if signal_mean > 0 else float('nan')
+        sigmas.append(sigma)
+        cvs.append(cv)
+        flat_clear.append(band[valid])
+
+    finite_cvs = [c for c in cvs if np.isfinite(c)]
+    cv_mean = float(np.mean(finite_cvs)) if finite_cvs else float('nan')
+
+    pair_corrs = []
+    for i in range(n_bands):
+        for j in range(i + 1, n_bands):
+            xi, xj = flat_clear[i], flat_clear[j]
+            if xi.std() == 0 or xj.std() == 0:
+                continue
+            pair_corrs.append(float(np.corrcoef(xi, xj)[0, 1]))
+
+    if pair_corrs:
+        corr_mean = float(np.mean(pair_corrs))
+        decorr = 1.0 - corr_mean
+    else:
+        corr_mean = None
+        decorr = None
+
+    return {
+        'noise_mad_sigma': [_round_sig(s) for s in sigmas],
+        'noise_mad_cv': [_round_sig(c) for c in cvs],
+        'noise_mad_cv_mean': _round_sig(cv_mean),
+        'band_corr_mean': _round_sig(corr_mean),
+        'band_decorrelation': _round_sig(decorr),
+    }
+
+
 def apply_shift_to_label(label_da, x_shift, y_shift):
     """
     Translate a label DataArray's spatial reference by (x_shift, y_shift)
@@ -368,6 +455,7 @@ def create_mask(dronedir, labelfile, planetfile, planetdir, outputdir, resize, m
         basename = basename[:-4]
 
     rgb_array = render_rgb_from_4band(pimg, clear_mask)
+    record.update(compute_noise_metrics(pimg, clear_mask))
 
     iio.imwrite(outputdir / f"{basename}.png", rgb_array)
     iio.imwrite(outputdir / f"{basename}.mask.png", mask_array)

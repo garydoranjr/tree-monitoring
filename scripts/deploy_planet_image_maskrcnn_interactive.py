@@ -33,7 +33,11 @@ from dash import Dash, Input, Output, Patch, State, ctx, dcc, html
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from deploy_planet_image_maskrcnn import load_image_and_gt  # noqa: E402
-from train_planet_image_maskrcnn import (  # noqa: E402
+from train_planet_image_maskrcnn import (  # noqa: E402, F401
+    OCMMaskRCNN,  # needed for torch.load to unpickle ocm-mask checkpoints
+    OCMRPN,
+    OCMRoIHeads,
+    _lookup_clear_at_centers,
     _split_window,
     classify_instances,
 )
@@ -76,7 +80,8 @@ class InferenceWorker(threading.Thread):
     _STOP = object()
 
     def __init__(self, model, device, cache, image_paths, split, size,
-                 score_thresh, mask_thresh, iou_thresh, min_instance_size):
+                 score_thresh, mask_thresh, iou_thresh, min_instance_size,
+                 use_ocm_masks=False):
         super().__init__(daemon=True)
         self.model = model
         self.device = device
@@ -88,6 +93,7 @@ class InferenceWorker(threading.Thread):
         self.mask_thresh = mask_thresh
         self.iou_thresh = iou_thresh
         self.min_instance_size = min_instance_size
+        self.use_ocm_masks = use_ocm_masks
 
         self._queue = queue.PriorityQueue()
         self._bump_counter = itertools.count(0, -1)
@@ -121,18 +127,43 @@ class InferenceWorker(threading.Thread):
                 print(f'[worker] error on {path}: {e}', file=sys.stderr)
 
     def _run_inference(self, path):
-        _, gt_masks, img_tensor = load_image_and_gt(
-            path, split=self.split, size=self.size,
-            min_instance_size=self.min_instance_size,
-        )
+        if self.use_ocm_masks:
+            _, gt_masks, img_tensor, clear_crop = load_image_and_gt(
+                path, split=self.split, size=self.size,
+                min_instance_size=self.min_instance_size,
+                load_ocm_mask=True,
+            )
+        else:
+            _, gt_masks, img_tensor = load_image_and_gt(
+                path, split=self.split, size=self.size,
+                min_instance_size=self.min_instance_size,
+            )
+            clear_crop = None
+
         with torch.no_grad():
             output = self.model([img_tensor.to(self.device)])[0]
-        scores = output['scores'].cpu().numpy()
-        keep = scores >= self.score_thresh
-        soft_masks = output['masks'][keep, 0].cpu().numpy()
-        boxes = output['boxes'][keep].cpu().numpy()
-        scores = scores[keep]
-        pred_masks = (soft_masks >= self.mask_thresh).astype(np.uint8)
+        scores_t = output['scores']
+        boxes_t = output['boxes']
+        soft_masks_t = output['masks'][:, 0]
+
+        keep_score = scores_t >= self.score_thresh
+        scores_t = scores_t[keep_score]
+        boxes_t = boxes_t[keep_score]
+        soft_masks_t = soft_masks_t[keep_score]
+
+        if clear_crop is not None and boxes_t.shape[0] > 0:
+            cm = torch.from_numpy(np.ascontiguousarray(clear_crop).astype(bool))
+            cm = cm.to(self.device)
+            keep_clear = _lookup_clear_at_centers([cm], boxes_t, 0)
+            scores_t = scores_t[keep_clear]
+            boxes_t = boxes_t[keep_clear]
+            soft_masks_t = soft_masks_t[keep_clear]
+
+        scores = scores_t.cpu().numpy()
+        boxes = boxes_t.cpu().numpy()
+        pred_masks = (soft_masks_t.cpu().numpy() >= self.mask_thresh).astype(
+            np.uint8
+        )
         classifications = classify_instances(
             gt_masks, pred_masks, scores, iou_thresh=self.iou_thresh,
         )
@@ -414,7 +445,6 @@ def make_app(image_paths, cache, worker, split, size, min_instance_size,
     app.layout = html.Div([
         dcc.Store(id='store-current-idx', data=0),
         dcc.Store(id='store-last-rendered', data=None),
-        dcc.Store(id='store-zoom', data=None),
         dcc.Interval(id='poll-cache', interval=500),
         html.Div(className='toolbar', children=[
             html.Button('◀ Prev', id='btn-prev', n_clicks=0),
@@ -545,10 +575,9 @@ def make_app(image_paths, cache, worker, split, size, min_instance_size,
         State('toggle-pred', 'value'),
         State('dd-filter', 'value'),
         State('slider-overlay-opacity', 'value'),
-        State('store-zoom', 'data'),
     )
     def render(idx, _tick, drone_val, ocm_val, last, gt_val, pred_val,
-               filter_val, opacity_val, zoom):
+               filter_val, opacity_val):
         idx = idx or 0
         path = image_paths[idx]
         scene = os.path.splitext(os.path.basename(path))[0]
@@ -602,12 +631,7 @@ def make_app(image_paths, cache, worker, split, size, min_instance_size,
                            ocm_array=ocm_array, show_ocm=show_ocm,
                            coreg_meta=coreg_meta,
                            overlay_opacity=opacity)
-
-        if ctx.triggered_id != 'store-current-idx' and zoom is not None:
-            fig.update_layout(
-                xaxis_range=[zoom['x0'], zoom['x1']],
-                yaxis_range=[zoom['y0'], zoom['y1']],
-            )
+        fig.update_layout(uirevision=scene)
 
         if pred_available:
             spinner_style = {'display': 'none'}
@@ -677,25 +701,6 @@ def make_app(image_paths, cache, worker, split, size, min_instance_size,
                 )
         return patched
 
-    @app.callback(
-        Output('store-zoom', 'data'),
-        Input('viewer', 'relayoutData'),
-        prevent_initial_call=True,
-    )
-    def save_zoom(relayout_data):
-        if not relayout_data:
-            raise dash.exceptions.PreventUpdate
-        if 'xaxis.range[0]' in relayout_data and 'yaxis.range[0]' in relayout_data:
-            return {
-                'x0': relayout_data['xaxis.range[0]'],
-                'x1': relayout_data['xaxis.range[1]'],
-                'y0': relayout_data['yaxis.range[0]'],
-                'y1': relayout_data['yaxis.range[1]'],
-            }
-        if 'xaxis.autorange' in relayout_data:
-            return None
-        raise dash.exceptions.PreventUpdate
-
     return app
 
 
@@ -719,10 +724,11 @@ def make_app(image_paths, cache, worker, split, size, min_instance_size,
 def main(modelfile, imagedir, score_thresh, mask_thresh, split,
          size, iou_thresh, host, port, logfile):
 
-    image_paths = sorted(glob(os.path.join(imagedir, '*rgb.png')))
-    image_paths = [p for p in image_paths if not p.endswith('.mask.png')]
+    SIDECAR_SUFFIXES = ('.mask.png', '.drone.png', '.ocm.png')
+    image_paths = sorted(glob(os.path.join(imagedir, '*.png')))
+    image_paths = [p for p in image_paths if not p.endswith(SIDECAR_SUFFIXES)]
     if not image_paths:
-        raise click.ClickException(f'no *rgb.png files in {imagedir}')
+        raise click.ClickException(f'no Planet *.png tiles in {imagedir}')
 
     def _meets_size(p):
         from PIL import Image as _Image
@@ -772,6 +778,7 @@ def main(modelfile, imagedir, score_thresh, mask_thresh, split,
     ckpt = torch.load(modelfile, map_location='cpu', weights_only=False)
     model = ckpt['model']
     min_instance_size = ckpt['params']['min_instance_size']
+    use_ocm_masks = ckpt['params'].get('use_ocm_masks', False)
 
     cache = PredictionCache()
     worker = InferenceWorker(
@@ -779,6 +786,7 @@ def main(modelfile, imagedir, score_thresh, mask_thresh, split,
         image_paths=image_paths, split=split, size=size,
         score_thresh=score_thresh, mask_thresh=mask_thresh,
         iou_thresh=iou_thresh, min_instance_size=min_instance_size,
+        use_ocm_masks=use_ocm_masks,
     )
     worker.start()
     atexit.register(worker.stop)
@@ -789,7 +797,8 @@ def main(modelfile, imagedir, score_thresh, mask_thresh, split,
                    ocm_paths=ocm_paths, crop_fracs=crop_fracs)
     print(f'Serving on http://{host}:{port} (device={device}, '
           f'{len(image_paths)} images, {len(drone_paths)} drone overlays, '
-          f'{len(ocm_paths)} cloud masks)')
+          f'{len(ocm_paths)} cloud masks, '
+          f"ocm_filtering={'on' if use_ocm_masks else 'off'})")
     app.run(host=host, port=port, debug=False)
 
 
