@@ -3,6 +3,7 @@ import os
 import glob
 import wandb
 import click
+import rasterio
 from tqdm import tqdm
 from PIL import Image
 import numpy as np
@@ -183,10 +184,16 @@ def classify_instances(gt_masks, pred_masks, pred_scores, iou_thresh=0.5):
 class PlanetMaskRCNNDataset(Dataset):
 
     def __init__(self, img_dir, split, size=512, color_jitter=False,
-                 min_instance_size=4):
+                 min_instance_size=4, bands=3):
+        if bands not in (3, 4):
+            raise ValueError(f"bands must be 3 or 4, got {bands}")
+        self.bands = bands
         self.mask_files = sorted(glob.glob(os.path.join(img_dir, "*.mask.png")))
+        # 3-band chips are RGB PNGs; 4-band chips are uint16 GeoTIFFs
+        # (Blue, Green, Red, NIR) produced by apply_drone_labels_coreg.py.
+        img_ext = '.tif' if bands == 4 else '.png'
         self.img_files = [
-            mf.replace('.mask.png', '.png') for mf in self.mask_files
+            mf.replace('.mask.png', img_ext) for mf in self.mask_files
         ]
         self.split = split
         self.size = size
@@ -200,7 +207,19 @@ class PlanetMaskRCNNDataset(Dataset):
         return len(self.img_files)
 
     def __getitem__(self, idx):
-        img = np.array(Image.open(self.img_files[idx]))[..., :3]
+        if self.bands == 4:
+            # 4-band uint16 GeoTIFF (Blue, Green, Red, NIR); per-band
+            # percentile stretch to [0, 1] (mirrors the SegFormer-4b loader).
+            with rasterio.open(self.img_files[idx]) as src:
+                data = src.read()  # (4, H, W) uint16
+            img = data.transpose(1, 2, 0).astype(np.float32)
+            for b in range(img.shape[2]):
+                p_low, p_high = np.percentile(img[..., b], (0, 99.9))
+                img[..., b] = np.clip(
+                    (img[..., b] - p_low) / (p_high - p_low + 1e-8), 0, 1
+                )
+        else:
+            img = np.array(Image.open(self.img_files[idx]))[..., :3]
         mask = np.array(Image.open(self.mask_files[idx]))
         mask = (mask == 255).astype(np.uint8)
 
@@ -210,10 +229,28 @@ class PlanetMaskRCNNDataset(Dataset):
             mask_crop, min_instance_size=self.min_instance_size,
         )
 
-        img_pil = Image.fromarray(img_crop)
-        if self.jitter is not None:
-            img_pil = self.jitter(img_pil)
-        img_tensor = self.to_tensor(img_pil)  # (3, H, W) float32 in [0,1]
+        if self.bands == 4:
+            # Channel-aware jitter: apply the same transform to an RGB view
+            # and an (NIR, G, B) view, then recombine so NIR is jittered
+            # consistently (ColorJitter only accepts 3-channel images).
+            if self.jitter is not None:
+                rgb = (img_crop[..., :3] * 255).astype(np.uint8)
+                irgb = (img_crop[..., [3, 1, 2]] * 255).astype(np.uint8)
+                rgb = np.array(
+                    self.jitter(Image.fromarray(rgb))
+                ).astype(np.float32) / 255.0
+                ir = np.array(
+                    self.jitter(Image.fromarray(irgb))
+                )[..., 0:1].astype(np.float32) / 255.0
+                img_crop = np.concatenate([rgb, ir], axis=-1)
+            img_tensor = torch.from_numpy(
+                img_crop.transpose(2, 0, 1).copy()
+            ).float()  # (4, H, W) float32 in [0,1]
+        else:
+            img_pil = Image.fromarray(img_crop)
+            if self.jitter is not None:
+                img_pil = self.jitter(img_pil)
+            img_tensor = self.to_tensor(img_pil)  # (3, H, W) float32 in [0,1]
 
         if inst_masks.shape[0] == 0:
             target = {
@@ -259,9 +296,33 @@ def collate_fn(batch):
 
 
 def build_model(num_classes=2, nms_thresh=0.3, score_thresh=0.05,
-                detections_per_img=300):
+                detections_per_img=300, bands=3):
     weights = MaskRCNN_ResNet50_FPN_V2_Weights.COCO_V1
     model = maskrcnn_resnet50_fpn_v2(weights=weights)
+
+    if bands == 4:
+        # Replace the backbone's first conv from 3->4 input channels. Copy
+        # the pretrained COCO weights into the RGB channels and zero-init the
+        # NIR channel, so the model starts equivalent to the pretrained
+        # 3-band model and learns the NIR contribution during training.
+        old_conv = model.backbone.body.conv1
+        new_conv = torch.nn.Conv2d(
+            4, old_conv.out_channels,
+            kernel_size=old_conv.kernel_size,
+            stride=old_conv.stride,
+            padding=old_conv.padding,
+            bias=(old_conv.bias is not None),
+        )
+        with torch.no_grad():
+            new_conv.weight[:, :3, :, :] = old_conv.weight
+            new_conv.weight[:, 3:4, :, :] = 0.0
+            if old_conv.bias is not None:
+                new_conv.bias.copy_(old_conv.bias)
+        model.backbone.body.conv1 = new_conv
+        # The detection transform normalizes per channel and needs one
+        # value per band; reuse the red-channel stats for NIR.
+        model.transform.image_mean = [0.485, 0.456, 0.406, 0.485]
+        model.transform.image_std = [0.229, 0.224, 0.225, 0.229]
 
     anchor_sizes = ((8,), (16,), (32,), (64,), (128,))
     aspect_ratios = ((0.5, 1.0, 2.0),) * len(anchor_sizes)
@@ -386,10 +447,13 @@ def evaluate(model, dataloader, device, iou_metric, map_metric,
 @click.option('--nms-thresh', default=0.3, type=float)
 @click.option('--score-thresh', default=0.05, type=float)
 @click.option('--detections-per-img', default=300, type=int)
+@click.option('--bands', default=3, type=click.Choice(['3', '4']),
+              callback=lambda c, p, v: int(v),
+              help='3 = RGB PNG chips (default), 4 = RGB+NIR GeoTIFF chips.')
 @click.option('--wandb/--no-wandb', 'use_wandb', default=True)
 def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
          min_instance_size, nms_thresh, score_thresh, detections_per_img,
-         use_wandb):
+         bands, use_wandb):
 
     os.makedirs(outputdir, exist_ok=True)
 
@@ -402,6 +466,7 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
         'nms_thresh': nms_thresh,
         'score_thresh': score_thresh,
         'detections_per_img': detections_per_img,
+        'bands': bands,
     }
 
     run = None
@@ -419,11 +484,11 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
 
     train_dataset = PlanetMaskRCNNDataset(
         imagedir, split='left', size=size, color_jitter=True,
-        min_instance_size=min_instance_size,
+        min_instance_size=min_instance_size, bands=bands,
     )
     test_dataset = PlanetMaskRCNNDataset(
         imagedir, split='right', size=size, color_jitter=False,
-        min_instance_size=min_instance_size,
+        min_instance_size=min_instance_size, bands=bands,
     )
     train_loader = DataLoader(
         train_dataset, batch_size=batch_size, shuffle=True,
@@ -435,7 +500,7 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
 
     model = build_model(
         num_classes=2, nms_thresh=nms_thresh, score_thresh=score_thresh,
-        detections_per_img=detections_per_img,
+        detections_per_img=detections_per_img, bands=bands,
     ).to(device)
     optimizer = optim.AdamW(model.parameters(), lr=lr)
 
