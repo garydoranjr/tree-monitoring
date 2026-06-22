@@ -122,7 +122,7 @@ def load_as_geoarray(filepath):
     return GeoArray(arr, geotransform=transform.to_gdal(), projection=projection)
 
 
-def compute_coreg_shift(dronefile, planetfile):
+def compute_coreg_shift(dronefile, planetfile, planet_match_band=1):
     drone_ga = load_as_geoarray(dronefile)
     planet_ga = load_as_geoarray(planetfile)
 
@@ -134,6 +134,11 @@ def compute_coreg_shift(dronefile, planetfile):
             max_shift=10,
             ignore_errors=True,
             q=True,
+            # Match on the Red band of both images. For 3-band RGB chips Red
+            # is band 1; for 4-band (B,G,R,NIR) chips Red is band 3. Keeping
+            # Red as the reference makes alignment consistent across modes.
+            r_b4match=1,
+            s_b4match=planet_match_band,
         )
         coreg.calculate_spatial_shifts()
     except Exception:
@@ -164,10 +169,10 @@ def find_ocm_mask(planetfile, planetdir, maskdir):
         log.warning("Cannot make %s relative to %s; skipping OCM mask", planetfile, planetdir)
         return None
     stem = Path(planetfile).stem
-    if stem.endswith('_rgb'):
-        stem = stem[:-4]
-    elif stem.endswith('_4band'):
-        stem = stem[:-6]
+    for suffix in ('_rgb', '_4band'):
+        if stem.endswith(suffix):
+            stem = stem[:-len(suffix)]
+            break
     ocm_path = Path(maskdir) / rel.parent / f"{stem}_ocm.tif"
     if not ocm_path.exists():
         log.warning("OCM mask not found: %s", ocm_path)
@@ -389,7 +394,7 @@ def generate_ocm_png(ocm_path, pimg, outputpath):
     iio.imwrite(outputpath, rgba)
 
 
-def create_mask(dronedir, labelfile, planetfile, planetdir, outputdir, resize, mode, maskdir=None, drone_scale=None):
+def create_mask(dronedir, labelfile, planetfile, planetdir, outputdir, resize, mode, maskdir=None, drone_scale=None, bands=3):
 
     dronefile = find_drone(labelfile, dronedir)
 
@@ -399,7 +404,11 @@ def create_mask(dronedir, labelfile, planetfile, planetdir, outputdir, resize, m
         if ocm_path is not None:
             clear_fraction = compute_clear_fraction(ocm_path)
 
-    x_shift, y_shift, coreg_ok = compute_coreg_shift(dronefile, planetfile)
+    # Red is band 1 in 3-band RGB chips and band 3 in 4-band (B,G,R,NIR) chips.
+    planet_match_band = 3 if bands == 4 else 1
+    x_shift, y_shift, coreg_ok = compute_coreg_shift(
+        dronefile, planetfile, planet_match_band=planet_match_band,
+    )
 
     with rasterio.open(planetfile) as src:
         planet_res_m = src.res[0]
@@ -454,8 +463,16 @@ def create_mask(dronedir, labelfile, planetfile, planetdir, outputdir, resize, m
     elif basename.endswith('_rgb'):
         basename = basename[:-4]
 
-    rgb_array = render_rgb_from_4band(pimg, clear_mask)
-    record.update(compute_noise_metrics(pimg, clear_mask))
+    if bands == 4:
+        # Write the 4-band uint16 GeoTIFF training chip (preserves CRS,
+        # transform, dtype, and nodata), then build an RGB QA PNG with a
+        # cloud-aware per-band stretch on the (B,G,R,NIR) image.
+        pimg.rio.to_raster(outputdir / f"{basename}.tif")
+        rgb_array = render_rgb_from_4band(pimg, clear_mask)
+        record.update(compute_noise_metrics(pimg, clear_mask))
+    else:
+        rgb_array = np.moveaxis(pimg.values, 0, -1)
+        rgb_array = percentile_stretch_global(rgb_array, lower_pct=0, upper_pct=99.9)
 
     iio.imwrite(outputdir / f"{basename}.png", rgb_array)
     iio.imwrite(outputdir / f"{basename}.mask.png", mask_array)
@@ -472,7 +489,7 @@ def create_mask(dronedir, labelfile, planetfile, planetdir, outputdir, resize, m
     return record
 
 
-def process_label(dronedir, labelfile, planet_df, planetdir, outputdir, timewindow, resize, mode, maskdir=None, drone_scale=None):
+def process_label(dronedir, labelfile, planet_df, planetdir, outputdir, timewindow, resize, mode, maskdir=None, drone_scale=None, bands=3):
     label_date = pd.to_datetime(
         get_cls_date(labelfile),
         format="%Y_%m_%d",
@@ -482,7 +499,7 @@ def process_label(dronedir, labelfile, planet_df, planetdir, outputdir, timewind
     planetfiles = planet_df.loc[date_mask]["path"]
 
     return [
-        create_mask(dronedir, labelfile, planetfile, planetdir, outputdir, resize, mode, maskdir, drone_scale)
+        create_mask(dronedir, labelfile, planetfile, planetdir, outputdir, resize, mode, maskdir, drone_scale, bands)
         for planetfile in planetfiles.tolist()
     ]
 
@@ -515,10 +532,16 @@ def filter_files(planetfiles, filterdir):
 @click.option('-k', '--maskdir', default=None, type=click.Path())
 @click.option('-d', '--drone-scale', default=None, type=float,
               help='If set, generate {scene}.drone.png at this multiple of the resized Planet pixel size.')
-def main(labelfiles, dronedir, planetdir, outputdir, timewindow, resize, filterdir, mode, maskdir, drone_scale):
+@click.option('-b', '--bands', default=3, type=click.Choice(['3', '4']),
+              callback=lambda c, p, v: int(v),
+              help='3 = RGB chips from *rgb.tif (default); 4 = RGB+NIR chips '
+                   'from *4band.tif, written as a 4-band uint16 GeoTIFF plus '
+                   'an RGB QA PNG.')
+def main(labelfiles, dronedir, planetdir, outputdir, timewindow, resize, filterdir, mode, maskdir, drone_scale, bands):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-    planetfiles = list(Path(planetdir).rglob('*_4band.tif'))
+    planet_glob = '*4band.tif' if bands == 4 else '*rgb.tif'
+    planetfiles = list(Path(planetdir).rglob(planet_glob))
     planetfiles = filter_files(planetfiles, filterdir)
 
     planet_df = pd.DataFrame({
@@ -533,7 +556,7 @@ def main(labelfiles, dronedir, planetdir, outputdir, timewindow, resize, filterd
     for labelfile in tqdm(labelfiles):
         records = process_label(
             dronedir, labelfile, planet_df, planetdir,
-            outputdir, timewindow, resize, mode, maskdir, drone_scale,
+            outputdir, timewindow, resize, mode, maskdir, drone_scale, bands,
         )
         all_records.extend(records)
 
