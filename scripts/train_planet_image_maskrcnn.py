@@ -500,15 +500,20 @@ class OCMMaskRCNN(MaskRCNN):
 
 
 def build_model(num_classes=2, nms_thresh=0.3, score_thresh=0.05,
-                detections_per_img=300, use_ocm_masks=False, bands=3):
+                detections_per_img=300, use_ocm_masks=False, bands=3,
+                nir_init='zero'):
     weights = MaskRCNN_ResNet50_FPN_V2_Weights.COCO_V1
     model = maskrcnn_resnet50_fpn_v2(weights=weights)
 
     if bands == 4:
         # Replace the backbone's first conv from 3->4 input channels. Copy
-        # the pretrained COCO weights into the RGB channels and zero-init the
-        # NIR channel, so the model starts equivalent to the pretrained
-        # 3-band model and learns the NIR contribution during training.
+        # the pretrained COCO weights into the RGB channels. The NIR channel
+        # is initialized per `nir_init`: 'zero' zero-inits it (the model
+        # starts equivalent to the pretrained 3-band model and learns the NIR
+        # contribution from scratch), while 'red'/'green'/'blue' duplicate
+        # that pretrained channel's filter into the NIR channel to give it a
+        # sensible non-zero starting response. The pretrained conv1 is
+        # RGB-ordered, hence the index map below.
         old_conv = model.backbone.body.conv1
         new_conv = torch.nn.Conv2d(
             4, old_conv.out_channels,
@@ -517,9 +522,14 @@ def build_model(num_classes=2, nms_thresh=0.3, score_thresh=0.05,
             padding=old_conv.padding,
             bias=(old_conv.bias is not None),
         )
+        _RGB_IDX = {'red': 0, 'green': 1, 'blue': 2}
         with torch.no_grad():
             new_conv.weight[:, :3, :, :] = old_conv.weight
-            new_conv.weight[:, 3:4, :, :] = 0.0
+            if nir_init == 'zero':
+                new_conv.weight[:, 3:4, :, :] = 0.0
+            else:
+                src = _RGB_IDX[nir_init]
+                new_conv.weight[:, 3:4, :, :] = old_conv.weight[:, src:src + 1, :, :]
             if old_conv.bias is not None:
                 new_conv.bias.copy_(old_conv.bias)
         model.backbone.body.conv1 = new_conv
@@ -686,10 +696,16 @@ def evaluate(model, dataloader, device, iou_metric, map_metric,
 @click.option('--bands', default=3, type=click.Choice(['3', '4']),
               callback=lambda c, p, v: int(v),
               help='3 = RGB PNG chips (default), 4 = RGB+NIR GeoTIFF chips.')
+@click.option('--nir-init', default='zero',
+              type=click.Choice(['zero', 'red', 'green', 'blue']),
+              help='4-band only: how to initialize the NIR input channel of '
+                   "the first conv. 'zero' (default) zero-inits it; "
+                   "'red'/'green'/'blue' duplicate that pretrained channel's "
+                   'weights into the NIR filter.')
 @click.option('--wandb/--no-wandb', 'use_wandb', default=True)
 def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
          min_instance_size, nms_thresh, score_thresh, detections_per_img,
-         use_ocm_masks, bands, use_wandb):
+         use_ocm_masks, bands, nir_init, use_wandb):
 
     os.makedirs(outputdir, exist_ok=True)
 
@@ -704,6 +720,7 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
         'detections_per_img': detections_per_img,
         'use_ocm_masks': use_ocm_masks,
         'bands': bands,
+        'nir_init': nir_init,
     }
 
     run = None
@@ -740,7 +757,7 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
     model = build_model(
         num_classes=2, nms_thresh=nms_thresh, score_thresh=score_thresh,
         detections_per_img=detections_per_img,
-        use_ocm_masks=use_ocm_masks, bands=bands,
+        use_ocm_masks=use_ocm_masks, bands=bands, nir_init=nir_init,
     ).to(device)
     optimizer = optim.AdamW(model.parameters(), lr=lr)
 
