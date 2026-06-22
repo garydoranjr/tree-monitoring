@@ -458,10 +458,13 @@ def create_mask(dronedir, labelfile, planetfile, planetdir, outputdir, resize, m
     outputdir = Path(outputdir)
     outputdir.mkdir(parents=True, exist_ok=True)
     basename = Path(planetfile).stem
-    if basename.endswith('_4band'):
-        basename = basename[:-6]
-    elif basename.endswith('_rgb'):
-        basename = basename[:-4]
+    for suffix in ('_4band', '_rgb'):
+        if basename.endswith(suffix):
+            basename = basename[:-len(suffix)]
+            break
+    # Re-attach the band-mode suffix so 3-band (_rgb) and 4-band (_4band)
+    # outputs don't collide when written to the same directory.
+    basename = f"{basename}_{'4band' if bands == 4 else 'rgb'}"
 
     if bands == 4:
         # Write the 4-band uint16 GeoTIFF training chip (preserves CRS,
