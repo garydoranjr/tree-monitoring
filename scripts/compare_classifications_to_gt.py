@@ -271,7 +271,15 @@ def render_discrepancy_report(merged, geoms, drone_index, out_path,
     df["date_str"] = df["dt"].dt.strftime("%Y_%m_%d")
     df = df[df["date_str"].isin(drone_index)].copy()
     n_with_image = len(df)
-    df = df[df["uuid"].isin(geoms)].copy()
+    # Require an exact-date crown polygon (no per-uuid fallback).
+    df = df[
+        df.apply(
+            lambda r: r["date_str"] in geoms.get(r["uuid"], {}).get(
+                "by_date", {}
+            ),
+            axis=1,
+        )
+    ].copy()
     n_eligible = len(df)
 
     df = df.sort_values("discrepancy", ascending=False).head(n)
@@ -330,7 +338,7 @@ def render_discrepancy_report(merged, geoms, drone_index, out_path,
         f"target=<b>{_esc(target)}</b> &middot; "
         f"joined rows with valid GT/pred: {n_total:,} &middot; "
         f"with drone image: {n_with_image:,} &middot; "
-        f"with geometry (eligible): {n_eligible:,} &middot; "
+        f"with exact-date geometry (eligible): {n_eligible:,} &middot; "
         f"showing worst {len(cards):,}"
         + (f" ({n_failed} chips failed)" if n_failed else "")
     )
