@@ -153,7 +153,7 @@ def plot_roc_pr(curves, title, out_path, kind):
     ax.set_ylim(0, 1.02)
     fig.tight_layout()
     fig.savefig(out_path)
-    plt.close(fig)
+    return fig
 
 
 def plot_decid_continuous(df, out_path):
@@ -170,7 +170,7 @@ def plot_decid_continuous(df, out_path):
     ax.set_ylim(-0.02, 1.02)
     fig.tight_layout()
     fig.savefig(out_path)
-    plt.close(fig)
+    return fig
 
 
 def load_crown_geometries(gpkg_path):
@@ -233,8 +233,170 @@ def _chip_data_uri(tif_path, polygon, chip_size):
     return f"data:image/png;base64,{b64}"
 
 
+def _fig_to_uri(fig, dpi=110):
+    """Render a matplotlib figure to a base64 PNG data URI (does not close)."""
+    buf = BytesIO()
+    fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight")
+    b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+    return f"data:image/png;base64,{b64}"
+
+
 def _esc(value):
     return html.escape("" if value is None else str(value))
+
+
+def _confusion_html(m):
+    """Render a binary_metrics confusion matrix as a compact 2x2 HTML table."""
+    cm = m["confusion"]
+    return (
+        '<table class="cm"><tr><th></th><th>pred neg</th><th>pred pos</th></tr>'
+        f'<tr><th>true neg</th><td>{cm[0, 0]:d}</td><td>{cm[0, 1]:d}</td></tr>'
+        f'<tr><th>true pos</th><td>{cm[1, 0]:d}</td><td>{cm[1, 1]:d}</td></tr>'
+        "</table>"
+    )
+
+
+def _metrics_table_html(metrics_by_stratum):
+    """Render per-stratum binary_metrics dicts as one HTML table.
+
+    metrics_by_stratum maps a stratum name to a binary_metrics() result
+    (or None when class diversity was insufficient).
+    """
+    head = (
+        "<table><thead><tr>"
+        "<th>stratum</th><th>n</th><th>n_pos</th><th>n_neg</th>"
+        "<th>AUROC</th><th>AUPRC</th><th>confusion</th>"
+        "</tr></thead><tbody>"
+    )
+    rows = []
+    for name, m in metrics_by_stratum.items():
+        if m is None:
+            rows.append(
+                f'<tr><td>{_esc(name)}</td>'
+                '<td colspan="6"><i>insufficient class diversity</i></td></tr>'
+            )
+            continue
+        rows.append(
+            f"<tr><td>{_esc(name)}</td>"
+            f"<td>{m['n']:,}</td><td>{m['n_pos']:,}</td><td>{m['n_neg']:,}</td>"
+            f"<td>{m['auroc']:.3f}</td><td>{m['auprc']:.3f}</td>"
+            f"<td>{_confusion_html(m)}</td></tr>"
+        )
+    return head + "".join(rows) + "</tbody></table>"
+
+
+def _df_table_html(df, empty_msg="(none qualify)"):
+    """Render a DataFrame as an HTML table, or a placeholder if empty."""
+    if df is None or len(df) == 0:
+        return f"<p class='muted'>{_esc(empty_msg)}</p>"
+    return df.to_html(index=False, border=0, classes="df", float_format=
+                      lambda v: f"{v:.3f}")
+
+
+def render_summary_report(out_path, stats, plot_uris, link_targets,
+                          flower_threshold, decid_threshold,
+                          leafing_threshold, no_visualize):
+    """Write the single high-level summary HTML report.
+
+    stats is a dict of the captured statistics (join funnel, grouped
+    means, per-stratum metrics, sweep/per-species tables, continuous
+    correlation). plot_uris maps a plot key to a PNG data URI.
+    link_targets maps a label to a relative href for the linked HTML/CSV
+    artifacts.
+    """
+    f = stats["funnel"]
+    funnel = (
+        f"GT rows: {f['gt_rows']:,} (uuids {f['gt_uuids']:,}) &middot; "
+        f"uuid&rarr;tag mappings: {f['bridge']:,} &middot; "
+        f"prediction rows: {f['pred_rows']:,} (tags {f['pred_tags']:,}) "
+        f"&middot; after uuid&rarr;tag merge: {f['after_uuid']:,} &middot; "
+        f"after (tag,date) join: {f['after_join']:,}"
+    )
+
+    links_html = "".join(
+        f'<li><a href="{_esc(href)}">{_esc(label)}</a></li>'
+        for label, href in link_targets.items()
+    )
+    novis_note = (
+        '<p class="muted">Run with <code>--no-visualize</code>: the '
+        "discrepancy galleries were not regenerated this run and may be "
+        "absent or stale.</p>"
+        if no_visualize else ""
+    )
+
+    cont = stats["decid_continuous"]
+    cont_line = (
+        f"n={cont['n']:,} &middot; Pearson r={cont['r']:.3f} &middot; "
+        f"Spearman &rho;={cont['rho']:.3f}"
+    )
+
+    doc = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"/>
+<title>GT vs ML classifier &mdash; summary report</title>
+<style>
+  body {{ font-family: sans-serif; margin: 24px; max-width: 1100px;
+          color:#222; background:#fafafa; }}
+  h1 {{ font-size: 24px; }}
+  h2 {{ font-size: 19px; border-bottom:2px solid #ddd; padding-bottom:4px;
+        margin-top:32px; }}
+  h3 {{ font-size: 15px; margin-bottom:6px; }}
+  .funnel {{ color:#333; background:#fff; border:1px solid #ddd;
+             border-radius:6px; padding:10px 12px; }}
+  table {{ border-collapse:collapse; margin:6px 0 14px; font-size:13px; }}
+  th, td {{ border:1px solid #ddd; padding:4px 9px; text-align:right; }}
+  thead th, table.cm th {{ background:#f0f0f0; }}
+  td:first-child, th:first-child {{ text-align:left; }}
+  table.cm {{ display:inline-table; margin:0; font-size:11px; }}
+  table.cm td {{ text-align:right; }}
+  .plots {{ display:flex; flex-wrap:wrap; gap:18px; align-items:flex-start; }}
+  .plots img {{ border:1px solid #ddd; border-radius:4px; background:#fff;
+                max-width:420px; height:auto; }}
+  .muted {{ color:#888; font-style:italic; }}
+  code {{ background:#eee; padding:1px 4px; border-radius:3px; }}
+  ul.links li {{ margin:3px 0; }}
+</style></head><body>
+<h1>ML crown classifier vs ground truth &mdash; summary</h1>
+<div class="funnel">{funnel}</div>
+<p class="muted">Thresholds: flowering&ge;{flower_threshold},
+deciduous&ge;{decid_threshold}, GT-deciduous when
+leafing&lt;{leafing_threshold}.</p>
+
+<h2>Flowering</h2>
+<h3>Mean predicted flowering_probability by GT <code>isFlowering</code></h3>
+{stats['flower_groupby_html']}
+<h3>Binary metrics (threshold={flower_threshold})</h3>
+{_metrics_table_html(stats['flower_metrics'])}
+<h3>Per-species AUROC (segmentation==good, n_pos&ge;10)</h3>
+{_df_table_html(stats['flower_species'])}
+<div class="plots">
+  <img src="{plot_uris['flower_roc']}" alt="Flowering ROC"/>
+  <img src="{plot_uris['flower_pr']}" alt="Flowering PR"/>
+</div>
+
+<h2>Deciduous</h2>
+<h3>Binary metrics (leafing&lt;{leafing_threshold};
+threshold={decid_threshold})</h3>
+{_metrics_table_html(stats['decid_metrics'])}
+<h3>AUROC swept over leafing thresholds (segmentation==good)</h3>
+{_df_table_html(stats['decid_sweep'])}
+<h3>Continuous deciduous_probability vs 1&minus;leafing/100
+(segmentation==good)</h3>
+<p>{cont_line}</p>
+<h3>Per-species AUROC (segmentation==good, leafing&lt;{leafing_threshold},
+n_pos&ge;10)</h3>
+{_df_table_html(stats['decid_species'])}
+<div class="plots">
+  <img src="{plot_uris['decid_roc']}" alt="Deciduous ROC"/>
+  <img src="{plot_uris['decid_pr']}" alt="Deciduous PR"/>
+  <img src="{plot_uris['decid_continuous']}" alt="Deciduous continuous"/>
+</div>
+
+<h2>Detailed reports</h2>
+{novis_note}
+<ul class="links">{links_html}</ul>
+</body></html>"""
+    Path(out_path).write_text(doc)
+    print(f"Wrote summary report: {out_path}")
 
 
 def render_discrepancy_report(merged, geoms, drone_index, out_path,
@@ -410,6 +572,7 @@ def main(gt_csv, gpkg, nc4, output_dir, flower_threshold, decid_threshold,
          leafing_threshold, drone_dir, n_examples, chip_size, no_visualize):
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    plot_uris = {}
 
     print(f"Loading GT  : {gt_csv}")
     gt = load_gt(gt_csv)
@@ -458,12 +621,14 @@ def main(gt_csv, gpkg, nc4, output_dir, flower_threshold, decid_threshold,
     print(f"\nFlowering metrics (threshold={flower_threshold}):")
     flower_curves_roc = {}
     flower_curves_pr = {}
+    flower_metrics = {}
     for name, sub in strata.items():
         m = binary_metrics(
             sub["y"].to_numpy(),
             sub["flowering_probability"].to_numpy(),
             flower_threshold,
         )
+        flower_metrics[name] = m
         print(fmt_metrics(name, m))
         flower_curves_roc[name] = (
             sub["y"].to_numpy(), sub["flowering_probability"].to_numpy()
@@ -478,18 +643,22 @@ def main(gt_csv, gpkg, nc4, output_dir, flower_threshold, decid_threshold,
     )
     print(sp_tbl.to_string(index=False) if len(sp_tbl) else "  (none qualify)")
 
-    plot_roc_pr(
+    fig = plot_roc_pr(
         flower_curves_roc,
         "Flowering ROC",
         out_dir / "gt_vs_ml_flowering_roc.pdf",
         "roc",
     )
-    plot_roc_pr(
+    plot_uris["flower_roc"] = _fig_to_uri(fig)
+    plt.close(fig)
+    fig = plot_roc_pr(
         flower_curves_pr,
         "Flowering PR",
         out_dir / "gt_vs_ml_flowering_pr.pdf",
         "pr",
     )
+    plot_uris["flower_pr"] = _fig_to_uri(fig)
+    plt.close(fig)
 
     # ----- Deciduous -----
     print("\n=== Deciduous ===")
@@ -509,12 +678,14 @@ def main(gt_csv, gpkg, nc4, output_dir, flower_threshold, decid_threshold,
     )
     decid_curves_roc = {}
     decid_curves_pr = {}
+    decid_metrics = {}
     for name, sub in strata_d.items():
         m = binary_metrics(
             sub["y_leaf"].to_numpy(),
             sub["deciduous_probability"].to_numpy(),
             decid_threshold,
         )
+        decid_metrics[name] = m
         print(fmt_metrics(name, m))
         decid_curves_roc[name] = (
             sub["y_leaf"].to_numpy(),
@@ -536,7 +707,8 @@ def main(gt_csv, gpkg, nc4, output_dir, flower_threshold, decid_threshold,
             "n_pos": int(y.sum()),
             "auroc": roc_auc_score(y, good["deciduous_probability"]),
         })
-    print(pd.DataFrame(sweep_rows).to_string(index=False))
+    sweep_df = pd.DataFrame(sweep_rows)
+    print(sweep_df.to_string(index=False))
 
     cont = good.dropna(subset=["deciduous_probability"])
     cont_y = 1.0 - cont["leafing"].astype(float) / 100.0
@@ -556,19 +728,25 @@ def main(gt_csv, gpkg, nc4, output_dir, flower_threshold, decid_threshold,
     )
     print(sp_tbl_d.to_string(index=False) if len(sp_tbl_d) else "  (none qualify)")
 
-    plot_roc_pr(
+    fig = plot_roc_pr(
         decid_curves_roc,
         f"Deciduous ROC (leafing<{leafing_threshold})",
         out_dir / "gt_vs_ml_deciduous_roc.pdf",
         "roc",
     )
-    plot_roc_pr(
+    plot_uris["decid_roc"] = _fig_to_uri(fig)
+    plt.close(fig)
+    fig = plot_roc_pr(
         decid_curves_pr,
         f"Deciduous PR (leafing<{leafing_threshold})",
         out_dir / "gt_vs_ml_deciduous_pr.pdf",
         "pr",
     )
-    plot_decid_continuous(cont, out_dir / "gt_vs_ml_deciduous_continuous.pdf")
+    plot_uris["decid_pr"] = _fig_to_uri(fig)
+    plt.close(fig)
+    fig = plot_decid_continuous(cont, out_dir / "gt_vs_ml_deciduous_continuous.pdf")
+    plot_uris["decid_continuous"] = _fig_to_uri(fig)
+    plt.close(fig)
 
     print(f"\nPlots written to: {out_dir}/")
 
@@ -592,6 +770,47 @@ def main(gt_csv, gpkg, nc4, output_dir, flower_threshold, decid_threshold,
                 n_examples,
                 chip_size,
             )
+
+    # ----- Single summary report -----
+    print("\n=== Summary report ===")
+    stats = {
+        "funnel": {
+            "gt_rows": len(gt),
+            "gt_uuids": int(gt["uuid"].nunique()),
+            "bridge": len(bridge),
+            "pred_rows": len(preds),
+            "pred_tags": int(preds["tag"].nunique()),
+            "after_uuid": len(merged_uuid),
+            "after_join": len(merged),
+        },
+        "flower_groupby_html": grp.reset_index().to_html(
+            index=False, border=0, classes="df",
+            float_format=lambda v: f"{v:.3f}",
+        ),
+        "flower_metrics": flower_metrics,
+        "flower_species": sp_tbl,
+        "decid_metrics": decid_metrics,
+        "decid_sweep": sweep_df,
+        "decid_continuous": {"n": len(cont), "r": float(r), "rho": float(rho)},
+        "decid_species": sp_tbl_d,
+    }
+    link_targets = {
+        "Joined GT/prediction table (CSV)": "gt_vs_ml_joined.csv",
+        "Flowering discrepancy gallery (HTML)":
+            "gt_vs_ml_flowering_discrepancies.html",
+        "Deciduous discrepancy gallery (HTML)":
+            "gt_vs_ml_deciduous_discrepancies.html",
+    }
+    render_summary_report(
+        out_dir / "gt_vs_ml_report.html",
+        stats,
+        plot_uris,
+        link_targets,
+        flower_threshold,
+        decid_threshold,
+        leafing_threshold,
+        no_visualize,
+    )
 
 
 if __name__ == "__main__":
