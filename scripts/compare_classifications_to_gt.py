@@ -91,18 +91,32 @@ def load_predictions(nc4_path):
     return long
 
 
+def prf_from_confusion(cm):
+    """precision/recall/accuracy from a [[TN,FP],[FN,TP]] matrix."""
+    tn, fp, fn, tp = (
+        int(cm[0, 0]), int(cm[0, 1]), int(cm[1, 0]), int(cm[1, 1])
+    )
+    precision = tp / (tp + fp) if (tp + fp) else float("nan")
+    recall = tp / (tp + fn) if (tp + fn) else float("nan")
+    total = tn + fp + fn + tp
+    accuracy = (tp + tn) / total if total else float("nan")
+    return {"precision": precision, "recall": recall, "accuracy": accuracy}
+
+
 def binary_metrics(y_true, y_score, threshold):
-    """Return AUROC/AUPRC/confusion at threshold; (None,)*4 if degenerate."""
+    """Return AUROC/AUPRC/P/R/Acc/confusion at threshold; None if degenerate."""
     if len(y_true) == 0 or len(np.unique(y_true)) < 2:
         return None
     y_pred = (y_score >= threshold).astype(int)
+    cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
     return {
         "n": int(len(y_true)),
         "n_pos": int(y_true.sum()),
         "n_neg": int(len(y_true) - y_true.sum()),
         "auroc": float(roc_auc_score(y_true, y_score)),
         "auprc": float(average_precision_score(y_true, y_score)),
-        "confusion": confusion_matrix(y_true, y_pred, labels=[0, 1]),
+        **prf_from_confusion(cm),
+        "confusion": cm,
     }
 
 
@@ -112,14 +126,15 @@ def fmt_metrics(label, m):
     cm = m["confusion"]
     return (
         f"  {label}: n={m['n']} pos={m['n_pos']} neg={m['n_neg']} "
-        f"AUROC={m['auroc']:.3f} AUPRC={m['auprc']:.3f}\n"
+        f"AUROC={m['auroc']:.3f} AUPRC={m['auprc']:.3f} "
+        f"P={m['precision']:.3f} R={m['recall']:.3f} Acc={m['accuracy']:.3f}\n"
         f"    confusion (rows=true, cols=pred; labels=[neg,pos]):\n"
         f"      [[{cm[0,0]:>5d} {cm[0,1]:>5d}]\n"
         f"       [{cm[1,0]:>5d} {cm[1,1]:>5d}]]"
     )
 
 
-def per_species_table(df, score_col, target, min_pos=10):
+def per_species_table(df, score_col, target, threshold, min_pos=10):
     rows = []
     for sp, sub in df.groupby("latin"):
         y = target.loc[sub.index]
@@ -128,11 +143,17 @@ def per_species_table(df, score_col, target, min_pos=10):
         nneg = int(len(y) - npos)
         if npos < min_pos or nneg < min_pos:
             continue
+        y_pred = (s >= threshold).astype(int)
+        cm = confusion_matrix(y, y_pred, labels=[0, 1])
+        prf = prf_from_confusion(cm)
         rows.append({
             "latin": sp,
             "n": len(y),
             "n_pos": npos,
             "auroc": roc_auc_score(y, s),
+            "precision": prf["precision"],
+            "recall": prf["recall"],
+            "accuracy": prf["accuracy"],
         })
     out = pd.DataFrame(rows).sort_values("n", ascending=False)
     return out
@@ -276,7 +297,8 @@ def _metrics_table_html(metrics_by_stratum):
     head = (
         "<table><thead><tr>"
         "<th>stratum</th><th>n</th><th>n_pos</th><th>n_neg</th>"
-        "<th>AUROC</th><th>AUPRC</th><th>confusion</th>"
+        "<th>AUROC</th><th>AUPRC</th><th>P</th><th>R</th><th>Acc</th>"
+        "<th>confusion</th>"
         "</tr></thead><tbody>"
     )
     rows = []
@@ -284,13 +306,15 @@ def _metrics_table_html(metrics_by_stratum):
         if m is None:
             rows.append(
                 f'<tr><td>{_esc(name)}</td>'
-                '<td colspan="6"><i>insufficient class diversity</i></td></tr>'
+                '<td colspan="9"><i>insufficient class diversity</i></td></tr>'
             )
             continue
         rows.append(
             f"<tr><td>{_esc(name)}</td>"
             f"<td>{m['n']:,}</td><td>{m['n_pos']:,}</td><td>{m['n_neg']:,}</td>"
             f"<td>{m['auroc']:.3f}</td><td>{m['auprc']:.3f}</td>"
+            f"<td>{m['precision']:.3f}</td><td>{m['recall']:.3f}</td>"
+            f"<td>{m['accuracy']:.3f}</td>"
             f"<td>{_confusion_html(m)}</td></tr>"
         )
     return head + "".join(rows) + "</tbody></table>"
@@ -665,6 +689,7 @@ def main(gt_csv, gpkg, nc4, geo_folds, exclude_train, output_dir,
         strata["segmentation==good"],
         "flowering_probability",
         strata["segmentation==good"]["y"],
+        flower_threshold,
     )
     print(sp_tbl.to_string(index=False) if len(sp_tbl) else "  (none qualify)")
 
@@ -725,12 +750,18 @@ def main(gt_csv, gpkg, nc4, geo_folds, exclude_train, output_dir,
         y = (good["leafing"].astype(float) < thr).astype(int)
         if len(np.unique(y)) < 2:
             sweep_rows.append({"leafing<": thr, "n_pos": int(y.sum()),
-                               "auroc": float("nan")})
+                               "auroc": float("nan"), "precision": float("nan"),
+                               "recall": float("nan"), "accuracy": float("nan")})
             continue
+        y_pred = (good["deciduous_probability"] >= decid_threshold).astype(int)
+        prf = prf_from_confusion(confusion_matrix(y, y_pred, labels=[0, 1]))
         sweep_rows.append({
             "leafing<": thr,
             "n_pos": int(y.sum()),
             "auroc": roc_auc_score(y, good["deciduous_probability"]),
+            "precision": prf["precision"],
+            "recall": prf["recall"],
+            "accuracy": prf["accuracy"],
         })
     sweep_df = pd.DataFrame(sweep_rows)
     print(sweep_df.to_string(index=False))
@@ -750,6 +781,7 @@ def main(gt_csv, gpkg, nc4, geo_folds, exclude_train, output_dir,
         strata_d["segmentation==good"],
         "deciduous_probability",
         strata_d["segmentation==good"]["y_leaf"],
+        decid_threshold,
     )
     print(sp_tbl_d.to_string(index=False) if len(sp_tbl_d) else "  (none qualify)")
 
