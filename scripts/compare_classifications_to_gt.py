@@ -47,6 +47,9 @@ GPKG_DEFAULT = (
     "/Volumes/Earth03/flower/vicente_202509/flowering_dataset.gpkg"
 )
 NC4_DEFAULT = "/Volumes/Earth03/flower/results/crown_classifications.nc4"
+GEO_FOLDS_DEFAULT = (
+    "/Volumes/Earth03/flower/vicente_202509/geo_folds.csv"
+)
 
 
 def load_gt(path):
@@ -54,6 +57,14 @@ def load_gt(path):
     df["dt"] = pd.to_datetime(df["date"], format="%Y_%m_%d")
     df["uuid"] = df["polygon_id"].str.rsplit("_", n=1).str[0]
     return df
+
+
+def load_train_uuids(path):
+    """Return the set of crown uuids that appear in the train split."""
+    df = pd.read_csv(path)
+    train = df[df["split"] == "train"]
+    uuids = train["polygon_id"].str.rsplit("_", n=1).str[0]
+    return set(uuids.unique())
 
 
 def load_uuid_tag_map(gpkg_path):
@@ -540,6 +551,12 @@ def render_discrepancy_report(merged, geoms, drone_index, out_path,
 @click.option("--gt-csv", default=GT_CSV_DEFAULT, show_default=True)
 @click.option("--gpkg", default=GPKG_DEFAULT, show_default=True)
 @click.option("--nc4", default=NC4_DEFAULT, show_default=True)
+@click.option("--geo-folds", default=GEO_FOLDS_DEFAULT, show_default=True,
+              type=click.Path(dir_okay=False),
+              help="CSV with polygon_id,split train/test folds.")
+@click.option("--exclude-train", is_flag=True,
+              help="Drop GT labels for any crown (uuid) in the train split "
+                   "of --geo-folds, so metrics use held-out crowns only.")
 @click.option(
     "--output-dir",
     default="reports",
@@ -568,8 +585,9 @@ def render_discrepancy_report(merged, geoms, drone_index, out_path,
               help="Pixel size of each crown chip in the HTML report.")
 @click.option("--no-visualize", is_flag=True,
               help="Skip the discrepancy HTML reports (metrics only).")
-def main(gt_csv, gpkg, nc4, output_dir, flower_threshold, decid_threshold,
-         leafing_threshold, drone_dir, n_examples, chip_size, no_visualize):
+def main(gt_csv, gpkg, nc4, geo_folds, exclude_train, output_dir,
+         flower_threshold, decid_threshold, leafing_threshold, drone_dir,
+         n_examples, chip_size, no_visualize):
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     plot_uris = {}
@@ -577,6 +595,13 @@ def main(gt_csv, gpkg, nc4, output_dir, flower_threshold, decid_threshold,
     print(f"Loading GT  : {gt_csv}")
     gt = load_gt(gt_csv)
     print(f"  rows: {len(gt):,}  unique uuids: {gt['uuid'].nunique():,}")
+
+    if exclude_train:
+        train_uuids = load_train_uuids(geo_folds)
+        before = len(gt)
+        gt = gt[~gt["uuid"].isin(train_uuids)].copy()
+        print(f"  excluded train crowns: {len(train_uuids):,} uuids; "
+              f"GT rows {before:,} -> {len(gt):,}")
 
     print(f"Loading bridge: {gpkg}")
     bridge = load_uuid_tag_map(gpkg)
