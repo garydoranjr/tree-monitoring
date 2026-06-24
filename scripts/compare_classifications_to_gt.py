@@ -194,10 +194,13 @@ def fmt_metrics(label, m):
     if m is None:
         return f"  {label}: insufficient class diversity"
     cm = m["confusion"]
+    mis = int(cm[0, 1] + cm[1, 0])
+    mis_rate = mis / m["n"] if m["n"] else float("nan")
     return (
         f"  {label}: n={m['n']} pos={m['n_pos']} neg={m['n_neg']} "
         f"AUROC={m['auroc']:.3f} AUPRC={m['auprc']:.3f} "
-        f"P={m['precision']:.3f} R={m['recall']:.3f} Acc={m['accuracy']:.3f}\n"
+        f"P={m['precision']:.3f} R={m['recall']:.3f} Acc={m['accuracy']:.3f} "
+        f"Mismatch={mis} ({mis_rate:.1%})\n"
         f"    confusion (rows=true, cols=pred; labels=[neg,pos]):\n"
         f"      [[{cm[0,0]:>5d} {cm[0,1]:>5d}]\n"
         f"       [{cm[1,0]:>5d} {cm[1,1]:>5d}]]"
@@ -368,7 +371,7 @@ def _metrics_table_html(metrics_by_stratum):
         "<table><thead><tr>"
         "<th>stratum</th><th>n</th><th>n_pos</th><th>n_neg</th>"
         "<th>AUROC</th><th>AUPRC</th><th>P</th><th>R</th><th>Acc</th>"
-        "<th>confusion</th>"
+        "<th>mismatch</th><th>confusion</th>"
         "</tr></thead><tbody>"
     )
     rows = []
@@ -376,15 +379,19 @@ def _metrics_table_html(metrics_by_stratum):
         if m is None:
             rows.append(
                 f'<tr><td>{_esc(name)}</td>'
-                '<td colspan="9"><i>insufficient class diversity</i></td></tr>'
+                '<td colspan="10"><i>insufficient class diversity</i></td></tr>'
             )
             continue
+        cm = m["confusion"]
+        mis = int(cm[0, 1] + cm[1, 0])
+        mis_rate = mis / m["n"] if m["n"] else float("nan")
         rows.append(
             f"<tr><td>{_esc(name)}</td>"
             f"<td>{m['n']:,}</td><td>{m['n_pos']:,}</td><td>{m['n_neg']:,}</td>"
             f"<td>{m['auroc']:.3f}</td><td>{m['auprc']:.3f}</td>"
             f"<td>{m['precision']:.3f}</td><td>{m['recall']:.3f}</td>"
             f"<td>{m['accuracy']:.3f}</td>"
+            f"<td>{mis:,} ({mis_rate:.1%})</td>"
             f"<td>{_confusion_html(m)}</td></tr>"
         )
     return head + "".join(rows) + "</tbody></table>"
