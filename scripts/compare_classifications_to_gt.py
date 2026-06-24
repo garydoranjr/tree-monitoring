@@ -59,6 +59,76 @@ def load_gt(path):
     return df
 
 
+def _agg_flowering(s):
+    """Majority vote over {yes, no} for one crown-date, ignoring 'maybe'.
+
+    Returns "yes"/"no" on a clear majority, "maybe" when no yes/no vote
+    exists, or the sentinel "__tie__" when yes and no votes are equal and
+    nonzero (an unresolvable conflict to be dropped).
+    """
+    yes = int((s == "yes").sum())
+    no = int((s == "no").sum())
+    if yes == 0 and no == 0:
+        return "maybe"
+    if yes == no:
+        return "__tie__"
+    return "yes" if yes > no else "no"
+
+
+def _agg_segmentation(s):
+    """Majority-vote segmentation for one crown-date.
+
+    On a tie, prefer a non-'good' label so the headline segmentation=='good'
+    stratum stays conservative.
+    """
+    vc = s.value_counts()
+    top = list(vc[vc == vc.max()].index)
+    if len(top) == 1:
+        return top[0]
+    non_good = sorted(v for v in top if v != "good")
+    return non_good[0] if non_good else "good"
+
+
+def aggregate_gt_labels(gt):
+    """Collapse multiple GT labels for the same (uuid, date) into one row.
+
+    Multiple annotators sometimes label the same crown-date: observation_id
+    is unique per label, but polygon_id/globalId/latin are constant within a
+    crown-date. Without aggregation the inner join with predictions emits one
+    row per label (each paired with the *same* prediction), over-weighting
+    heavily-observed crown-dates and scoring conflicting labels against one
+    prediction. We aggregate to one row per (uuid, dt):
+
+      - isFlowering: majority vote over {yes, no} (see _agg_flowering); a
+        yes/no tie is unresolvable and that crown-date is dropped.
+      - leafing, floweringIntensity: mean (NaN-skipping).
+      - segmentation: majority vote (see _agg_segmentation).
+      - polygon_id, globalId, latin, date: first (constant within a crown-date).
+      - n_labels: how many GT observations were aggregated.
+
+    Returns (gt_agg, flower_conflicts), where flower_conflicts is the raw
+    label rows for the dropped yes/no-tie crown-dates (for the conflict report).
+    """
+    grouped = gt.groupby(["uuid", "dt"], sort=False)
+    agg = grouped.agg(
+        isFlowering=("isFlowering", _agg_flowering),
+        leafing=("leafing", "mean"),
+        floweringIntensity=("floweringIntensity", "mean"),
+        segmentation=("segmentation", _agg_segmentation),
+        polygon_id=("polygon_id", "first"),
+        globalId=("globalId", "first"),
+        latin=("latin", "first"),
+        date=("date", "first"),
+        n_labels=("isFlowering", "size"),
+    ).reset_index()
+
+    mask = agg["isFlowering"] == "__tie__"
+    conflict_keys = agg.loc[mask, ["uuid", "dt"]]
+    flower_conflicts = gt.merge(conflict_keys, on=["uuid", "dt"])
+    agg = agg[~mask].copy()
+    return agg, flower_conflicts
+
+
 def load_train_uuids(path):
     """Return the set of crown uuids that appear in the train split."""
     df = pd.read_csv(path)
@@ -341,7 +411,9 @@ def render_summary_report(out_path, stats, plot_uris, link_targets,
     """
     f = stats["funnel"]
     funnel = (
-        f"GT rows: {f['gt_rows']:,} (uuids {f['gt_uuids']:,}) &middot; "
+        f"GT rows: {f['gt_rows']:,} (uuids {f['gt_uuids']:,}; aggregated from "
+        f"{f['gt_rows_raw']:,} labels, {f['dropped_conflicts']} yes/no ties "
+        f"dropped) &middot; "
         f"uuid&rarr;tag mappings: {f['bridge']:,} &middot; "
         f"prediction rows: {f['pred_rows']:,} (tags {f['pred_tags']:,}) "
         f"&middot; after uuid&rarr;tag merge: {f['after_uuid']:,} &middot; "
@@ -571,6 +643,108 @@ def render_discrepancy_report(merged, geoms, drone_index, out_path,
     )
 
 
+def render_conflict_report(flower_conflicts, geoms, drone_index, out_path,
+                           chip_size):
+    """Write an HTML page of crown-dates dropped for a yes/no flowering tie.
+
+    flower_conflicts holds the raw GT label rows (multiple per crown-date) for
+    combos where the yes and no votes were equal and nonzero, so no majority
+    label could be assigned. Each card shows the crown chip and every
+    conflicting annotation (isFlowering, segmentation, observation_id).
+    """
+    by_crown = list(flower_conflicts.groupby(["uuid", "dt"], sort=False))
+    cards = []
+    n_failed = 0
+    n_no_image = 0
+    for (uuid, dt), sub in by_crown:
+        date_str = dt.strftime("%Y_%m_%d")
+        if date_str not in drone_index or uuid not in geoms:
+            n_no_image += 1
+            chip = '<div class="noimg">no drone image / geometry</div>'
+        else:
+            polygon, geom_src = get_geometry(geoms, uuid, date_str)
+            try:
+                uri = _chip_data_uri(drone_index[date_str], polygon, chip_size)
+                chip = (f'<img src="{uri}" width="{chip_size}" '
+                        f'height="{chip_size}"/>')
+            except Exception as exc:  # noqa: BLE001 - one bad chip mustn't abort
+                n_failed += 1
+                print(f"  chip failed for {uuid} {date_str}: {exc}",
+                      file=sys.stderr)
+                chip = '<div class="noimg">chip failed</div>'
+
+        opt_cols = [c for c in ("observation_id", "globalId") if c in sub.columns]
+        rows_html = "".join(
+            "<tr>"
+            f'<td><span class="seg seg-{("good" if r.get("segmentation")=="good" else "poor" if r.get("segmentation")=="bad" else "other")}">'
+            f'{_esc(r.get("isFlowering"))}</span></td>'
+            f'<td>{_esc(r.get("segmentation"))}</td>'
+            + "".join(f"<td>{_esc(r.get(c))}</td>" for c in opt_cols)
+            + "</tr>"
+            for _, r in sub.iterrows()
+        )
+        head = ("<tr><th>isFlowering</th><th>segmentation</th>"
+                + "".join(f"<th>{_esc(c)}</th>" for c in opt_cols) + "</tr>")
+        first = sub.iloc[0]
+        ids = (f'<div><span class="k">polygon_id:</span>'
+               f'<span class="v">{_esc(first.get("polygon_id"))}</span></div>'
+               f'<div><span class="k">latin:</span>'
+               f'<span class="v">{_esc(first.get("latin"))}</span></div>'
+               f'<div><span class="k">date:</span>'
+               f'<span class="v">{_esc(date_str)}</span></div>')
+        cards.append(f"""
+        <div class="card">
+          {chip}
+          <div class="meta">
+            <div class="disc">{len(sub)} conflicting labels</div>
+            <table class="votes"><thead>{head}</thead><tbody>{rows_html}</tbody></table>
+            <div class="ids">{ids}</div>
+          </div>
+        </div>""")
+
+    summary = (
+        f"Crown-dates dropped from flowering metrics because their yes/no "
+        f"annotator votes were tied: <b>{len(by_crown):,}</b>"
+        + (f" &middot; {n_no_image} without drone image/geometry" if n_no_image else "")
+        + (f" &middot; {n_failed} chips failed" if n_failed else "")
+    )
+    doc = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"/>
+<title>GT flowering label conflicts</title>
+<style>
+  body {{ font-family: sans-serif; margin: 16px; background:#fafafa; }}
+  h1 {{ font-size: 20px; }}
+  .summary {{ color:#333; margin-bottom:16px; }}
+  .grid {{ display:flex; flex-wrap:wrap; gap:14px; }}
+  .card {{ background:#fff; border:1px solid #ddd; border-radius:6px;
+           padding:8px; width:{chip_size + 18}px; box-shadow:0 1px 2px #0001; }}
+  .card img {{ display:block; border-radius:4px; }}
+  .noimg {{ width:{chip_size}px; height:{chip_size}px; display:flex;
+            align-items:center; justify-content:center; background:#eee;
+            color:#888; border-radius:4px; font-size:12px; text-align:center; }}
+  .meta {{ font-size:12px; margin-top:6px; }}
+  .disc {{ font-weight:bold; font-size:14px; color:#b00; margin-bottom:4px; }}
+  table.votes {{ border-collapse:collapse; font-size:11px; margin-bottom:6px; }}
+  table.votes th, table.votes td {{ border:1px solid #ddd; padding:2px 5px;
+                                    text-align:left; }}
+  .seg {{ padding:1px 5px; border-radius:3px; font-weight:bold; }}
+  .seg-good {{ background:#d6f5d6; color:#0a0; }}
+  .seg-poor {{ background:#fdd; color:#a00; }}
+  .seg-other {{ background:#eee; color:#555; }}
+  .ids {{ font-family:monospace; font-size:11px; background:#f4f4f4;
+          border:1px solid #eee; border-radius:4px; padding:6px;
+          user-select:all; }}
+  .ids .k {{ color:#666; }}
+  .ids .v {{ color:#000; margin-left:4px; }}
+</style></head><body>
+<h1>Dropped flowering label conflicts (yes/no ties)</h1>
+<div class="summary">{summary}</div>
+<div class="grid">{''.join(cards)}</div>
+</body></html>"""
+    Path(out_path).write_text(doc)
+    print(f"Wrote {out_path}  (conflicts={len(by_crown):,})")
+
+
 @click.command()
 @click.option("--gt-csv", default=GT_CSV_DEFAULT, show_default=True)
 @click.option("--gpkg", default=GPKG_DEFAULT, show_default=True)
@@ -626,6 +800,12 @@ def main(gt_csv, gpkg, nc4, geo_folds, exclude_train, output_dir,
         gt = gt[~gt["uuid"].isin(train_uuids)].copy()
         print(f"  excluded train crowns: {len(train_uuids):,} uuids; "
               f"GT rows {before:,} -> {len(gt):,}")
+
+    gt_rows_raw = len(gt)
+    gt, flower_conflicts = aggregate_gt_labels(gt)
+    n_conf = flower_conflicts.groupby(["uuid", "dt"]).ngroups
+    print(f"  aggregated to one row per (crown,date): {gt_rows_raw:,} -> "
+          f"{len(gt):,} rows; dropped {n_conf} flowering yes/no ties")
 
     print(f"Loading bridge: {gpkg}")
     bridge = load_uuid_tag_map(gpkg)
@@ -828,11 +1008,21 @@ def main(gt_csv, gpkg, nc4, geo_folds, exclude_train, output_dir,
                 chip_size,
             )
 
+        render_conflict_report(
+            flower_conflicts,
+            geoms,
+            drone_index,
+            out_dir / "gt_vs_ml_flowering_conflicts.html",
+            chip_size,
+        )
+
     # ----- Single summary report -----
     print("\n=== Summary report ===")
     stats = {
         "funnel": {
             "gt_rows": len(gt),
+            "gt_rows_raw": gt_rows_raw,
+            "dropped_conflicts": int(n_conf),
             "gt_uuids": int(gt["uuid"].nunique()),
             "bridge": len(bridge),
             "pred_rows": len(preds),
@@ -857,6 +1047,8 @@ def main(gt_csv, gpkg, nc4, geo_folds, exclude_train, output_dir,
             "gt_vs_ml_flowering_discrepancies.html",
         "Deciduous discrepancy gallery (HTML)":
             "gt_vs_ml_deciduous_discrepancies.html",
+        "Dropped flowering label conflicts (HTML)":
+            "gt_vs_ml_flowering_conflicts.html",
     }
     render_summary_report(
         out_dir / "gt_vs_ml_report.html",
