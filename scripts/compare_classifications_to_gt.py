@@ -545,6 +545,24 @@ def render_discrepancy_report(merged, geoms, drone_index, out_path,
     df["discrepancy"] = (df["pred"] - df["gt_value"]).abs()
 
     df["date_str"] = df["dt"].dt.strftime("%Y_%m_%d")
+
+    # Companion CSV: polygon IDs (and identifiers) for *every* row ranked by
+    # discrepancy — the full set with a computable discrepancy, including
+    # crowns lacking a drone image or geometry that the gallery below omits.
+    opt_cols = [c for c in ("observation_id", "globalId") if c in df.columns]
+    csv_cols = [
+        c for c in (
+            ["polygon_id", "uuid", "tag"] + opt_cols
+            + ["date_str", "discrepancy", "pred", "gt_value", "gt_display",
+               "segmentation", "latin", "species_pred"]
+        ) if c in df.columns
+    ]
+    csv_path = Path(out_path).with_suffix(".csv")
+    (df.sort_values("discrepancy", ascending=False)[csv_cols]
+       .rename(columns={"date_str": "date"})
+       .to_csv(csv_path, index=False))
+    print(f"Wrote {csv_path}  ({len(df):,} rows)")
+
     df = df[df["date_str"].isin(drone_index)].copy()
     n_with_image = len(df)
     # A crown is hand-segmented on only ~5 dates but is GT-labelled and
@@ -556,8 +574,6 @@ def render_discrepancy_report(merged, geoms, drone_index, out_path,
     n_eligible = len(df)
 
     df = df.sort_values("discrepancy", ascending=False).head(n)
-
-    opt_cols = [c for c in ("observation_id", "globalId") if c in df.columns]
 
     cards = []
     n_failed = 0
