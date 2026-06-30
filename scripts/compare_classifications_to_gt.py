@@ -529,6 +529,7 @@ def render_discrepancy_report(merged, geoms, drone_index, out_path,
         df["pred"] = df["flowering_probability"]
         df["gt_display"] = df["isFlowering"]
         gt_label = "isFlowering"
+        pos_label, neg_label = "yes", "no"
     else:
         df = df.dropna(subset=["leafing"]).copy()
         df["gt_value"] = 1.0 - df["leafing"].astype(float) / 100.0
@@ -539,6 +540,7 @@ def render_discrepancy_report(merged, geoms, drone_index, out_path,
             axis=1,
         )
         gt_label = "leafing -> deciduous"
+        pos_label, neg_label = "deciduous", "leafy"
 
     df = df.dropna(subset=["pred"]).copy()
     n_total = len(df)
@@ -574,6 +576,13 @@ def render_discrepancy_report(merged, geoms, drone_index, out_path,
     n_eligible = len(df)
 
     df = df.sort_values("discrepancy", ascending=False).head(n)
+
+    def _cls_chip(value):
+        """Colored chip for the binary class of a 0-1 value at threshold 0.5."""
+        is_pos = value >= 0.5
+        name = pos_label if is_pos else neg_label
+        kind = "pos" if is_pos else "neg"
+        return f'<span class="cls cls-{kind}">{name}</span>'
 
     cards = []
     n_failed = 0
@@ -612,8 +621,10 @@ def render_discrepancy_report(merged, geoms, drone_index, out_path,
           <div class="meta">
             <div class="disc">discrepancy = {row['discrepancy']:.3f}</div>
             <div class="vals">
-              GT ({_esc(gt_label)}): <b>{_esc(row['gt_display'])}</b><br/>
-              predicted prob: <b>{row['pred']:.3f}</b><br/>
+              GT ({_esc(gt_label)}): <b>{_esc(row['gt_display'])}</b>
+                {_cls_chip(row['gt_value'])}<br/>
+              predicted prob: <b>{row['pred']:.3f}</b>
+                {_cls_chip(row['pred'])}<br/>
               species (pred): {_esc(row.get('species_pred'))}<br/>
               species (GT): {_esc(row.get('latin'))}<br/>
               segmentation:
@@ -654,6 +665,10 @@ def render_discrepancy_report(merged, geoms, drone_index, out_path,
   .seg-good {{ background:#d6f5d6; color:#0a0; }}
   .seg-poor {{ background:#fdd; color:#a00; }}
   .seg-other {{ background:#eee; color:#555; }}
+  .cls {{ padding:1px 5px; border-radius:3px; font-weight:bold;
+          font-size:11px; }}
+  .cls-pos {{ background:#d3f9d8; color:#2b8a3e; }}
+  .cls-neg {{ background:#ffe3e3; color:#c92a2a; }}
 </style></head><body>
 <h1>Largest GT-vs-classification discrepancies &mdash; {_esc(target)}</h1>
 <div class="summary">{summary}</div>
