@@ -548,9 +548,10 @@ def render_discrepancy_report(merged, geoms, drone_index, out_path,
 
     df["date_str"] = df["dt"].dt.strftime("%Y_%m_%d")
 
-    # Companion CSV: polygon IDs (and identifiers) for *every* row ranked by
-    # discrepancy — the full set with a computable discrepancy, including
-    # crowns lacking a drone image or geometry that the gallery below omits.
+    # Companion CSV: polygon IDs (and identifiers) for the crown-dates whose
+    # predicted class disagrees with GT (binary classes differ at threshold
+    # 0.5 — i.e. a label mismatch), ranked by discrepancy. Includes crowns
+    # lacking a drone image or geometry that the gallery below omits.
     opt_cols = [c for c in ("observation_id", "globalId") if c in df.columns]
     csv_cols = [
         c for c in (
@@ -559,11 +560,13 @@ def render_discrepancy_report(merged, geoms, drone_index, out_path,
                "segmentation", "latin", "species_pred"]
         ) if c in df.columns
     ]
+    mismatch = (df["gt_value"] >= 0.5) != (df["pred"] >= 0.5)
+    csv_df = df[mismatch]
     csv_path = Path(out_path).with_suffix(".csv")
-    (df.sort_values("discrepancy", ascending=False)[csv_cols]
+    (csv_df.sort_values("discrepancy", ascending=False)[csv_cols]
        .rename(columns={"date_str": "date"})
        .to_csv(csv_path, index=False))
-    print(f"Wrote {csv_path}  ({len(df):,} rows)")
+    print(f"Wrote {csv_path}  ({len(csv_df):,} mismatches of {len(df):,} rows)")
 
     df = df[df["date_str"].isin(drone_index)].copy()
     n_with_image = len(df)
