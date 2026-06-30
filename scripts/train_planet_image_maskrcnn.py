@@ -83,6 +83,81 @@ def get_split(img, mask, split, size, *extra):
     return (img_crop, mask_crop, *extra_crops)
 
 
+# Channel "kind" -> source band index in a 4-band tif read as (H, W, 4),
+# whose band order is (Blue, Green, Red, NIR) per apply_drone_labels_coreg.py.
+_KIND_SOURCE_IDX = {'blue': 0, 'green': 1, 'red': 2, 'ir': 3}
+
+# Per-kind ImageNet-style normalization (mean, std). The color kinds use the
+# standard torchvision stats; 'ir' reuses the red-channel stats. 'ndvi' is
+# normalized with dataset-derived stats computed at training time, so it is
+# absent here.
+_KIND_NORM = {
+    'red': (0.485, 0.229),
+    'green': (0.456, 0.224),
+    'blue': (0.406, 0.225),
+    'ir': (0.485, 0.229),
+}
+
+
+def resolve_channels(fourth_band, replace):
+    """Resolve the (--fourth-band, --replace) flags into an ordered list of
+    per-channel "kinds" describing the model input, built from the 4-band tif.
+
+    The three color positions are in true RGB order so the input aligns with
+    the pretrained conv1. With ``replace == 'none'`` the fourth band (NIR or
+    NDVI) is appended as a real 4th channel; otherwise it substitutes the
+    named color channel and the input stays 3-channel.
+    """
+    if fourth_band == 'none':
+        if replace != 'none':
+            raise ValueError(
+                "--replace requires --fourth-band to be 'ir' or 'ndvi'; there "
+                "is nothing to substitute when --fourth-band is 'none'."
+            )
+        return ['red', 'green', 'blue']
+    fourth_kind = 'ir' if fourth_band == 'ir' else 'ndvi'
+    kinds = ['red', 'green', 'blue']
+    if replace == 'none':
+        kinds.append(fourth_kind)
+    else:
+        kinds[{'r': 0, 'g': 1, 'b': 2}[replace]] = fourth_kind
+    return kinds
+
+
+def _compute_ndvi(arr):
+    """NDVI = (NIR - Red) / (NIR + Red) from a (H, W, 4) (B, G, R, NIR) array,
+    with a zero-denominator guard. Returns raw values in [-1, 1]."""
+    red = arr[..., _KIND_SOURCE_IDX['red']]
+    nir = arr[..., _KIND_SOURCE_IDX['ir']]
+    denom = nir + red
+    denom = np.where(denom == 0, 1e-9, denom)
+    return (nir - red) / denom
+
+
+def compute_ndvi_stats(img_files, split, size):
+    """Mean/std of raw NDVI over the train-split crop of every chip, used to
+    normalize the NDVI channel. Single pass; returns (mean, std)."""
+    total = 0.0
+    total_sq = 0.0
+    count = 0
+    for path in img_files:
+        with rasterio.open(path) as src:
+            data = src.read()
+        arr = data.transpose(1, 2, 0).astype(np.float32)
+        ndvi = _compute_ndvi(arr)
+        h, w = ndvi.shape[:2]
+        r0, r1, c0, c1 = _split_window(h, w, split, size)
+        crop = ndvi[r0:r1, c0:c1]
+        total += float(crop.sum())
+        total_sq += float(np.square(crop).sum())
+        count += crop.size
+    if count == 0:
+        raise ValueError("No chips found to compute NDVI statistics")
+    mean = total / count
+    var = max(total_sq / count - mean * mean, 1e-12)
+    return mean, float(np.sqrt(var))
+
+
 def binary_mask_to_instances(bin_mask, min_instance_size=4):
     """Convert a 2D binary mask to a (N, H, W) uint8 stack of per-instance
     masks. Drops instances smaller than min_instance_size pixels and any
@@ -223,16 +298,15 @@ def _load_clear_mask(img_path, expected_shape):
 class PlanetMaskRCNNDataset(Dataset):
 
     def __init__(self, img_dir, split, size=512, color_jitter=False,
-                 min_instance_size=4, use_ocm_masks=False, bands=3):
-        if bands not in (3, 4):
-            raise ValueError(f"bands must be 3 or 4, got {bands}")
-        self.bands = bands
+                 min_instance_size=4, use_ocm_masks=False,
+                 channel_kinds=('red', 'green', 'blue')):
+        self.channel_kinds = list(channel_kinds)
         self.mask_files = sorted(glob.glob(os.path.join(img_dir, "*.mask.png")))
-        # 3-band chips are RGB PNGs; 4-band chips are uint16 GeoTIFFs
-        # (Blue, Green, Red, NIR) produced by apply_drone_labels_coreg.py.
-        img_ext = '.tif' if bands == 4 else '.png'
+        # All chips are uint16 GeoTIFFs with band order (Blue, Green, Red, NIR)
+        # produced by apply_drone_labels_coreg.py; the model input channels are
+        # assembled from them per `channel_kinds`.
         self.img_files = [
-            mf.replace('.mask.png', img_ext) for mf in self.mask_files
+            mf.replace('.mask.png', '.tif') for mf in self.mask_files
         ]
         self.split = split
         self.size = size
@@ -241,7 +315,6 @@ class PlanetMaskRCNNDataset(Dataset):
         self.jitter = (
             T.ColorJitter(brightness=0.2, contrast=0.2) if color_jitter else None
         )
-        self.to_tensor = T.ToTensor()
 
     def __len__(self):
         return len(self.img_files)
@@ -261,20 +334,57 @@ class PlanetMaskRCNNDataset(Dataset):
             )
         return target
 
-    def __getitem__(self, idx):
-        if self.bands == 4:
-            # 4-band uint16 GeoTIFF (Blue, Green, Red, NIR); per-band
-            # percentile stretch to [0, 1] (mirrors the SegFormer-4b loader).
-            with rasterio.open(self.img_files[idx]) as src:
-                data = src.read()  # (4, H, W) uint16
-            img = data.transpose(1, 2, 0).astype(np.float32)
-            for b in range(img.shape[2]):
-                p_low, p_high = np.percentile(img[..., b], (0, 99.9))
-                img[..., b] = np.clip(
-                    (img[..., b] - p_low) / (p_high - p_low + 1e-8), 0, 1
-                )
+    def _jitter_one(self, ch):
+        """Jitter a single [0,1] channel by replicating it to 3 channels,
+        applying ColorJitter, and taking the first channel back (ColorJitter
+        only accepts 3-channel images)."""
+        g = (ch * 255).astype(np.uint8)
+        g3 = np.stack([g, g, g], axis=-1)
+        out = np.array(self.jitter(Image.fromarray(g3)))[..., 0]
+        return out.astype(np.float32) / 255.0
+
+    def _apply_jitter(self, img_crop):
+        """ColorJitter the stretched ([0,1]) channels. The three color/IR
+        channels are jittered jointly as an RGB image when none of the first
+        three is NDVI; otherwise each stretched channel is jittered on its
+        own. An appended IR channel (position 3) is jittered as a single
+        channel. The raw NDVI channel is left untouched (it is outside the
+        uint8 ColorJitter domain)."""
+        img_crop = img_crop.copy()
+        kinds = self.channel_kinds
+        if 'ndvi' not in kinds[:3]:
+            rgb = (img_crop[..., :3] * 255).astype(np.uint8)
+            img_crop[..., :3] = (
+                np.array(self.jitter(Image.fromarray(rgb))).astype(np.float32)
+                / 255.0
+            )
         else:
-            img = np.array(Image.open(self.img_files[idx]))[..., :3]
+            for i in range(3):
+                if kinds[i] != 'ndvi':
+                    img_crop[..., i] = self._jitter_one(img_crop[..., i])
+        if len(kinds) == 4 and kinds[3] != 'ndvi':
+            img_crop[..., 3] = self._jitter_one(img_crop[..., 3])
+        return img_crop
+
+    def __getitem__(self, idx):
+        # Read the 4-band tif (Blue, Green, Red, NIR) and assemble the model
+        # input channels per self.channel_kinds. Color/IR channels get a
+        # per-band 0-99.9 percentile stretch to [0, 1]; the NDVI channel is
+        # left raw in [-1, 1] (it is normalized later with dataset stats).
+        with rasterio.open(self.img_files[idx]) as src:
+            data = src.read()  # (4, H, W) uint16
+        arr = data.transpose(1, 2, 0).astype(np.float32)
+        ndvi = _compute_ndvi(arr) if 'ndvi' in self.channel_kinds else None
+        channels = []
+        for kind in self.channel_kinds:
+            if kind == 'ndvi':
+                channels.append(ndvi)
+            else:
+                band = arr[..., _KIND_SOURCE_IDX[kind]]
+                p_low, p_high = np.percentile(band, (0, 99.9))
+                band = np.clip((band - p_low) / (p_high - p_low + 1e-8), 0, 1)
+                channels.append(band)
+        img = np.stack(channels, axis=-1).astype(np.float32)  # (H, W, C)
         mask = np.array(Image.open(self.mask_files[idx]))
         mask = (mask == 255).astype(np.uint8)
 
@@ -291,28 +401,11 @@ class PlanetMaskRCNNDataset(Dataset):
             mask_crop, min_instance_size=self.min_instance_size,
         )
 
-        if self.bands == 4:
-            # Channel-aware jitter: apply the same transform to an RGB view
-            # and an (NIR, G, B) view, then recombine so NIR is jittered
-            # consistently (ColorJitter only accepts 3-channel images).
-            if self.jitter is not None:
-                rgb = (img_crop[..., :3] * 255).astype(np.uint8)
-                irgb = (img_crop[..., [3, 1, 2]] * 255).astype(np.uint8)
-                rgb = np.array(
-                    self.jitter(Image.fromarray(rgb))
-                ).astype(np.float32) / 255.0
-                ir = np.array(
-                    self.jitter(Image.fromarray(irgb))
-                )[..., 0:1].astype(np.float32) / 255.0
-                img_crop = np.concatenate([rgb, ir], axis=-1)
-            img_tensor = torch.from_numpy(
-                img_crop.transpose(2, 0, 1).copy()
-            ).float()  # (4, H, W) float32 in [0,1]
-        else:
-            img_pil = Image.fromarray(img_crop)
-            if self.jitter is not None:
-                img_pil = self.jitter(img_pil)
-            img_tensor = self.to_tensor(img_pil)  # (3, H, W) float32 in [0,1]
+        if self.jitter is not None:
+            img_crop = self._apply_jitter(img_crop)
+        img_tensor = torch.from_numpy(
+            img_crop.transpose(2, 0, 1).copy()
+        ).float()  # (C, H, W) float32
 
         if inst_masks.shape[0] == 0:
             return img_tensor, self._empty_target(idx, clear_crop)
@@ -500,20 +593,24 @@ class OCMMaskRCNN(MaskRCNN):
 
 
 def build_model(num_classes=2, nms_thresh=0.3, score_thresh=0.05,
-                detections_per_img=300, use_ocm_masks=False, bands=3,
-                nir_init='zero'):
+                detections_per_img=300, use_ocm_masks=False,
+                image_mean=None, image_std=None, nir_init='zero'):
+    if image_mean is None or image_std is None:
+        image_mean = [0.485, 0.456, 0.406]
+        image_std = [0.229, 0.224, 0.225]
+    n_input_channels = len(image_mean)
     weights = MaskRCNN_ResNet50_FPN_V2_Weights.COCO_V1
     model = maskrcnn_resnet50_fpn_v2(weights=weights)
 
-    if bands == 4:
-        # Replace the backbone's first conv from 3->4 input channels. Copy
-        # the pretrained COCO weights into the RGB channels. The NIR channel
-        # is initialized per `nir_init`: 'zero' zero-inits it (the model
-        # starts equivalent to the pretrained 3-band model and learns the NIR
-        # contribution from scratch), while 'red'/'green'/'blue' duplicate
-        # that pretrained channel's filter into the NIR channel to give it a
-        # sensible non-zero starting response. The pretrained conv1 is
-        # RGB-ordered, hence the index map below.
+    if n_input_channels == 4:
+        # Replace the backbone's first conv from 3->4 input channels. Copy the
+        # pretrained COCO weights into the RGB channels (the input is in true
+        # RGB order, matching the pretrained conv1). The appended 4th channel
+        # (NIR or NDVI) is initialized per `nir_init`: 'zero' zero-inits it
+        # (the model starts equivalent to the pretrained 3-band model and
+        # learns the 4th-band contribution from scratch), while
+        # 'red'/'green'/'blue' duplicate that pretrained channel's filter into
+        # the new channel to give it a sensible non-zero starting response.
         old_conv = model.backbone.body.conv1
         new_conv = torch.nn.Conv2d(
             4, old_conv.out_channels,
@@ -533,10 +630,11 @@ def build_model(num_classes=2, nms_thresh=0.3, score_thresh=0.05,
             if old_conv.bias is not None:
                 new_conv.bias.copy_(old_conv.bias)
         model.backbone.body.conv1 = new_conv
-        # The detection transform normalizes per channel and needs one
-        # value per band; reuse the red-channel stats for NIR.
-        model.transform.image_mean = [0.485, 0.456, 0.406, 0.485]
-        model.transform.image_std = [0.229, 0.224, 0.225, 0.229]
+
+    # The detection transform normalizes per channel and needs one value per
+    # input band; set both 3- and 4-channel cases from the resolved stats.
+    model.transform.image_mean = list(image_mean)
+    model.transform.image_std = list(image_std)
 
     anchor_sizes = ((8,), (16,), (32,), (64,), (128,))
     aspect_ratios = ((0.5, 1.0, 2.0),) * len(anchor_sizes)
@@ -693,21 +791,58 @@ def evaluate(model, dataloader, device, iou_metric, map_metric,
               help='Use OCM cloud-mask sidecars (.ocm.png) to ignore '
                    'anchors/proposals/predictions over cloudy pixels in '
                    'every loss term and in crown-level TP/FP/FN.')
-@click.option('--bands', default=3, type=click.Choice(['3', '4']),
-              callback=lambda c, p, v: int(v),
-              help='3 = RGB PNG chips (default), 4 = RGB+NIR GeoTIFF chips.')
+@click.option('--fourth-band', default='none',
+              type=click.Choice(['none', 'ir', 'ndvi']),
+              help='Extra channel derived from the 4-band GeoTIFF chips: '
+                   "'none' = RGB only (default), 'ir' = raw NIR, "
+                   "'ndvi' = NDVI computed from Red and NIR.")
+@click.option('--replace', default='none',
+              type=click.Choice(['none', 'r', 'g', 'b']),
+              help="What to do with the --fourth-band channel: 'none' "
+                   '(default) appends it as a real 4th channel (4-channel '
+                   "model); 'r'/'g'/'b' substitutes it in place of that color "
+                   'channel (stays a 3-channel model).')
 @click.option('--nir-init', default='zero',
               type=click.Choice(['zero', 'red', 'green', 'blue']),
-              help='4-band only: how to initialize the NIR input channel of '
-                   "the first conv. 'zero' (default) zero-inits it; "
-                   "'red'/'green'/'blue' duplicate that pretrained channel's "
-                   'weights into the NIR filter.')
+              help='Appended-4th-channel only: how to initialize the new input '
+                   "channel (NIR or NDVI) of the first conv. 'zero' (default) "
+                   "zero-inits it; 'red'/'green'/'blue' duplicate that "
+                   "pretrained channel's weights into the new filter.")
 @click.option('--wandb/--no-wandb', 'use_wandb', default=True)
 def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
          min_instance_size, nms_thresh, score_thresh, detections_per_img,
-         use_ocm_masks, bands, nir_init, use_wandb):
+         use_ocm_masks, fourth_band, replace, nir_init, use_wandb):
 
     os.makedirs(outputdir, exist_ok=True)
+
+    channel_kinds = resolve_channels(fourth_band, replace)
+    n_channels = len(channel_kinds)
+
+    # Per-channel normalization. NDVI is fed raw and normalized with stats
+    # derived from the training split; the other kinds use fixed stats.
+    ndvi_mean = ndvi_std = None
+    if 'ndvi' in channel_kinds:
+        mask_files = sorted(glob.glob(os.path.join(imagedir, "*.mask.png")))
+        train_img_files = [
+            mf.replace('.mask.png', '.tif') for mf in mask_files
+        ]
+        ndvi_mean, ndvi_std = compute_ndvi_stats(
+            train_img_files, 'left', size,
+        )
+        print(
+            f"Derived NDVI normalization from training split: "
+            f"mean={ndvi_mean:.4f} std={ndvi_std:.4f}"
+        )
+    image_mean = []
+    image_std = []
+    for kind in channel_kinds:
+        if kind == 'ndvi':
+            image_mean.append(ndvi_mean)
+            image_std.append(ndvi_std)
+        else:
+            m, s = _KIND_NORM[kind]
+            image_mean.append(m)
+            image_std.append(s)
 
     params = {
         'num_epochs': num_epochs,
@@ -719,7 +854,14 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
         'score_thresh': score_thresh,
         'detections_per_img': detections_per_img,
         'use_ocm_masks': use_ocm_masks,
-        'bands': bands,
+        'fourth_band': fourth_band,
+        'replace': replace,
+        'channel_kinds': channel_kinds,
+        'n_channels': n_channels,
+        'image_mean': image_mean,
+        'image_std': image_std,
+        'ndvi_mean': ndvi_mean,
+        'ndvi_std': ndvi_std,
         'nir_init': nir_init,
     }
 
@@ -739,12 +881,12 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
     train_dataset = PlanetMaskRCNNDataset(
         imagedir, split='left', size=size, color_jitter=True,
         min_instance_size=min_instance_size,
-        use_ocm_masks=use_ocm_masks, bands=bands,
+        use_ocm_masks=use_ocm_masks, channel_kinds=channel_kinds,
     )
     test_dataset = PlanetMaskRCNNDataset(
         imagedir, split='right', size=size, color_jitter=False,
         min_instance_size=min_instance_size,
-        use_ocm_masks=use_ocm_masks, bands=bands,
+        use_ocm_masks=use_ocm_masks, channel_kinds=channel_kinds,
     )
     train_loader = DataLoader(
         train_dataset, batch_size=batch_size, shuffle=True,
@@ -757,7 +899,8 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
     model = build_model(
         num_classes=2, nms_thresh=nms_thresh, score_thresh=score_thresh,
         detections_per_img=detections_per_img,
-        use_ocm_masks=use_ocm_masks, bands=bands, nir_init=nir_init,
+        use_ocm_masks=use_ocm_masks, image_mean=image_mean,
+        image_std=image_std, nir_init=nir_init,
     ).to(device)
     optimizer = optim.AdamW(model.parameters(), lr=lr)
 
