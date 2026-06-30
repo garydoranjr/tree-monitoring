@@ -2,6 +2,7 @@
 import os
 from glob import glob
 import click
+import rasterio
 from tqdm import tqdm
 from PIL import Image
 import numpy as np
@@ -15,33 +16,70 @@ from train_planet_image_maskrcnn import (
     OCMMaskRCNN,  # noqa: F401  -- needed for torch.load to unpickle ckpt
     _load_clear_mask,
     binary_mask_to_instances,
+    build_input_channels,
     get_split,
 )
 
 
 def load_image_and_gt(imagefile, split, size=512, min_instance_size=4,
-                      load_ocm_mask=False):
-    maskfile = imagefile.replace('.png', '.mask.png')
-    img = np.array(Image.open(imagefile))[..., :3]
+                      load_ocm_mask=False, channel_kinds=None):
+    """Load a chip's model input, ground-truth instances, and an RGB display
+    image for the requested split.
+
+    With `channel_kinds` (read from the checkpoint's params), the model input
+    is assembled from the 4-band GeoTIFF exactly as in training
+    (`build_input_channels`). When `channel_kinds is None` — legacy
+    checkpoints that predate the band flags — fall back to the original 3-band
+    PNG path so those models still deploy unchanged."""
+    if channel_kinds is None:
+        # Legacy: 3-band RGB PNG normalized by ToTensor (/255).
+        maskfile = imagefile.replace('.png', '.mask.png')
+        img = np.array(Image.open(imagefile))[..., :3]
+        mask = np.array(Image.open(maskfile))
+        mask = (mask == 255).astype(np.uint8)
+        if load_ocm_mask:
+            clear = _load_clear_mask(imagefile, mask.shape)
+            img_crop, mask_crop, clear_crop = get_split(
+                img, mask, split, size, clear,
+            )
+        else:
+            img_crop, mask_crop = get_split(img, mask, split, size)
+        inst_masks = binary_mask_to_instances(
+            mask_crop, min_instance_size=min_instance_size,
+        )
+        img_tensor = T.ToTensor()(Image.fromarray(img_crop))
+        if load_ocm_mask:
+            return img_crop, inst_masks, img_tensor, clear_crop
+        return img_crop, inst_masks, img_tensor
+
+    # Current: assemble the model input from the 4-band tif per channel_kinds.
+    base = imagefile[:-4] if imagefile.endswith('.png') else imagefile
+    tiffile = base + '.tif'
+    maskfile = base + '.mask.png'
+    with rasterio.open(tiffile) as src:
+        data = src.read()  # (4, H, W) uint16 (Blue, Green, Red, NIR)
+    arr = data.transpose(1, 2, 0).astype(np.float32)
     mask = np.array(Image.open(maskfile))
     mask = (mask == 255).astype(np.uint8)
 
+    img_model = build_input_channels(arr, channel_kinds)        # (H, W, C)
+    img_disp = build_input_channels(arr, ['red', 'green', 'blue'])  # RGB [0,1]
+
+    extras = [img_disp]
     if load_ocm_mask:
-        clear = _load_clear_mask(imagefile, mask.shape)
-        img_crop, mask_crop, clear_crop = get_split(
-            img, mask, split, size, clear,
-        )
-    else:
-        img_crop, mask_crop = get_split(img, mask, split, size)
+        extras.append(_load_clear_mask(tiffile, mask.shape))
+    crops = get_split(img_model, mask, split, size, *extras)
+    img_crop, mask_crop, disp_crop = crops[0], crops[1], crops[2]
+    clear_crop = crops[3] if load_ocm_mask else None
 
     inst_masks = binary_mask_to_instances(
         mask_crop, min_instance_size=min_instance_size,
     )
+    img_tensor = torch.from_numpy(img_crop.transpose(2, 0, 1).copy()).float()
 
-    img_tensor = T.ToTensor()(Image.fromarray(img_crop))
     if load_ocm_mask:
-        return img_crop, inst_masks, img_tensor, clear_crop
-    return img_crop, inst_masks, img_tensor
+        return disp_crop, inst_masks, img_tensor, clear_crop
+    return disp_crop, inst_masks, img_tensor
 
 
 def overlay_instances(ax, img, masks, boxes, scores=None, cmap_name='tab20',
@@ -123,6 +161,7 @@ def main(modelfile, imagedir, outputdir, score_thresh, mask_thresh, split,
     ckpt = torch.load(modelfile, map_location=device)
     model = ckpt['model']
     min_instance_size = ckpt['params']['min_instance_size']
+    channel_kinds = ckpt['params'].get('channel_kinds')
     model.eval()
     model.to(device)
 
@@ -140,6 +179,7 @@ def main(modelfile, imagedir, outputdir, score_thresh, mask_thresh, split,
         img_np, gt_masks, img_tensor = load_image_and_gt(
             imgfile, split=split, size=size,
             min_instance_size=min_instance_size,
+            channel_kinds=channel_kinds,
         )
 
         with torch.no_grad():

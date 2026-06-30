@@ -81,7 +81,7 @@ class InferenceWorker(threading.Thread):
 
     def __init__(self, model, device, cache, image_paths, split, size,
                  score_thresh, mask_thresh, iou_thresh, min_instance_size,
-                 use_ocm_masks=False):
+                 use_ocm_masks=False, channel_kinds=None):
         super().__init__(daemon=True)
         self.model = model
         self.device = device
@@ -94,6 +94,7 @@ class InferenceWorker(threading.Thread):
         self.iou_thresh = iou_thresh
         self.min_instance_size = min_instance_size
         self.use_ocm_masks = use_ocm_masks
+        self.channel_kinds = channel_kinds
 
         self._queue = queue.PriorityQueue()
         self._bump_counter = itertools.count(0, -1)
@@ -131,12 +132,13 @@ class InferenceWorker(threading.Thread):
             _, gt_masks, img_tensor, clear_crop = load_image_and_gt(
                 path, split=self.split, size=self.size,
                 min_instance_size=self.min_instance_size,
-                load_ocm_mask=True,
+                load_ocm_mask=True, channel_kinds=self.channel_kinds,
             )
         else:
             _, gt_masks, img_tensor = load_image_and_gt(
                 path, split=self.split, size=self.size,
                 min_instance_size=self.min_instance_size,
+                channel_kinds=self.channel_kinds,
             )
             clear_crop = None
 
@@ -413,7 +415,7 @@ def _serve_cropped(path, fracs):
 
 def make_app(image_paths, cache, worker, split, size, min_instance_size,
              coreg_info=None, drone_paths=None, ocm_paths=None,
-             crop_fracs=None):
+             crop_fracs=None, channel_kinds=None):
     app = Dash(__name__)
     app.index_string = _INDEX_HTML
 
@@ -605,6 +607,7 @@ def make_app(image_paths, cache, worker, split, size, min_instance_size,
         img, gt_masks, _ = load_image_and_gt(
             path, split=split, size=size,
             min_instance_size=min_instance_size,
+            channel_kinds=channel_kinds,
         )
 
         scene_q = urllib.parse.quote(scene, safe='')
@@ -779,6 +782,7 @@ def main(modelfile, imagedir, score_thresh, mask_thresh, split,
     model = ckpt['model']
     min_instance_size = ckpt['params']['min_instance_size']
     use_ocm_masks = ckpt['params'].get('use_ocm_masks', False)
+    channel_kinds = ckpt['params'].get('channel_kinds')
 
     cache = PredictionCache()
     worker = InferenceWorker(
@@ -786,7 +790,7 @@ def main(modelfile, imagedir, score_thresh, mask_thresh, split,
         image_paths=image_paths, split=split, size=size,
         score_thresh=score_thresh, mask_thresh=mask_thresh,
         iou_thresh=iou_thresh, min_instance_size=min_instance_size,
-        use_ocm_masks=use_ocm_masks,
+        use_ocm_masks=use_ocm_masks, channel_kinds=channel_kinds,
     )
     worker.start()
     atexit.register(worker.stop)
@@ -794,7 +798,8 @@ def main(modelfile, imagedir, score_thresh, mask_thresh, split,
     app = make_app(image_paths, cache, worker, split=split, size=size,
                    min_instance_size=min_instance_size,
                    coreg_info=coreg_info, drone_paths=drone_paths,
-                   ocm_paths=ocm_paths, crop_fracs=crop_fracs)
+                   ocm_paths=ocm_paths, crop_fracs=crop_fracs,
+                   channel_kinds=channel_kinds)
     print(f'Serving on http://{host}:{port} (device={device}, '
           f'{len(image_paths)} images, {len(drone_paths)} drone overlays, '
           f'{len(ocm_paths)} cloud masks, '

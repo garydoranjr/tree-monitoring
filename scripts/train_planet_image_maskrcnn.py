@@ -134,6 +134,25 @@ def _compute_ndvi(arr):
     return (nir - red) / denom
 
 
+def build_input_channels(arr, channel_kinds):
+    """Assemble the (H, W, C) model-input array from a (H, W, 4) (Blue, Green,
+    Red, NIR) float array per `channel_kinds`. Color/IR channels get a per-band
+    0-99.9 percentile stretch to [0, 1]; the NDVI channel is left raw in
+    [-1, 1] (it is normalized downstream with dataset stats). Shared by the
+    training dataset and the deploy scripts so the input recipe stays in sync."""
+    ndvi = _compute_ndvi(arr) if 'ndvi' in channel_kinds else None
+    channels = []
+    for kind in channel_kinds:
+        if kind == 'ndvi':
+            channels.append(ndvi)
+        else:
+            band = arr[..., _KIND_SOURCE_IDX[kind]]
+            p_low, p_high = np.percentile(band, (0, 99.9))
+            band = np.clip((band - p_low) / (p_high - p_low + 1e-8), 0, 1)
+            channels.append(band)
+    return np.stack(channels, axis=-1).astype(np.float32)
+
+
 def compute_ndvi_stats(img_files, split, size):
     """Mean/std of raw NDVI over the train-split crop of every chip, used to
     normalize the NDVI channel. Single pass; returns (mean, std)."""
@@ -374,17 +393,7 @@ class PlanetMaskRCNNDataset(Dataset):
         with rasterio.open(self.img_files[idx]) as src:
             data = src.read()  # (4, H, W) uint16
         arr = data.transpose(1, 2, 0).astype(np.float32)
-        ndvi = _compute_ndvi(arr) if 'ndvi' in self.channel_kinds else None
-        channels = []
-        for kind in self.channel_kinds:
-            if kind == 'ndvi':
-                channels.append(ndvi)
-            else:
-                band = arr[..., _KIND_SOURCE_IDX[kind]]
-                p_low, p_high = np.percentile(band, (0, 99.9))
-                band = np.clip((band - p_low) / (p_high - p_low + 1e-8), 0, 1)
-                channels.append(band)
-        img = np.stack(channels, axis=-1).astype(np.float32)  # (H, W, C)
+        img = build_input_channels(arr, self.channel_kinds)  # (H, W, C)
         mask = np.array(Image.open(self.mask_files[idx]))
         mask = (mask == 255).astype(np.uint8)
 
