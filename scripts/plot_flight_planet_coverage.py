@@ -48,6 +48,9 @@ DEFAULT_FLIGHTS_CSV = Path(
 DEFAULT_OUTPUT = Path(
     "/Volumes/Earth03/flower/whole_island/flight_planet_coverage.pdf"
 )
+DEFAULT_CSV_OUTPUT = Path(
+    "/Volumes/Earth03/flower/whole_island/flight_planet_coverage.csv"
+)
 
 COVERED_COLOR = "#2ca02c"       # green: flight covered by a clear Planet image
 UNCOVERED_COLOR = "#d62728"     # red: no clear Planet image in window
@@ -103,6 +106,7 @@ def build_flights(flights_csv: Path, planet_min: pd.Timestamp,
             "last": last,
             "win_start": first - window,
             "win_end": last + window,
+            "flight_id": (row.get("flightID") or "").strip(),
             "mission": (row.get("missionName") or "").strip(),
         })
     flights = pd.DataFrame(recs).sort_values("first").reset_index(drop=True)
@@ -247,11 +251,14 @@ def plot_panels(pdf, planet, flights, thresh_pct, window, window_days,
               default=DEFAULT_FLIGHTS_CSV, show_default=True)
 @click.option("--output", type=click.Path(path_type=Path, dir_okay=False),
               default=DEFAULT_OUTPUT, show_default=True)
+@click.option("--csv-output", type=click.Path(path_type=Path, dir_okay=False),
+              default=DEFAULT_CSV_OUTPUT, show_default=True,
+              help="Per-flight coverage table (one row per in-range flight).")
 @click.option("--threshold", type=float, default=0.25, show_default=True,
               help="Min fraction_clear (0-1) counted as a clear Planet image.")
 @click.option("--window-days", type=float, default=1.0, show_default=True,
               help="Days added to each side of the flight's acquisition span.")
-def main(clear_csv: Path, flights_csv: Path, output: Path,
+def main(clear_csv: Path, flights_csv: Path, output: Path, csv_output: Path,
          threshold: float, window_days: float) -> None:
     planet = pd.read_csv(clear_csv, parse_dates=["datetime_utc"])
     # Drop tz so Planet timestamps compare with tz-naive flight dates (day-level).
@@ -282,6 +289,20 @@ def main(clear_csv: Path, flights_csv: Path, output: Path,
             f"[{f['win_start'].date()}..{f['win_end'].date()}]  "
             f"max={mx_txt}  {'COVERED' if f['covered'] else 'not covered'}"
         )
+
+    # Per-flight coverage table (sorted by assessment, then flight date).
+    table = pd.DataFrame({
+        "flightID": flights["flight_id"],
+        "missionName": flights["mission"],
+        "first_date": flights["first"].dt.strftime("%Y-%m-%d"),
+        "last_date": flights["last"].dt.strftime("%Y-%m-%d"),
+        "assessment": np.where(flights["covered"], "covered", "not covered"),
+        "max_pct_clear_in_window": flights["max_pct_in_win"].round(1),
+    })
+    table = table.sort_values(["assessment", "first_date"]).reset_index(drop=True)
+    csv_output.parent.mkdir(parents=True, exist_ok=True)
+    table.to_csv(csv_output, index=False)
+    click.echo(f"wrote {csv_output}")
 
     output.parent.mkdir(parents=True, exist_ok=True)
     with PdfPages(output) as pdf:
