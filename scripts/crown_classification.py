@@ -1,5 +1,6 @@
 #Import libraries/modules
 import os
+import re
 import click
 import torch
 import rasterio
@@ -243,6 +244,18 @@ def main(modelfile, image_file, shapefile_path, output_dir):
     model.to('cpu')
 
     shp = gpd.read_file(shapefile_path)
+
+    # The shapefile is a timeseries with one row per crown per flight date.
+    # Each image is a single-date orthomosaic (BCI_ava_YYYY_MM_DD_orthomosaic.tif),
+    # so keep only the polygons whose date matches this image's date.
+    m = re.search(r'\d{4}_\d{2}_\d{2}', os.path.basename(image_file))
+    if m is None:
+        raise ValueError(
+            f"Could not parse a YYYY_MM_DD date from image filename: {image_file}"
+        )
+    date_token = m.group(0)
+    shp = shp[shp['date'].dt.strftime('%Y_%m_%d') == date_token]
+    print(f"Date {date_token}: {len(shp)} matching polygons")
 
     with rasterio.open(image_file) as src:
         for i, row in tqdm(shp.iterrows(), total=len(shp)):
