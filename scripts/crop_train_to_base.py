@@ -1,30 +1,29 @@
 #!/usr/bin/env python
-"""Crop margin-extent AVA training chips to the base plot grid, then pad to
-the 50ha footprint.
+"""Crop margin-extent AVA training chips to the plot extent, then pad to a
+square SegFormer tile.
 
 The AVA plot is too small to coregister directly (AROSICS ws=(200,200) needs
->=200 px, but the base AVA cutout is only ~82x117 px), so
-`apply_drone_labels_coreg.py` is run on the larger *margin* cutouts
-(~282x317 px). The drone crown labels, however, only cover the plot itself, so
-the 300 m margin around it is unlabelled forest that must not become training
-"background". This script therefore:
+>=200 px), so `apply_drone_labels_coreg.py` is run on the larger *margin*
+cutouts. The drone crown labels, however, only cover the plot itself, so the
+300 m margin around it is unlabelled forest that must not become training
+"background". The 4-band training pipeline
+(`scripts/train_planet_image_segformer_4b.py`) also consumes chips at 0.75 m
+(`--resize 4`) and, for AVA, whole 512x512 tiles. This script therefore:
 
-1. Crops each margin chip (and its paired `.mask.png` / QA PNGs) back to the
-   base AVA plot extent, using the paired base 4-band cutout as the target grid
-   (a pure integer-offset window read, no resampling -- the margin and base
-   cutouts are both `rasterio.mask` crops of the same source scene and share
-   one pixel grid).
-2. Center-pads the cropped chip up to the 50ha cutout footprint (367x205 px by
-   default) so that, once the SegFormer dataloader resizes every chip to
-   512x512, an AVA crown covers a comparable pixel count to a 50ha crown
-   (both are 3 m/px; only the footprint differs). The 4-band image is padded
-   with its nodata value and the mask with 0 (background) -- the pad region
-   genuinely contains no labelled crowns, and constant (not reflect) padding
-   avoids duplicating real crowns into the pad.
+1. Crops each margin chip (and its paired `.mask.png` / QA PNGs) to the fixed
+   AVA plot extent defined by `config/clip_ava_plot.yml`, using an
+   integer-offset window read (no resampling) against the chip's own transform.
+   At 0.75 m the plot is ~324x467 px. The plot bounds lie on the 3 m Planet
+   clip grid and hence on the 0.75 m grid, so the window is pixel-aligned.
+2. Center-pads the cropped chip up to a square tile (512x512 px by default) so
+   the training loader can consume it whole without a left/right split. The
+   4-band image is padded with its nodata value and the mask with 0
+   (background) -- the pad genuinely contains no labelled crowns, and constant
+   (not reflect) padding avoids duplicating real crowns into the pad.
 
 Typical usage:
     python scripts/crop_train_to_base.py
-    python scripts/crop_train_to_base.py --pad-to 367x205 --force
+    python scripts/crop_train_to_base.py --plot-config config/clip_ava_plot.yml --size 512
     python scripts/crop_train_to_base.py --no-pad
 """
 from __future__ import annotations
@@ -36,34 +35,41 @@ import click
 import numpy as np
 import imageio.v3 as iio
 import rasterio as rio
+import yaml
 from rasterio.windows import Window
 from tqdm import tqdm
 
 DEFAULT_MARGIN_DIR = Path("/Volumes/Earth03/flower/ava/train_margin")
-DEFAULT_BASE_DIR = Path("/Volumes/Earth03/flower/ava/planet/4band")
+DEFAULT_PLOT_CONFIG = Path("config/clip_ava_plot.yml")
 DEFAULT_OUTPUT_DIR = Path("/Volumes/Earth03/flower/ava/train")
 DEFAULT_GLOB = "*_4band.tif"
-DEFAULT_PAD = "367x205"
+DEFAULT_SIZE = 512
 
 # QA PNGs written alongside the chip by apply_drone_labels_coreg.py that should
-# be cropped (and, for the RGB previews, padded) to match the chip.
+# be cropped (and padded) to match the chip.
 PNG_SUFFIXES = (".mask.png", ".png", ".drone.png", ".ocm.png")
 
 
-def _base_cutout_for(margin_tif: Path, base_dir: Path) -> Path:
-    """Map <margin>/<prefix>_4band.tif -> <base>/<year>/<prefix>_4band.tif."""
-    name = margin_tif.name
-    year = name[:4]
-    return base_dir / year / name
+def _plot_bounds(plot_config: Path) -> tuple[float, float, float, float]:
+    """Read (xmin, ymin, xmax, ymax) from a clip config's polygon ring."""
+    with open(plot_config) as f:
+        cfg = yaml.safe_load(f)
+    ring = cfg["region"]["coordinates"][0]
+    xs = [pt[0] for pt in ring]
+    ys = [pt[1] for pt in ring]
+    return min(xs), min(ys), max(xs), max(ys)
 
 
-def _window_for(base, src) -> Window:
-    """Integer-offset window of the base extent within the margin (src) grid."""
+def _window_for_bounds(src, bounds: tuple[float, float, float, float]) -> Window:
+    """Integer-offset window of the geographic `bounds` within the src grid."""
+    xmin, ymin, xmax, ymax = bounds
     px = src.transform.a
     py = -src.transform.e
-    col_off = round((base.transform.c - src.transform.c) / px)
-    row_off = round((src.transform.f - base.transform.f) / py)
-    return Window(col_off, row_off, base.width, base.height)
+    col_off = round((xmin - src.transform.c) / px)
+    row_off = round((src.transform.f - ymax) / py)
+    width = round((xmax - xmin) / px)
+    height = round((ymax - ymin) / py)
+    return Window(col_off, row_off, width, height)
 
 
 def _pad_to(arr: np.ndarray, target_hw: tuple[int, int], value) -> tuple[np.ndarray, int, int]:
@@ -78,17 +84,16 @@ def _pad_to(arr: np.ndarray, target_hw: tuple[int, int], value) -> tuple[np.ndar
     return np.pad(arr, pad, mode="constant", constant_values=value), top, left
 
 
-def crop_one(margin_tif: Path, base_tif: Path, out_tif: Path,
-             pad_hw: tuple[int, int] | None) -> None:
-    with rio.open(base_tif) as base, rio.open(margin_tif) as src:
-        window = _window_for(base, src)
+def crop_one(margin_tif: Path, bounds: tuple[float, float, float, float],
+             out_tif: Path, pad_hw: tuple[int, int] | None) -> None:
+    with rio.open(margin_tif) as src:
+        window = _window_for_bounds(src, bounds)
         nodata = src.nodata if src.nodata is not None else 0
         data = src.read(window=window, boundless=True, fill_value=nodata)  # (bands,H,W)
 
         profile = src.profile.copy()
-        transform = base.transform
-        width, height = base.width, base.height
-        top = left = 0
+        transform = rio.windows.transform(window, src.transform)
+        width, height = int(window.width), int(window.height)
         if pad_hw is not None:
             padded = [_pad_to(data[b], pad_hw, nodata) for b in range(data.shape[0])]
             data = np.stack([p[0] for p in padded], axis=0)
@@ -100,7 +105,7 @@ def crop_one(margin_tif: Path, base_tif: Path, out_tif: Path,
             )
 
         profile.update(transform=transform, width=width, height=height,
-                       crs=base.crs, nodata=nodata, compress="lzw")
+                       nodata=nodata, compress="lzw")
         for k in ("photometric", "interleave", "blockxsize", "blockysize", "tiled"):
             profile.pop(k, None)
         descriptions = src.descriptions
@@ -115,10 +120,10 @@ def crop_one(margin_tif: Path, base_tif: Path, out_tif: Path,
         for i, desc in enumerate(descriptions, start=1):
             if desc:
                 dst.set_band_description(i, desc)
-        dst.update_tags(SOURCE_MARGIN=str(margin_tif), CROPPED_TO=str(base_tif))
+        dst.update_tags(SOURCE_MARGIN=str(margin_tif))
 
-    # Crop (and pad) the paired PNGs using the same window/offsets. Masks pad
-    # with 0 (background); RGB QA previews pad with 0 as well.
+    # Crop (and pad) the paired PNGs using the same window/offsets. Masks and
+    # RGB QA previews pad with 0.
     for suffix in PNG_SUFFIXES:
         src_png = margin_tif.with_name(margin_tif.stem + suffix)
         if not src_png.exists():
@@ -146,38 +151,36 @@ def _crop_array(arr: np.ndarray, col_off: int, row_off: int, h: int, w: int) -> 
 
 
 @click.command(
-    help="Crop margin AVA training chips to the base plot grid and pad to the "
-         "50ha footprint.",
+    help="Crop margin AVA training chips to the plot extent and pad to a square "
+         "SegFormer tile.",
     context_settings={"help_option_names": ["-h", "--help"]},
 )
 @click.option("--margin-dir", type=click.Path(path_type=Path, file_okay=False),
               default=DEFAULT_MARGIN_DIR, show_default=True,
               help="Directory of margin-extent training chips (flat).")
-@click.option("--base-dir", type=click.Path(path_type=Path, file_okay=False),
-              default=DEFAULT_BASE_DIR, show_default=True,
-              help="Base 4-band cutout tree (<year>/) defining target grids.")
+@click.option("--plot-config", type=click.Path(path_type=Path, dir_okay=False),
+              default=DEFAULT_PLOT_CONFIG, show_default=True,
+              help="Clip config whose polygon ring defines the plot extent.")
 @click.option("--output-dir", type=click.Path(path_type=Path, file_okay=False),
               default=DEFAULT_OUTPUT_DIR, show_default=True)
 @click.option("--glob", "pattern", default=DEFAULT_GLOB, show_default=True)
-@click.option("--pad-to", default=DEFAULT_PAD, show_default=True,
-              help='Center-pad to WIDTHxHEIGHT (px), matching the 50ha footprint.')
+@click.option("--size", default=DEFAULT_SIZE, type=int, show_default=True,
+              help="Center-pad to SIZExSIZE px (the SegFormer tile size).")
 @click.option("--no-pad", is_flag=True, default=False,
-              help="Skip padding; emit base-extent chips only.")
+              help="Skip padding; emit plot-extent chips only.")
 @click.option("--force", is_flag=True, default=False,
               help="Overwrite existing outputs (default: skip).")
-def main(margin_dir: Path, base_dir: Path, output_dir: Path, pattern: str,
-         pad_to: str, no_pad: bool, force: bool) -> None:
+def main(margin_dir: Path, plot_config: Path, output_dir: Path, pattern: str,
+         size: int, no_pad: bool, force: bool) -> None:
     if not margin_dir.exists():
         click.echo(f"margin-dir does not exist: {margin_dir}", err=True)
         sys.exit(1)
-    if not base_dir.exists():
-        click.echo(f"base-dir does not exist: {base_dir}", err=True)
+    if not plot_config.exists():
+        click.echo(f"plot-config does not exist: {plot_config}", err=True)
         sys.exit(1)
 
-    pad_hw: tuple[int, int] | None = None
-    if not no_pad:
-        w_str, _, h_str = pad_to.lower().partition("x")
-        pad_hw = (int(h_str), int(w_str))  # (height, width)
+    bounds = _plot_bounds(plot_config)
+    pad_hw: tuple[int, int] | None = None if no_pad else (size, size)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     chips = sorted(margin_dir.glob(pattern))
@@ -185,29 +188,24 @@ def main(margin_dir: Path, base_dir: Path, output_dir: Path, pattern: str,
         click.echo(f"no files matched {pattern!r} under {margin_dir}", err=True)
         sys.exit(1)
     click.echo(f"found {len(chips)} margin chips under {margin_dir}")
+    click.echo(f"plot bounds (xmin,ymin,xmax,ymax): {bounds}")
 
-    n_done = n_skipped = n_missing = n_errored = 0
+    n_done = n_skipped = n_errored = 0
     pbar = tqdm(chips, desc="cropping", unit="chip")
     for chip in pbar:
         out_tif = output_dir / chip.name
         if out_tif.exists() and not force:
             n_skipped += 1
         else:
-            base_tif = _base_cutout_for(chip, base_dir)
-            if not base_tif.exists():
-                n_missing += 1
-            else:
-                try:
-                    crop_one(chip, base_tif, out_tif, pad_hw)
-                    n_done += 1
-                except Exception as exc:  # noqa: BLE001
-                    n_errored += 1
-                    click.echo(f"failed: {chip} -> {out_tif}: {exc}", err=True)
-        pbar.set_postfix(done=n_done, skipped=n_skipped,
-                         missing=n_missing, errored=n_errored)
+            try:
+                crop_one(chip, bounds, out_tif, pad_hw)
+                n_done += 1
+            except Exception as exc:  # noqa: BLE001
+                n_errored += 1
+                click.echo(f"failed: {chip} -> {out_tif}: {exc}", err=True)
+        pbar.set_postfix(done=n_done, skipped=n_skipped, errored=n_errored)
 
-    click.echo(f"done: {n_done} written, {n_skipped} skipped, "
-               f"{n_missing} missing base cutout, {n_errored} errored")
+    click.echo(f"done: {n_done} written, {n_skipped} skipped, {n_errored} errored")
     if n_errored:
         sys.exit(2)
 
