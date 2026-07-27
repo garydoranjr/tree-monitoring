@@ -120,66 +120,90 @@ the cropped `ocm/` product is accepted.
 
 AVA analogue of the 50ha drone-label→Planet training chips, built to
 augment the existing 50ha set. Final chips live in
-`/Volumes/Earth03/flower/ava/train/` as 4-band uint16 GeoTIFFs
-(`<scene>_4band.tif`) with a paired binary crown mask
-(`<scene>_4band.mask.png`) plus RGB/OCM/drone QA PNGs, matching the
-50ha training-dir layout so the two sets concatenate directly.
+`/Volumes/Earth03/flower/ava/train/` as **512 × 512** 4-band uint16
+GeoTIFFs at **0.75 m** (`<scene>_4band.tif`) with a paired binary crown
+mask (`<scene>_4band.mask.png`) plus RGB/OCM QA PNGs, matching the 50ha
+4-band chip resolution so the two sets feed one training run (see the
+training-loader note below).
 
 ### Why margin-then-crop-then-pad
 
-Two size constraints drive a three-stage build:
+The SegFormer 4-band loader (`scripts/train_planet_image_segformer_4b.py`)
+consumes chips at **0.75 m** (the 50ha chips are
+`apply_drone_labels_coreg.py --resize 4`, i.e. 4× the 3 m cutout →
+1468 × 820 px) and crops a fixed **512 × 512** window per chip. Three
+constraints drive the AVA build:
 
 - **COREG needs ≥ 200 px.** `scripts/apply_drone_labels_coreg.py` runs
   AROSICS with `ws=(200,200)`; the base AVA cutout (82 × 117 px) is too
-  small, so alignment is done on the **margin** cutout (282 × 317 px,
-  `config/clip_ava_plot_margin.yml`).
+  small, so alignment is done on the **margin** cutout
+  (`config/clip_ava_plot_margin.yml`). `--resize` does not affect COREG
+  (`compute_coreg_shift` reads the raw drone/Planet files), so the same
+  198 scenes coregister as at 3 m.
 - **Labels are only valid inside the plot.** The AVA drone ortho
   (`ava/global/*.tif`) covers only the plot, so on the margin grid the
   surrounding 300 m of real canopy would be reprojected to *no label*
   and poison training as background. Chips are therefore **cropped back
-  to the base plot extent** after label application.
-- **Scale parity with 50ha.** Both products are 3 m/px, but the AVA base
-  footprint (82 × 117) is far smaller than a 50ha cutout (367 × 205), so
-  the SegFormer dataloader's resize-to-512 would upsample AVA crowns
-  ~4–6× more. Cropped chips are **center-padded to 367 × 205** (image =
-  nodata, mask = 0) so a crown covers a comparable post-resize pixel
-  count in both datasets.
+  to the plot extent** after label application.
+- **Scale + tile parity with 50ha.** Building at `--resize 4` puts AVA at
+  the same 0.75 m as the 50ha chips (a crown covers a comparable pixel
+  count). The plot at 0.75 m is only ~324 × 467 px — smaller than the
+  loader's 512 × 512 window — so cropped chips are **center-padded to
+  512 × 512** (image = nodata, mask = 0) and fed to the loader **whole**
+  (no left/right split; see Stage 3).
 
 ### Build
 
-1. **Apply labels on the margin cutouts** (unchanged
-   `scripts/apply_drone_labels_coreg.py`), reusing the margin OCM masks
-   for crown filtering:
+1. **Apply labels on the margin cutouts at 4×** (unchanged
+   `scripts/apply_drone_labels_coreg.py`, `--resize 4`), reusing the
+   margin OCM masks for crown filtering:
    ```bash
    KMP_DUPLICATE_LIB_OK=TRUE python scripts/apply_drone_labels_coreg.py \
      /Volumes/Earth03/flower/ava/results/*_classifications.tif \
      /Volumes/Earth03/flower/ava/global \
      /Volumes/Earth03/flower/ava/planet_margin/4band \
      /Volumes/Earth03/flower/ava/train_margin \
-     --bands 4 --timewindow 2 \
+     --bands 4 --timewindow 2 --resize 4 \
      --maskdir /Volumes/Earth03/flower/ava/planet_margin/ocm
    ```
    `KMP_DUPLICATE_LIB_OK=TRUE` works around the torch OpenMP
-   duplicate-runtime abort on this machine. Writes margin-extent chips +
-   masks + QA PNGs and a `coreg_log.json`.
-2. **Crop to base and pad to the 50ha footprint** with the new
-   `scripts/crop_train_to_base.py` (patterned on `crop_ocm_to_base.py`:
-   integer-offset window read against the paired base 4-band cutout, no
-   resampling; then a constant center-pad):
+   duplicate-runtime abort on this machine. Writes 0.75 m margin-extent
+   chips (~1128 × 1132 px) + masks + QA PNGs and a `coreg_log.json`.
+2. **Crop to the plot extent and pad to 512 × 512** with
+   `scripts/crop_train_to_base.py`. For each margin chip it window-reads
+   the fixed plot extent from `config/clip_ava_plot.yml` at the chip's own
+   0.75 m grid (integer-offset, no resampling — the plot bounds sit on the
+   3 m clip grid and hence the 0.75 m grid), then constant-center-pads the
+   ~324 × 467 crop to 512 × 512 (image = nodata, mask = 0):
    ```bash
-   python scripts/crop_train_to_base.py
+   python scripts/crop_train_to_base.py --force
    ```
-   Defaults: margin `.../ava/train_margin` → base grids
-   `.../ava/planet/4band` → output `.../ava/train`, `--pad-to 367x205`.
-   Use `--no-pad` for base-extent-only chips.
+   Defaults: margin `.../ava/train_margin` → output `.../ava/train`,
+   `--plot-config config/clip_ava_plot.yml`, `--size 512`. Use `--no-pad`
+   for plot-extent-only chips; `--force` overwrites existing outputs.
 
-### Yield (2026-07-26 run)
+### Feeding the chips to training
+
+The AVA plot has no valid held-out region (the drone ortho covers only the
+plot), so AVA chips augment the **training** set only. Stage 3 adds a
+`'whole'` split mode to `PlanetSegmentationDataset4B` (consume the 512 × 512
+tile as-is, bypassing the left/right `get_split`) and an `--extra-train-dir`
+option that `ConcatDataset`s whole-image chips onto the training loader
+while the 50ha left/right validation split is untouched:
+
+```bash
+python scripts/train_planet_image_segformer_4b.py <50ha_chip_dir> <out> \
+  --extra-train-dir /Volumes/Earth03/flower/ava/train
+```
+
+### Yield (2026-07-27 run)
 
 150 AVA drone label dates (2018-11-26 → 2026-01-20) × Planet scenes
 within ±2 days gave **616 candidate pairs**, of which **198 coregistered**
 (32 %; the rest fail AROSICS, largely cloudy/low-texture scenes). All 198
-became 367 × 205 chips. Usable counts after cloud filtering (clear =
-OCM class-0 fraction over the **base plot**):
+became 512 × 512 chips (~324 × 467 px of plot content, centered). Usable
+counts after cloud filtering (clear = OCM class-0 fraction over the
+**base plot**):
 
 | base-plot clear ≥ | chips |
 |---|---|
