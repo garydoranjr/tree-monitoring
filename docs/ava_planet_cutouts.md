@@ -115,3 +115,85 @@ misses are concentrated in 2020–2021.
 The `/Volumes/Earth03/flower/ava/planet_margin/` tree is an
 intermediate needed only to regenerate masks and can be deleted once
 the cropped `ocm/` product is accepted.
+
+## Training set (drone labels → Planet chips)
+
+AVA analogue of the 50ha drone-label→Planet training chips, built to
+augment the existing 50ha set. Final chips live in
+`/Volumes/Earth03/flower/ava/train/` as 4-band uint16 GeoTIFFs
+(`<scene>_4band.tif`) with a paired binary crown mask
+(`<scene>_4band.mask.png`) plus RGB/OCM/drone QA PNGs, matching the
+50ha training-dir layout so the two sets concatenate directly.
+
+### Why margin-then-crop-then-pad
+
+Two size constraints drive a three-stage build:
+
+- **COREG needs ≥ 200 px.** `scripts/apply_drone_labels_coreg.py` runs
+  AROSICS with `ws=(200,200)`; the base AVA cutout (82 × 117 px) is too
+  small, so alignment is done on the **margin** cutout (282 × 317 px,
+  `config/clip_ava_plot_margin.yml`).
+- **Labels are only valid inside the plot.** The AVA drone ortho
+  (`ava/global/*.tif`) covers only the plot, so on the margin grid the
+  surrounding 300 m of real canopy would be reprojected to *no label*
+  and poison training as background. Chips are therefore **cropped back
+  to the base plot extent** after label application.
+- **Scale parity with 50ha.** Both products are 3 m/px, but the AVA base
+  footprint (82 × 117) is far smaller than a 50ha cutout (367 × 205), so
+  the SegFormer dataloader's resize-to-512 would upsample AVA crowns
+  ~4–6× more. Cropped chips are **center-padded to 367 × 205** (image =
+  nodata, mask = 0) so a crown covers a comparable post-resize pixel
+  count in both datasets.
+
+### Build
+
+1. **Apply labels on the margin cutouts** (unchanged
+   `scripts/apply_drone_labels_coreg.py`), reusing the margin OCM masks
+   for crown filtering:
+   ```bash
+   KMP_DUPLICATE_LIB_OK=TRUE python scripts/apply_drone_labels_coreg.py \
+     /Volumes/Earth03/flower/ava/results/*_classifications.tif \
+     /Volumes/Earth03/flower/ava/global \
+     /Volumes/Earth03/flower/ava/planet_margin/4band \
+     /Volumes/Earth03/flower/ava/train_margin \
+     --bands 4 --timewindow 2 \
+     --maskdir /Volumes/Earth03/flower/ava/planet_margin/ocm
+   ```
+   `KMP_DUPLICATE_LIB_OK=TRUE` works around the torch OpenMP
+   duplicate-runtime abort on this machine. Writes margin-extent chips +
+   masks + QA PNGs and a `coreg_log.json`.
+2. **Crop to base and pad to the 50ha footprint** with the new
+   `scripts/crop_train_to_base.py` (patterned on `crop_ocm_to_base.py`:
+   integer-offset window read against the paired base 4-band cutout, no
+   resampling; then a constant center-pad):
+   ```bash
+   python scripts/crop_train_to_base.py
+   ```
+   Defaults: margin `.../ava/train_margin` → base grids
+   `.../ava/planet/4band` → output `.../ava/train`, `--pad-to 367x205`.
+   Use `--no-pad` for base-extent-only chips.
+
+### Yield (2026-07-26 run)
+
+150 AVA drone label dates (2018-11-26 → 2026-01-20) × Planet scenes
+within ±2 days gave **616 candidate pairs**, of which **198 coregistered**
+(32 %; the rest fail AROSICS, largely cloudy/low-texture scenes). All 198
+became 367 × 205 chips. Usable counts after cloud filtering (clear =
+OCM class-0 fraction over the **base plot**):
+
+| base-plot clear ≥ | chips |
+|---|---|
+| 0.25 | 159 |
+| 0.50 | 147 |
+| **0.80** | **135** |
+| 0.90 | 130 |
+| 0.95 | 126 |
+
+So ~**135 usable chips at the reliable ≥ 0.80 clear threshold**,
+meaningfully augmenting the 50ha set. `coreg_log.json` in
+`train_margin/` records per-scene `coreg_ok`, shift, and (margin-extent)
+`clear_fraction` for provenance.
+
+The `/Volumes/Earth03/flower/ava/train_margin/` tree is an intermediate
+(margin-extent chips) needed only to rebuild `train/` and can be deleted
+once the cropped product is accepted.
