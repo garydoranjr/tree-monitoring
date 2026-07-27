@@ -120,7 +120,11 @@ class PlanetSegmentationDataset4B(Dataset):
         mask = np.array(mask)
         mask = (mask == 255).astype(np.uint8)
 
-        img, mask = get_split(img, mask, self.split, self.size)
+        # split='whole' consumes the tile as-is (used for undersized chips such
+        # as the AVA plot, which have no valid left/right validation region);
+        # otherwise crop the left (train) or right (val) 512x512 window.
+        if self.split != 'whole':
+            img, mask = get_split(img, mask, self.split, self.size)
 
         # Apply augmentations to RGB, then IrGB, then combine
         if self.transforms:
@@ -217,7 +221,13 @@ def modify_model_for_4bands(model):
 @click.command()
 @click.argument('imagedir')
 @click.argument('outputdir')
-def main(imagedir, outputdir):
+@click.option('--extra-train-dir', 'extra_train_dirs', multiple=True,
+              type=click.Path(exists=True, file_okay=False),
+              help='Additional directory of whole-image (512x512) training '
+                   'chips to append to the training set only (e.g. the AVA '
+                   'plot). May be given multiple times. These are loaded whole '
+                   '(no left/right split) and do not affect validation.')
+def main(imagedir, outputdir, extra_train_dirs):
 
     run = wandb.init(entity='tree-flower', project='planet-segmentation')
 
@@ -252,6 +262,23 @@ def main(imagedir, outputdir):
         size=size,
         transforms=transforms,
     )
+
+    # Append any extra whole-image chip dirs to the *training* set only,
+    # leaving the left/right validation split on imagedir untouched.
+    if extra_train_dirs:
+        train_datasets = [dataset]
+        for extra_dir in extra_train_dirs:
+            extra = PlanetSegmentationDataset4B(
+                extra_dir,
+                processor,
+                split='whole',
+                size=size,
+                transforms=transforms,
+            )
+            print(f"Adding {len(extra)} whole-image train chips from {extra_dir}")
+            train_datasets.append(extra)
+        dataset = torch.utils.data.ConcatDataset(train_datasets)
+
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
     test_dataset = PlanetSegmentationDataset4B(
