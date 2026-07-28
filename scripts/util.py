@@ -1,7 +1,6 @@
 """
 Tree Flowering Utilities
 """
-import os
 import yaml
 
 def load_config(configfile):
@@ -12,8 +11,10 @@ def load_config(configfile):
 def select_device(pref="auto"):
     """Return a torch.device, preferring CUDA, then Apple MPS, then CPU.
 
-    When MPS is selected, set PYTORCH_ENABLE_MPS_FALLBACK=1 so ops not yet
-    implemented for the MPS backend fall back to CPU instead of erroring.
+    To make MPS usable, PYTORCH_ENABLE_MPS_FALLBACK=1 must be set *before*
+    torch is imported (PyTorch reads it once at import). That guard lives at
+    the top of each entry-point script, not here -- by the time this runs
+    torch is already imported and the flag would be ignored.
     """
     import torch
     pref = (pref or "auto").lower()
@@ -26,6 +27,4 @@ def select_device(pref="auto"):
             name = "cpu"
     else:
         name = pref
-    if name == "mps":
-        os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
     return torch.device(name)

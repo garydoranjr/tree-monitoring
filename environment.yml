@@ -1,4 +1,18 @@
 # conda env create -f environment.yml
+#
+# torch/torchvision come from pip (below), NOT conda-forge: the conda-forge
+# osx-arm64 builds are CPU-only (no compiled MPS kernels), so ops like
+# torchvision::nms / roi_align raise NotImplementedError on the MPS device.
+# The official PyPI arm64 wheels ship the MPS kernels. torchmetrics and
+# pycocotools are pip-installed too, otherwise conda would pull the
+# conda-forge (CPU-only) pytorch back in to satisfy their dependency.
+#
+# Apple Silicon post-create step: the pip torch wheel bundles its own
+# libomp.dylib, which collides with conda's llvm-openmp at import time
+# (OMP: Error #15). Point torch at the single conda copy so only one
+# OpenMP runtime loads:
+#   ln -sf ../../../../libomp.dylib \
+#     "$CONDA_PREFIX/lib/python3.12/site-packages/torch/lib/libomp.dylib"
 name: flower
 channels:
   - conda-forge
@@ -23,10 +37,10 @@ dependencies:
   - werkzeug
   - dash
   - plotly
-  - pytorch
-  - torchvision
-  - pycocotools
   - wandb
-  - torchmetrics
   - pip:
+      - torch==2.12.0
+      - torchvision==0.27.0
+      - torchmetrics
+      - pycocotools
       - python-ffmpeg

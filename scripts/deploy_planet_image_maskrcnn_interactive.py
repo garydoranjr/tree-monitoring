@@ -12,6 +12,7 @@ import io
 import itertools
 import json
 import os
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")  # must precede torch import
 import queue
 import sys
 import threading

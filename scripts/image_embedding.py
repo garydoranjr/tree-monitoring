@@ -3,6 +3,7 @@
 Author: Luis Hernandez
 """
 import os
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")  # must precede torch import
 import click
 import torch
 import torchvision.transforms as T

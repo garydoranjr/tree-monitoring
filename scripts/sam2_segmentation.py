@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 import os
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")  # must precede torch import
 import click
 import numpy as np
 import pandas as pd
