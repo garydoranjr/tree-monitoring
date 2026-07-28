@@ -72,6 +72,13 @@ def get_split(img, mask, split, size, *extra):
         if a.shape[:2] != img.shape[:2]:
             raise ValueError("extra arrays must match img in first two dims")
 
+    # 'whole' consumes the tile as-is (used for already-tile-sized chips such
+    # as the AVA plot, which have no valid left/right validation region).
+    if split == 'whole':
+        if not extra:
+            return img, mask
+        return (img, mask, *extra)
+
     h, w = img.shape[:2]
     row_start, row_end, col_start, col_end = _split_window(h, w, split, size)
 
@@ -817,10 +824,17 @@ def evaluate(model, dataloader, device, iou_metric, map_metric,
                    "channel (NIR or NDVI) of the first conv. 'zero' (default) "
                    "zero-inits it; 'red'/'green'/'blue' duplicate that "
                    "pretrained channel's weights into the new filter.")
+@click.option('--extra-train-dir', 'extra_train_dirs', multiple=True,
+              type=click.Path(exists=True, file_okay=False),
+              help='Additional directory of whole-image (size x size) training '
+                   'chips to append to the training set only (e.g. the AVA '
+                   'plot). May be given multiple times. Loaded whole (no '
+                   'left/right split) so validation stays on imagedir.')
 @click.option('--wandb/--no-wandb', 'use_wandb', default=True)
 def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
          min_instance_size, nms_thresh, score_thresh, detections_per_img,
-         use_ocm_masks, fourth_band, replace, nir_init, use_wandb):
+         use_ocm_masks, fourth_band, replace, nir_init, extra_train_dirs,
+         use_wandb):
 
     os.makedirs(outputdir, exist_ok=True)
 
@@ -872,6 +886,7 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
         'ndvi_mean': ndvi_mean,
         'ndvi_std': ndvi_std,
         'nir_init': nir_init,
+        'extra_train_dirs': list(extra_train_dirs),
     }
 
     run = None
@@ -892,6 +907,19 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
         min_instance_size=min_instance_size,
         use_ocm_masks=use_ocm_masks, channel_kinds=channel_kinds,
     )
+    # Append any extra whole-image chip dirs to the *training* set only,
+    # leaving the left/right validation split on imagedir untouched.
+    if extra_train_dirs:
+        datasets = [train_dataset]
+        for extra_dir in extra_train_dirs:
+            extra_ds = PlanetMaskRCNNDataset(
+                extra_dir, split='whole', size=size, color_jitter=True,
+                min_instance_size=min_instance_size,
+                use_ocm_masks=use_ocm_masks, channel_kinds=channel_kinds,
+            )
+            print(f"Adding {len(extra_ds)} whole-image train chips from {extra_dir}")
+            datasets.append(extra_ds)
+        train_dataset = torch.utils.data.ConcatDataset(datasets)
     test_dataset = PlanetMaskRCNNDataset(
         imagedir, split='right', size=size, color_jitter=False,
         min_instance_size=min_instance_size,
