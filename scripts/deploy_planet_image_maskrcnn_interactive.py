@@ -41,6 +41,7 @@ from train_planet_image_maskrcnn import (  # noqa: E402, F401
     _split_window,
     classify_instances,
 )
+from util import select_device  # noqa: E402
 
 
 @dataclass
@@ -777,7 +778,7 @@ def main(modelfile, imagedir, score_thresh, mask_thresh, split,
                 col_start / w_p, col_end / w_p,
             )
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = select_device()
     ckpt = torch.load(modelfile, map_location='cpu', weights_only=False)
     model = ckpt['model']
     min_instance_size = ckpt['params']['min_instance_size']

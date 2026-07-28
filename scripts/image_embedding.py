@@ -12,6 +12,8 @@ import json
 from tqdm import tqdm
 from glob import glob
 
+from util import select_device
+
 
 def load_image(img_path: str) -> torch.Tensor:
     """
@@ -61,7 +63,7 @@ def main(crown_folder, output_folder):
 
     # Load the model
     dinov2_vits14 = torch.hub.load("facebookresearch/dinov2", "dinov2_vits14")
-    device = torch.device('cuda' if torch.cuda.is_available() else "cpu")
+    device = select_device()
     dinov2_vits14.to(device)
 
     for subdir in tqdm(subdirs, 'Extracting Features'):

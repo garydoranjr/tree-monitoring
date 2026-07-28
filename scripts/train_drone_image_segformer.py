@@ -16,6 +16,8 @@ from torchvision import transforms
 import torchmetrics
 from transformers import SegformerForSemanticSegmentation, SegformerImageProcessor
 
+from util import select_device
+
 
 class TifSegmentationDataset(Dataset):
 
@@ -124,7 +126,7 @@ def main(imagedir, maskdir, foldfile, outputdir):
     lr = 5e-5
     size = 512
     num_epochs = 100
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = select_device()
     batch_size = 32
 
     processor = SegformerImageProcessor(do_resize=True, size=size, do_normalize=True)

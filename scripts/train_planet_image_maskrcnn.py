@@ -26,6 +26,8 @@ from torchvision.models.detection.roi_heads import RoIHeads
 import torchmetrics
 from torchmetrics.detection import MeanAveragePrecision
 
+from util import select_device
+
 
 def _split_window(h, w, split, size):
     if h < size:
@@ -900,7 +902,7 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
             },
         )
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = select_device()
 
     train_dataset = PlanetMaskRCNNDataset(
         imagedir, split='left', size=size, color_jitter=True,

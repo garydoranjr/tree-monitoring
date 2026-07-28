@@ -15,6 +15,7 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 from matplotlib.backends.backend_pdf import PdfPages
 
 from train_planet_image_segformer import get_split
+from util import select_device
 
 
 def load_image(imagefile, split, size=512):
@@ -40,17 +41,17 @@ def load_image(imagefile, split, size=512):
     return img, encoded_inputs["pixel_values"]
 
 
-def apply_model(model, x, resize):
+def apply_model(model, x, resize, device):
 
     with torch.no_grad():
-        output = model(x)
+        output = model(x.to(device))
 
     logits = F.interpolate(
         output.logits, size=resize,
         mode="bilinear", align_corners=False,
     )
 
-    conf = torch.sigmoid(logits.squeeze()[1]).numpy()
+    conf = torch.sigmoid(logits.squeeze()[1]).cpu().numpy()
 
     return conf
 
@@ -104,9 +105,10 @@ def plot_results(img, conf):
 @click.argument('outputdir')
 def main(modelfile, imagedir, outputdir):
 
-    model = torch.load(modelfile, map_location=torch.device('cpu'))
+    device = select_device()
+    model = torch.load(modelfile, map_location='cpu')
     model.eval()
-    model.to('cpu')
+    model.to(device)
 
     imagefiles = glob(os.path.join(imagedir, '*rgb.png'))
 
@@ -122,7 +124,7 @@ def main(modelfile, imagedir, outputdir):
         # Flip dimensions from PIL image size
         resize = img.size[::-1]
 
-        conf = apply_model(model, x, resize)
+        conf = apply_model(model, x, resize, device)
 
         fig = plot_results(img, conf)
         fig.savefig(ofile)

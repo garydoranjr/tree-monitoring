@@ -19,6 +19,7 @@ from train_planet_image_maskrcnn import (
     build_input_channels,
     get_split,
 )
+from util import select_device
 
 
 def load_image_and_gt(imagefile, split, size=512, min_instance_size=4,
@@ -157,8 +158,8 @@ def main(modelfile, imagedir, outputdir, score_thresh, mask_thresh, split,
          size):
     os.makedirs(outputdir, exist_ok=True)
 
-    device = torch.device('cpu')
-    ckpt = torch.load(modelfile, map_location=device)
+    device = select_device()
+    ckpt = torch.load(modelfile, map_location='cpu')
     model = ckpt['model']
     min_instance_size = ckpt['params']['min_instance_size']
     channel_kinds = ckpt['params'].get('channel_kinds')

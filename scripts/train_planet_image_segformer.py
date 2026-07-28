@@ -16,6 +16,8 @@ from torchvision import transforms as T
 import torchmetrics
 from transformers import SegformerForSemanticSegmentation, SegformerImageProcessor
 
+from util import select_device
+
 
 def get_split(img, mask, split, size):
     # Convert to numpy arrays (in case something array-like is passed)
@@ -175,7 +177,7 @@ def main(imagedir, outputdir):
     lr = 1e-5
     size = 512
     num_epochs = 200
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = select_device()
     batch_size = 32
 
     transforms = [T.Compose([

@@ -15,6 +15,8 @@ from skimage.morphology import binary_erosion, binary_dilation, disk
 from matplotlib.patches import Polygon, Rectangle
 import matplotlib.pyplot as plt
 
+from util import select_device
+
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 MODEL_CONFIG = 'configs/sam2.1/sam2.1_hiera_l.yaml'
@@ -177,7 +179,7 @@ def main(inputfile, shapefile, outputfile):
     crowns = gpd.read_file(shapefile)
     crowns = crowns.sort_values('area', ascending=False)
 
-    model = build_sam2(MODEL_CONFIG, MODEL_FILE, device='cpu')
+    model = build_sam2(MODEL_CONFIG, MODEL_FILE, device=str(select_device()))
     predictor = SAM2ImagePredictor(model)
     predictor.set_image(image)
 
