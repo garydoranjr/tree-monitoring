@@ -78,10 +78,13 @@ def _box(ax, mask, color, margin=6):
               help='Number of chips to show in the before/after figure.')
 @click.option('--num-crowns', default=6, type=int,
               help='Number of pasted crowns to show zoomed.')
+@click.option('--prefix', default='copy_paste',
+              help='Output filename prefix, so several configurations can be '
+                   'written into the same directory.')
 @click.option('--seed', default=0, type=int)
 def main(imagedir, outputdir, split, size, min_instance_size, fourth_band,
          replace, use_ocm_masks, copy_paste_count, copy_paste_prob, num_chips,
-         num_crowns, seed):
+         num_crowns, prefix, seed):
 
     os.makedirs(outputdir, exist_ok=True)
     channel_kinds = resolve_channels(fourth_band, replace)
@@ -128,13 +131,18 @@ def main(imagedir, outputdir, split, size, min_instance_size, fourth_band,
             f"copy-paste: +{n_new} crowns (boxed)", fontsize=9)
 
         ov = _display_rgb(cp_img)
+        legend = "green = original GT, red = pasted GT"
+        if use_ocm_masks:
+            # Pastes are rejected over cloud, so show where that applied.
+            cloudy = cp_tgt['clear_mask'].numpy() == 0
+            _fill(ov, cloudy, [1, 1, 0], alpha=0.25)
+            legend += f", yellow = cloud ({100 * cloudy.mean():.0f}%)"
         if n_orig:
             _fill(ov, masks[:n_orig].sum(axis=0), [0, 1, 0])
         if n_new:
             _fill(ov, masks[n_orig:].sum(axis=0), [1, 0, 0])
         axes[row][2].imshow(ov)
-        axes[row][2].set_title("green = original GT, red = pasted GT",
-                               fontsize=9)
+        axes[row][2].set_title(legend, fontsize=9)
         for ax in axes[row]:
             ax.set_xticks([])
             ax.set_yticks([])
@@ -146,7 +154,7 @@ def main(imagedir, outputdir, split, size, min_instance_size, fourth_band,
         f"({split} crop, up to {copy_paste_count} crowns/chip from a "
         f"{len(bank)}-crown bank)", fontsize=11)
     fig.tight_layout(rect=(0, 0, 1, 0.99))
-    out1 = os.path.join(outputdir, 'copy_paste_examples.png')
+    out1 = os.path.join(outputdir, f'{prefix}_examples.png')
     fig.savefig(out1, dpi=120)
     plt.close(fig)
     print(f"Wrote {out1}")
@@ -179,7 +187,7 @@ def main(imagedir, outputdir, split, size, min_instance_size, fourth_band,
     fig.suptitle("Pasted crowns, zoomed. The mask outline must hug the "
                  "pasted pixels exactly.", fontsize=10)
     fig.tight_layout(rect=(0, 0, 1, 0.97))
-    out2 = os.path.join(outputdir, 'copy_paste_zoom.png')
+    out2 = os.path.join(outputdir, f'{prefix}_zoom.png')
     fig.savefig(out2, dpi=120)
     plt.close(fig)
     print(f"Wrote {out2}")
