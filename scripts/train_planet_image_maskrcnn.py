@@ -10,6 +10,7 @@ from tqdm import tqdm
 from PIL import Image
 import numpy as np
 from scipy import ndimage
+import albumentations as A
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
@@ -208,6 +209,191 @@ def binary_mask_to_instances(bin_mask, min_instance_size=4):
     return np.stack(instances, axis=0)
 
 
+_BG_RING = 4  # pixels of surround used to measure a crown's local background
+
+
+def _local_background(img, crown_mask, box, exclude=None):
+    """Per-channel median of the ring of pixels just outside a crown's
+    bounding box, i.e. the local background level the crown sits against.
+    `exclude` optionally masks out further pixels (other crowns at the paste
+    site). Returns None when the ring is empty, e.g. for a crown flush against
+    the chip edge."""
+    r0, r1, c0, c1 = box
+    h, w = crown_mask.shape[:2]
+    rr0, rr1 = max(r0 - _BG_RING, 0), min(r1 + _BG_RING + 1, h)
+    cc0, cc1 = max(c0 - _BG_RING, 0), min(c1 + _BG_RING + 1, w)
+    ring = np.ones((rr1 - rr0, cc1 - cc0), dtype=bool)
+    ring[r0 - rr0:r1 + 1 - rr0, c0 - cc0:c1 + 1 - cc0] = False
+    ring &= crown_mask[rr0:rr1, cc0:cc1] == 0
+    if exclude is not None:
+        ring &= exclude[rr0:rr1, cc0:cc1] == 0
+    if not ring.any():
+        return None
+    return np.median(img[rr0:rr1, cc0:cc1][ring], axis=0).astype(np.float32)
+
+
+def build_instance_bank(dir_splits, size, channel_kinds, min_instance_size,
+                        use_ocm_masks=False):
+    """Extract every ground-truth crown into a tight-cropped donor patch for
+    copy-paste augmentation. `dir_splits` is a sequence of (img_dir, split)
+    pairs; each is read with the same recipe the training dataset uses, so the
+    donor pixels match the model input exactly.
+
+    Only ever pass the *training* split ('left', or 'whole' for whole-image
+    chip dirs): donors taken from the 'right' crop would leak validation
+    pixels into training. Returns a list of
+    {'image': (h, w, C) float32, 'mask': (h, w) uint8, 'bg': (C,) float32}
+    dicts, where 'bg' is the local background level just outside the crown --
+    see `_paste_instances` for why it is needed."""
+    bank = []
+    for img_dir, split in dir_splits:
+        mask_files = sorted(glob.glob(os.path.join(img_dir, "*.mask.png")))
+        for mask_file in mask_files:
+            img_file = mask_file.replace('.mask.png', '.tif')
+            with rasterio.open(img_file) as src:
+                data = src.read()
+            arr = data.transpose(1, 2, 0).astype(np.float32)
+            img = build_input_channels(arr, channel_kinds)
+            mask = (np.array(Image.open(mask_file)) == 255).astype(np.uint8)
+            if use_ocm_masks:
+                clear = _load_clear_mask(img_file, mask.shape)
+                img_crop, mask_crop, clear_crop = get_split(
+                    img, mask, split, size, clear,
+                )
+            else:
+                img_crop, mask_crop = get_split(img, mask, split, size)
+                clear_crop = None
+            inst_masks = binary_mask_to_instances(
+                mask_crop, min_instance_size=min_instance_size,
+            )
+            # All crowns are kept out of the background ring, so a neighbour
+            # cannot inflate a donor's measured background level.
+            union = inst_masks.sum(axis=0) if inst_masks.shape[0] else None
+            for inst in inst_masks:
+                rows = np.any(inst, axis=1)
+                cols = np.any(inst, axis=0)
+                r0, r1 = np.where(rows)[0][[0, -1]]
+                c0, c1 = np.where(cols)[0][[0, -1]]
+                # A 1-px-wide donor yields a degenerate box that gets dropped
+                # downstream, so it would only ever corrupt the host image.
+                if r1 - r0 < 1 or c1 - c0 < 1:
+                    continue
+                inst_patch = inst[r0:r1 + 1, c0:c1 + 1]
+                # Cloud texture must never enter the bank as a crown.
+                if clear_crop is not None:
+                    if not clear_crop[r0:r1 + 1, c0:c1 + 1][inst_patch > 0].all():
+                        continue
+                bg = _local_background(img_crop, union, (r0, r1, c0, c1))
+                if bg is None:
+                    continue
+                bank.append({
+                    'image': img_crop[r0:r1 + 1, c0:c1 + 1].copy(),
+                    'mask': inst_patch.copy(),
+                    'bg': bg,
+                })
+    n_bytes = sum(d['image'].nbytes + d['mask'].nbytes for d in bank)
+    print(
+        f"Built copy-paste instance bank: {len(bank)} crowns from "
+        f"{len(dir_splits)} dir(s), {n_bytes / 1e6:.1f} MB"
+    )
+    return bank
+
+
+def _paste_instances(overlay, img, inst_masks, bank, n_paste, rng,
+                     clear_crop=None, attempts=20):
+    """Paste `n_paste` donor crowns from `bank` at random locations in `img`,
+    returning the composited image and the updated (N, H, W) instance masks.
+
+    Placement is delegated to albumentations' OverlayElements, which stamps
+    each donor at a uniformly random offset and labels the footprint with the
+    given `mask_id`. Instances are tracked as an id map rather than a binary
+    mask so a paste landing against an existing crown stays a separate
+    instance instead of merging with it under connected components.
+
+    A placement is rejected (and retried) when it would occlude any existing
+    crown, when the pasted crown would touch the crop border -- the border
+    invariant `binary_mask_to_instances` enforces -- or when it would land on
+    cloudy pixels.
+
+    Pasted pixels are then shifted so the donor's own local background level
+    matches the host's at the paste site. This is essential, not cosmetic: the
+    percentile stretch in `build_input_channels` is per-image, so chip mean
+    brightness ranges ~0.34-0.93 across the dataset while a crown is only
+    ~0.01-0.07 brighter than its own surroundings. Pasting raw values would
+    drop crowns up to 0.56 below their new surroundings, inverting the very
+    local contrast that identifies a crown and teaching the model that a crown
+    is a dark blob. Matching backgrounds preserves that contrast instead.
+    """
+    h, w = img.shape[:2]
+    ids = np.zeros((h, w), dtype=np.int32)
+    for i, inst in enumerate(inst_masks):
+        ids[inst > 0] = i + 1
+    counts = {i + 1: int((ids == i + 1).sum()) for i in range(len(inst_masks))}
+    next_id = len(inst_masks) + 1
+    # Keep adjusted pixels inside the range the model already sees for this
+    # chip, without needing to know which channel is NDVI and which is colour.
+    ch_lo = img.reshape(-1, img.shape[2]).min(axis=0)
+    ch_hi = img.reshape(-1, img.shape[2]).max(axis=0)
+
+    for _ in range(n_paste):
+        donor = bank[rng.integers(len(bank))]
+        patch = donor['image']
+        patch_mask = donor['mask']
+        # Nadir imagery has no canonical orientation, and OverlayElements
+        # leaves per-donor content augmentation to the caller.
+        k = int(rng.integers(4))
+        patch = np.rot90(patch, k)
+        patch_mask = np.rot90(patch_mask, k)
+        if rng.random() < 0.5:
+            patch = np.fliplr(patch)
+            patch_mask = np.fliplr(patch_mask)
+        patch = np.ascontiguousarray(patch)
+        patch_mask = np.ascontiguousarray(patch_mask)
+        if patch.shape[0] > h or patch.shape[1] > w:
+            continue
+
+        for _ in range(attempts):
+            # OverlayElements writes the mask_id through a view of the mask it
+            # is handed, so it must get a copy: otherwise a *rejected* attempt
+            # would still have overwritten the id map in place.
+            out = overlay(
+                image=img, mask=ids.copy(),
+                overlay_metadata=[{
+                    'image': patch, 'mask': patch_mask, 'mask_id': next_id,
+                }],
+            )
+            cand_img, cand_ids = out['image'], out['mask']
+            foot = (cand_ids == next_id)
+            if any(int((cand_ids == i).sum()) != c for i, c in counts.items()):
+                continue
+            if foot[0].any() or foot[-1].any() or foot[:, 0].any() \
+                    or foot[:, -1].any():
+                continue
+            if clear_crop is not None and not clear_crop[foot].all():
+                continue
+            fr = np.where(foot.any(axis=1))[0]
+            fc = np.where(foot.any(axis=0))[0]
+            host_bg = _local_background(
+                img, foot, (fr[0], fr[-1], fc[0], fc[-1]), exclude=ids,
+            )
+            if host_bg is None:
+                continue
+            cand_img[foot] = np.clip(
+                cand_img[foot] + (host_bg - donor['bg']), ch_lo, ch_hi,
+            )
+            img, ids = cand_img, cand_ids
+            counts[next_id] = int(foot.sum())
+            next_id += 1
+            break
+
+    if not counts:
+        return img, np.zeros((0, h, w), dtype=np.uint8)
+    out_masks = np.stack(
+        [(ids == i).astype(np.uint8) for i in sorted(counts)], axis=0,
+    )
+    return img, out_masks
+
+
 def _greedy_match(iou, pred_scores, iou_thresh=0.5):
     """Greedy TP/FP/FN labeling given a (P, G) IoU matrix and predicted
     confidence scores. Inputs are NumPy; the loop is small (P*G entries)
@@ -328,7 +514,8 @@ class PlanetMaskRCNNDataset(Dataset):
 
     def __init__(self, img_dir, split, size=512, color_jitter=False,
                  min_instance_size=4, use_ocm_masks=False,
-                 channel_kinds=('red', 'green', 'blue')):
+                 channel_kinds=('red', 'green', 'blue'), instance_bank=None,
+                 copy_paste_count=0, copy_paste_prob=0.0):
         self.channel_kinds = list(channel_kinds)
         self.mask_files = sorted(glob.glob(os.path.join(img_dir, "*.mask.png")))
         # All chips are uint16 GeoTIFFs with band order (Blue, Green, Red, NIR)
@@ -344,6 +531,12 @@ class PlanetMaskRCNNDataset(Dataset):
         self.jitter = (
             T.ColorJitter(brightness=0.2, contrast=0.2) if color_jitter else None
         )
+        self.instance_bank = instance_bank
+        self.copy_paste_count = copy_paste_count
+        self.copy_paste_prob = copy_paste_prob
+        self.copy_paste = bool(instance_bank) and copy_paste_count > 0
+        self.overlay = A.OverlayElements(p=1.0) if self.copy_paste else None
+        self.rng = np.random.default_rng()
 
     def __len__(self):
         return len(self.img_files)
@@ -419,6 +612,15 @@ class PlanetMaskRCNNDataset(Dataset):
         inst_masks = binary_mask_to_instances(
             mask_crop, min_instance_size=self.min_instance_size,
         )
+
+        # Paste before jittering so host and pasted pixels are jittered
+        # together, rather than leaving the seams independently identifiable.
+        if self.copy_paste and self.rng.random() < self.copy_paste_prob:
+            img_crop, inst_masks = _paste_instances(
+                self.overlay, img_crop, inst_masks, self.instance_bank,
+                int(self.rng.integers(1, self.copy_paste_count + 1)),
+                self.rng, clear_crop=clear_crop,
+            )
 
         if self.jitter is not None:
             img_crop = self._apply_jitter(img_crop)
@@ -833,11 +1035,29 @@ def evaluate(model, dataloader, device, iou_metric, map_metric,
                    'chips to append to the training set only (e.g. the AVA '
                    'plot). May be given multiple times. Loaded whole (no '
                    'left/right split) so validation stays on imagedir.')
+@click.option('--copy-paste/--no-copy-paste', 'use_copy_paste', default=False,
+              help='Copy-paste augmentation (arXiv:2012.07177): extract every '
+                   'ground-truth crown from the training chips into a bank, '
+                   'then paste random crowns from it at random locations in '
+                   'each training chip, flipped/rotated, with the instance '
+                   'masks updated to match. Placements that would occlude an '
+                   'existing crown, touch the chip border, or land on cloudy '
+                   'pixels are rejected. Donors come from the training crop '
+                   'only, and are brightness-shifted so their local contrast '
+                   'against the new surroundings matches what they had in '
+                   'their source chip.')
+@click.option('--copy-paste-count', default=3, type=int,
+              help='Max crowns pasted into a chip when --copy-paste is on; '
+                   'the per-chip count is drawn uniformly from 1..N.')
+@click.option('--copy-paste-prob', default=0.5, type=float,
+              help='Probability that a given training chip gets pasted crowns '
+                   'when --copy-paste is on; chips are re-randomized every '
+                   'epoch, so the un-augmented chip is still seen.')
 @click.option('--wandb/--no-wandb', 'use_wandb', default=True)
 def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
          min_instance_size, nms_thresh, score_thresh, detections_per_img,
          use_ocm_masks, fourth_band, replace, nir_init, extra_train_dirs,
-         use_wandb):
+         use_copy_paste, copy_paste_count, copy_paste_prob, use_wandb):
 
     os.makedirs(outputdir, exist_ok=True)
 
@@ -870,6 +1090,22 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
             image_mean.append(m)
             image_std.append(s)
 
+    # Donors are taken from the training crop of every training dir ('left'
+    # for imagedir, 'whole' for the extra chip dirs) so no validation-crop
+    # pixel can reach the training set.
+    instance_bank = None
+    if use_copy_paste:
+        instance_bank = build_instance_bank(
+            [(imagedir, 'left')] + [(d, 'whole') for d in extra_train_dirs],
+            size, channel_kinds, min_instance_size,
+            use_ocm_masks=use_ocm_masks,
+        )
+        if not instance_bank:
+            raise ValueError(
+                "--copy-paste was given but no ground-truth crowns could be "
+                "extracted from the training chips"
+            )
+
     params = {
         'num_epochs': num_epochs,
         'batch_size': batch_size,
@@ -890,6 +1126,10 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
         'ndvi_std': ndvi_std,
         'nir_init': nir_init,
         'extra_train_dirs': list(extra_train_dirs),
+        'use_copy_paste': use_copy_paste,
+        'copy_paste_count': copy_paste_count,
+        'copy_paste_prob': copy_paste_prob,
+        'copy_paste_bank_size': len(instance_bank) if instance_bank else 0,
     }
 
     run = None
@@ -909,6 +1149,8 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
         imagedir, split='left', size=size, color_jitter=True,
         min_instance_size=min_instance_size,
         use_ocm_masks=use_ocm_masks, channel_kinds=channel_kinds,
+        instance_bank=instance_bank, copy_paste_count=copy_paste_count,
+        copy_paste_prob=copy_paste_prob,
     )
     # Append any extra whole-image chip dirs to the *training* set only,
     # leaving the left/right validation split on imagedir untouched.
@@ -919,6 +1161,9 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
                 extra_dir, split='whole', size=size, color_jitter=True,
                 min_instance_size=min_instance_size,
                 use_ocm_masks=use_ocm_masks, channel_kinds=channel_kinds,
+                instance_bank=instance_bank,
+                copy_paste_count=copy_paste_count,
+                copy_paste_prob=copy_paste_prob,
             )
             print(f"Adding {len(extra_ds)} whole-image train chips from {extra_dir}")
             datasets.append(extra_ds)

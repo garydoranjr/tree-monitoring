@@ -44,3 +44,4 @@ dependencies:
       - torchmetrics
       - pycocotools
       - python-ffmpeg
+      - albumentations==2.0.8
