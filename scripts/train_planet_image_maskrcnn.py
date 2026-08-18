@@ -1046,9 +1046,17 @@ def evaluate(model, dataloader, device, iou_metric, map_metric,
                    'only, and are brightness-shifted so their local contrast '
                    'against the new surroundings matches what they had in '
                    'their source chip.')
-@click.option('--copy-paste-count', default=3, type=int,
+@click.option('--copy-paste-count', default=40, type=int,
               help='Max crowns pasted into a chip when --copy-paste is on; '
-                   'the per-chip count is drawn uniformly from 1..N.')
+                   'the per-chip count is drawn uniformly from 1..N, so the '
+                   'mean added is about N/2 (halved again by '
+                   '--copy-paste-prob). The default is deliberately large: '
+                   'chips already carry tens of labelled crowns (35/chip in '
+                   'the 20260330 flower set, 64/chip in the 20260706 curated '
+                   'set), so a single-digit N moves crown density by only a '
+                   'few percent. At N=40 with the default probability, '
+                   'density rises ~30% and ~17% on those two sets '
+                   'respectively.')
 @click.option('--copy-paste-prob', default=0.5, type=float,
               help='Probability that a given training chip gets pasted crowns '
                    'when --copy-paste is on; chips are re-randomized every '

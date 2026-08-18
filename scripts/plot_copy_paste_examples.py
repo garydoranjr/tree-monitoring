@@ -70,7 +70,9 @@ def _box(ax, mask, color, margin=6):
 @click.option('--ocm-masks/--no-ocm-masks', 'use_ocm_masks', default=False,
               help='Load OCM cloud-mask sidecars, so pastes onto cloudy '
                    'pixels are rejected as they are during training.')
-@click.option('--copy-paste-count', default=3, type=int)
+@click.option('--copy-paste-count', default=40, type=int,
+              help='Matches the training default; the per-chip count is drawn '
+                   'uniformly from 1..N.')
 @click.option('--copy-paste-prob', default=1.0, type=float,
               help='Defaults to 1.0 (unlike training) so every panel shows '
                    'pasted crowns.')
