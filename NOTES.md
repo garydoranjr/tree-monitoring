@@ -16,10 +16,11 @@ cluster's egress firewall blocks. This is a different failure than the handoff
 doc anticipated — the doc worried about GridFTP data-channel ports 50000–51000,
 but the block hits earlier, at relay registration.
 
-**Route C (HTTPS) works and is now in production use.** Implemented as
-[scripts/globus_https_sync.py](scripts/globus_https_sync.py). It needs only
-outbound 443. Verified end to end on 2026-08-27: probe file fetched byte-exact,
-sync is idempotent, and the full 355 GiB pull is running.
+**Route C (HTTPS) works.** Implemented as
+[scripts/globus_https_sync.py](scripts/globus_https_sync.py); needs only
+outbound 443. **The full 96-file / 355.2 GiB set was transferred successfully on
+2026-08-27** in 5.6 h with zero failures, byte-exact, and the sync is idempotent.
+Routes B, D, and E were never needed.
 
 ### Throughput — measured, and the reason for parallelism
 
@@ -33,12 +34,15 @@ RTT, not a bandwidth ceiling**, so concurrent fetches scale it:
 |---|---|---|
 | 1 | 2.26 MiB/s | ~45 h |
 | 4 | 11.2 MiB/s | ~9 h |
-| 8 | **13.7 MiB/s** | **~7.3 h** |
+| 8 | 13.7 MiB/s (early) → **18.0 MiB/s sustained** | **5.6 h actual** |
 
 Near-linear from 1→4, flattening by 8 — so 8 is about the practical knee and
-higher `-j` is unlikely to pay. This measurement also settles half of §2's
+higher `-j` is unlikely to pay much. This measurement also settles half of §2's
 "which route is fastest" question without needing the JPL staging leg: the WAN
-path, not the receiving host, is the limiting factor.
+path, not the receiving host, is the limiting factor. An 8× speedup from
+parallelism alone means the doc's premise — that a DTN's big pipe is what makes
+staging attractive — is largely beside the point; the single-stream ceiling was
+the real constraint, and it is fixable client-side.
 
 ---
 
@@ -250,9 +254,10 @@ The doc's skeleton is a sketch, not working code. Beyond the SDK issues above:
 - `mmlsquota -j tree-monitoring gpfs` fails ("no such fileset"), so a project
   quota could not be confirmed — only that the filesystem has 753 TB free.
 
-## Current run
+## Full sync — COMPLETE (2026-08-27)
 
-Full sync launched 2026-08-27 ~15:50 PDT:
+All **96 files / 355.2 GiB** transferred in **335.9 min (5.6 h)** at **18.0
+MiB/s** aggregate, **0 failures**, no retries needed. Ran 8 streams via:
 
 ```bash
 cd ~/Documents/tree-flowering
@@ -260,16 +265,33 @@ nohup ~/miniconda3/envs/flower/bin/python scripts/globus_https_sync.py -j 8 \
   > ~/logs/stri-rgb-sync.log 2>&1 &
 ```
 
-pid 2848132, 8 streams, 13.7 MiB/s, ETA ~23:10 PDT. Progress:
-`tail -f ~/logs/stri-rgb-sync.log`.
+Rate climbed from 13.7 → 18.0 MiB/s as the run settled, beating the 7.3 h
+estimate. Data is at `/scratch/tree-monitoring/stri/globus/RGB/`.
 
-**Caveat: it runs inside Slurm job `19357244` on `cn003`.** If that job ends the
-sync dies with it. Not fatal — `.part` files mean a re-run resumes rather than
-restarts — but for an unattended production sync this belongs in its own batch
-job, or under `screen`/`tmux` on a node that will persist.
+### Verification (all passed)
 
-On completion, verify: 96 `.tif` files present, sizes match the source listing,
-no `.part` files remain.
+- **96 source files, 96 local files** — none missing, none extra
+- **Every file matches its source size**; total is
+  **381,372,667,670 bytes — byte-exact** against the pre-transfer listing
+- **No `.part` files remain**
+- **Idempotent:** an immediate re-run reported "96 already current, 0 to fetch"
+  and transferred zero bytes. This is the check §5 insists on, and it confirms
+  the mtime-based skip logic converges — a mtime sync that failed to converge
+  would re-pull 355 GiB every run.
+- **Rasters are valid and contain real data** (rasterio spot-check of first,
+  middle, and last by date):
+
+  | File | Dimensions | Bands | dtype | CRS |
+  |---|---|---|---|---|
+  | `2024_03_06` | 25595 × 21815 | 4 | uint16 | EPSG:32617 |
+  | `2025_07_08` | 24321 × 20729 | 4 | uint16 | EPSG:32617 |
+  | `2026_01_20` | 24909 × 21231 | 4 | uint16 | EPSG:32617 |
+
+  EPSG:32617 is UTM zone 17N — correct for Panama. **Note these are 4-band
+  uint16, not 3-band**, despite the `RGB` in the path and filenames; the fourth
+  band is presumably alpha/mask. Worth confirming before anything assumes
+  3-channel input. Dimensions vary per flight, so they are not on a common grid
+  despite being "aligned".
 
 ## Still open
 
