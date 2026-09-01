@@ -23,4 +23,5 @@
 *.json
 *.npz
 *.zip
+*.har
 wandb

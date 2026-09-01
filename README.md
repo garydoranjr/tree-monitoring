@@ -72,7 +72,24 @@ snakemake -s Snakefile all_videos
 python scripts/generate_sequence_video.py <crown_dir> <crownid> <config> <output>
 ```
 
-### 5. NDVI and Phenology Analysis
+### 5. Full-Island Orthomosaic Sync
+
+The 13 full-resolution BCI whole-island orthomosaics (856 GB) live in a shared
+Google Drive folder and land in `/scratch/tree-monitoring/full_island`.
+Authentication is by session cookies read from a browser HAR export, since the
+folder is not public and no service account exists for it. The HAR expires
+after a while; re-export it and re-run to resume.
+
+```bash
+# check what is present / still needed (safe while a sync is running)
+python scripts/drive_folder_sync.py --status
+python scripts/drive_folder_sync.py --dry-run
+
+# full sync; resumable, so re-running after any interruption is safe
+python scripts/drive_folder_sync.py -j 8
+```
+
+### 6. NDVI and Phenology Analysis
 
 ```bash
 python scripts/calculate_ndvi.py <input_image> <output_image>
@@ -82,7 +99,7 @@ python scripts/ndvi_sequence_plot.py <sequence_dir> <output_plot>
 python scripts/parse_phenology.py <labels_dir> <output_csv>
 ```
 
-### 6. Visualization
+### 7. Visualization
 
 ```bash
 python scripts/plot_coreg_offsets.py <coreg_json> <output_plot>
