@@ -28,3 +28,23 @@ def select_device(pref="auto"):
     else:
         name = pref
     return torch.device(name)
+
+
+def is_readable_raster(path):
+    """True if `path` exists and opens as a raster with at least one band.
+
+    A non-empty file is not enough: an interrupted write leaves a truncated
+    GeoTIFF that passes a size check but fails to open. Imported lazily so
+    callers that only need load_config don't pay for rasterio.
+    """
+    import os
+    import rasterio
+    # Short-circuit: opening a missing path works but makes GDAL log an error
+    # per call, which floods the log when most outputs are yet to be written.
+    if not os.path.exists(path):
+        return False
+    try:
+        with rasterio.open(path) as src:
+            return src.count > 0
+    except Exception:
+        return False

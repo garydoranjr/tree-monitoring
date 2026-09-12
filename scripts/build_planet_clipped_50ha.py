@@ -31,7 +31,7 @@ from shapely.geometry import box, mapping, shape
 from tqdm import tqdm
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from util import load_config  # noqa: E402
+from util import is_readable_raster, load_config  # noqa: E402
 
 SCENE_RE = re.compile(r'(\d{8}_\d{6}(?:_\d{1,3})?_[0-9a-f]{4})')
 
@@ -237,15 +237,14 @@ def process_scene(rec: dict, region, output_root: Path, force: bool) -> str:
     out_u = output_root / 'udm2' / year / f'{sid}_udm2.tif'
     out_r = output_root / 'rgb' / year / f'{sid}_rgb.tif'
 
-    have_all = all(p.exists() and p.stat().st_size > 0
-                   for p in (out_4, out_u, out_r))
+    have_all = all(is_readable_raster(p) for p in (out_4, out_u, out_r))
     if have_all and not force:
         return 'skipped_existing'
 
     # 4-band first; RGB depends on it.
     status_4 = 'missing_src'
     if rec['four_band_src']:
-        if force or not (out_4.exists() and out_4.stat().st_size > 0):
+        if force or not is_readable_raster(out_4):
             status_4 = _clip_to(region, Path(rec['four_band_src']), out_4)
         else:
             status_4 = 'ok'
@@ -253,14 +252,14 @@ def process_scene(rec: dict, region, output_root: Path, force: bool) -> str:
         # Don't make RGB without a clipped 4-band
         out_r_status = 'skipped'
     else:
-        if force or not (out_r.exists() and out_r.stat().st_size > 0):
+        if force or not is_readable_raster(out_r):
             out_r_status = _render_rgb(out_4, out_r)
         else:
             out_r_status = 'ok'
 
     status_u = 'missing_src'
     if rec['udm2_src']:
-        if force or not (out_u.exists() and out_u.stat().st_size > 0):
+        if force or not is_readable_raster(out_u):
             status_u = _clip_to(region, Path(rec['udm2_src']), out_u)
         else:
             status_u = 'ok'
