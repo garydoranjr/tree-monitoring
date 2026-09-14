@@ -29,6 +29,9 @@ Typical usage:
 """
 from __future__ import annotations
 
+import os
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")  # must precede torch import
+
 import logging
 import math
 import shutil
@@ -48,6 +51,9 @@ from rasterio.warp import calculate_default_transform, reproject
 from tqdm import tqdm
 
 import omnicloudmask as ocm
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from util import is_readable_raster  # noqa: E402
 
 log = logging.getLogger("cloud_mask_planet")
 
@@ -554,7 +560,7 @@ def main(input_dir: Path, output_dir: Path, pattern: str, device: str,
     pbar = tqdm(scenes, desc="masking", unit="scene")
     for scene in pbar:
         out_path = _output_path_for(scene, input_dir, output_dir)
-        if out_path.exists() and not force:
+        if is_readable_raster(out_path) and not force:
             n_skipped += 1
             pbar.set_postfix(done=n_done, skipped=n_skipped, errored=n_errored)
             continue
