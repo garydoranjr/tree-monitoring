@@ -1,6 +1,7 @@
 #Import libraries/modules
 import os
 import re
+import yaml
 import click
 import torch
 import rasterio
@@ -16,7 +17,60 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 
-def extract_centered_window(src, polygon, min_size=512, pixel_buffer=100):
+def load_scaling(config_file):
+    """
+    Read the per-band uint16 -> uint8 gains/offsets from a YAML config.
+
+    Returns None when no config is given, in which case the imagery is assumed
+    to be uint8 already and is passed through untouched.
+    """
+    if config_file is None:
+        return None
+
+    with open(config_file) as f:
+        cfg = yaml.safe_load(f)
+
+    bands = cfg['uint16_to_uint8']
+    if len(bands) != 3:
+        raise ValueError(
+            f"Expected 3 bands in 'uint16_to_uint8', got {len(bands)}"
+        )
+
+    gains = np.array([b['gain'] for b in bands], dtype=np.float64)
+    offsets = np.array([b['offset'] for b in bands], dtype=np.float64)
+
+    return gains, offsets
+
+
+def to_uint8(data, scaling):
+    """
+    Convert a (3, H, W) window to uint8 for the SegFormer processor.
+
+    The models were trained on 8-bit imagery. When `scaling` is provided, each
+    band is mapped with its own gain/offset so the histograms line up with that
+    training domain; see config/crown_classification_globus.yml for how the
+    coefficients were fitted and why they are fixed rather than per-image.
+    """
+    if data.dtype == np.uint8:
+        return data
+
+    if scaling is None:
+        raise ValueError(
+            f"Image is {data.dtype}, not uint8, and no --scaling-config was "
+            "given. Pass a config with per-band uint16_to_uint8 coefficients "
+            "(e.g. config/crown_classification_globus.yml)."
+        )
+
+    gains, offsets = scaling
+
+    # Apply per-band gain/offset; reshape so each band gets its own coefficient.
+    scaled = data.astype(np.float64) * gains[:, None, None] + offsets[:, None, None]
+
+    return np.clip(np.rint(scaled), 0, 255).astype(np.uint8)
+
+
+def extract_centered_window(src, polygon, min_size=512, pixel_buffer=100,
+                            scaling=None):
     """
     Extract a raster window fully containing the polygon, with:
       • at least min_size x min_size pixels
@@ -33,6 +87,8 @@ def extract_centered_window(src, polygon, min_size=512, pixel_buffer=100):
         Minimum window size (pixels) on each side.
     pixel_buffer : int
         Extra pixels to include around the polygon.
+    scaling : tuple or None
+        Per-band (gains, offsets) used to convert uint16 imagery to uint8.
 
     Returns
     -------
@@ -91,9 +147,12 @@ def extract_centered_window(src, polygon, min_size=512, pixel_buffer=100):
     window = Window(col_off=col_min, row_off=row_min, width=w, height=h)
 
     # --- 6. Read and return ---
-    data = src.read(window=window)
+    # Only the first three bands (R, G, B) are used: the fourth band is an alpha
+    # mask in the globus mosaics and photogrammetric height in the uint8 ones.
+    data = src.read(indexes=[1, 2, 3], window=window)
+    data = to_uint8(data, scaling)
 
-    return window, Image.fromarray(np.transpose(data, (1, 2, 0))[..., :3])
+    return window, Image.fromarray(np.transpose(data, (1, 2, 0)))
 
 
 def polygon_mask(src, window, polygon):
@@ -227,27 +286,35 @@ def save_window_geotiff(output_path, array, src, window):
         "dtype": array.dtype.name,
     })
 
+    # The confidence raster has its own value range, so any nodata inherited
+    # from the source imagery does not apply. The globus mosaics declare
+    # nodata=0, which would otherwise mask out genuine zero-confidence pixels
+    # and make merge_classifications.py drop them from the average.
+    profile.pop("nodata", None)
+
     # Some profiles include tiling or compression; keep or modify as needed
     with rasterio.open(output_path, "w", **profile) as dst:
         dst.write(array)
 
 
-@click.command()
-@click.argument('modelfile')
-@click.argument('image_file')
-@click.argument('shapefile_path')
-@click.argument('output_dir')
-def main(modelfile, image_file, shapefile_path, output_dir):
+def select_polygons(shp, image_file):
+    """
+    Restrict a crown map to the polygons that apply to a single orthomosaic.
 
-    model = torch.load(modelfile, weights_only=False, map_location=torch.device('cpu'))
-    model.eval()
-    model.to('cpu')
+    Two kinds of crown map are supported:
 
-    shp = gpd.read_file(shapefile_path)
+    * A timeseries with one row per crown per flight date (a 'date' column),
+      e.g. BCI_ava_crownmap_timeseries.gpkg. Only the polygons whose date
+      matches the image's YYYY_MM_DD token are kept, since the rest describe
+      other flights.
+    * A single-date crown map with no 'date' column, e.g.
+      BCI_50ha_2022_09_29_crownmap_improved.shp. Every polygon applies to every
+      image; the crowns are treated as static geometry across the timeseries.
+    """
+    if 'date' not in shp.columns:
+        print(f"No 'date' column: using all {len(shp)} polygons for every image")
+        return shp
 
-    # The shapefile is a timeseries with one row per crown per flight date.
-    # Each image is a single-date orthomosaic (BCI_ava_YYYY_MM_DD_orthomosaic.tif),
-    # so keep only the polygons whose date matches this image's date.
     m = re.search(r'\d{4}_\d{2}_\d{2}', os.path.basename(image_file))
     if m is None:
         raise ValueError(
@@ -257,6 +324,36 @@ def main(modelfile, image_file, shapefile_path, output_dir):
     shp = shp[shp['date'].dt.strftime('%Y_%m_%d') == date_token]
     print(f"Date {date_token}: {len(shp)} matching polygons")
 
+    if len(shp) == 0:
+        raise ValueError(
+            f"Crown map has a 'date' column but no polygons match {date_token}. "
+            "Use a crown map covering this date, or a single-date crown map "
+            "without a 'date' column to apply static geometry to every image."
+        )
+
+    return shp
+
+
+@click.command()
+@click.argument('modelfile')
+@click.argument('image_file')
+@click.argument('shapefile_path')
+@click.argument('output_dir')
+@click.option('--scaling-config', default=None,
+              type=click.Path(exists=True, dir_okay=False),
+              help='YAML with per-band uint16 -> uint8 gains/offsets. Required '
+                   'for uint16 imagery such as the globus 50ha mosaics.')
+def main(modelfile, image_file, shapefile_path, output_dir, scaling_config):
+
+    model = torch.load(modelfile, weights_only=False, map_location=torch.device('cpu'))
+    model.eval()
+    model.to('cpu')
+
+    scaling = load_scaling(scaling_config)
+
+    shp = gpd.read_file(shapefile_path)
+    shp = select_polygons(shp, image_file)
+
     with rasterio.open(image_file) as src:
         for i, row in tqdm(shp.iterrows(), total=len(shp)):
             tag = row['tag']
@@ -264,7 +361,7 @@ def main(modelfile, image_file, shapefile_path, output_dir):
             if os.path.exists(output_path): continue
 
             polygon = row['geometry']
-            w, img = extract_centered_window(src, polygon)
+            w, img = extract_centered_window(src, polygon, scaling=scaling)
             mask = polygon_mask(src, w, polygon)
             x = preprocess(img)
 
