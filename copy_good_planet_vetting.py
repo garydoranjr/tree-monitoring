@@ -11,7 +11,9 @@ to also include Fair chips, etc.
 For each accepted chip (external_id ends in `.png`), all sibling files that
 share the same stem are copied (e.g. `.png`, `.tif`, `.mask.png`,
 `.drone.png`, `.ocm.png`). The source root's `coreg_log.json` is also
-copied.
+copied, or *merged* into the destination's when one is already there — so a
+set assembled from more than one source build (e.g. the 2020-2023 local
+mosaics plus the 2024-2026 globus mosaics) keeps the provenance of both.
 """
 
 import argparse
@@ -52,6 +54,30 @@ def collect_stems(ndjson_path: Path, min_quality: str) -> list[str]:
             if quality in QUALITY_RANK and QUALITY_RANK[quality] >= min_rank:
                 stems.append(Path(external_id).stem)
     return stems
+
+
+def merge_coreg_log(src_log: Path, dst_log: Path) -> tuple[list[dict], int, int, int]:
+    """Union of the source and destination coreg logs, keyed on (scene, label).
+
+    Destination records win on a collision, so re-running against the same
+    source is idempotent and an existing curated log is never rewritten by a
+    later build. Returns (merged, n_src, n_dst, n_new).
+    """
+    with src_log.open() as f:
+        src_records = json.load(f)
+
+    dst_records = []
+    if dst_log.exists():
+        with dst_log.open() as f:
+            dst_records = json.load(f)
+
+    def key(rec):
+        return (rec.get("scene"), rec.get("label"))
+
+    seen = {key(r) for r in dst_records}
+    new_records = [r for r in src_records if key(r) not in seen]
+
+    return dst_records + new_records, len(src_records), len(dst_records), len(new_records)
 
 
 def copy_good(
@@ -99,11 +125,17 @@ def copy_good(
 
     coreg_src = src_dir / "coreg_log.json"
     if coreg_src.exists():
+        merged, n_src, n_dst, n_new = merge_coreg_log(coreg_src, dst_dir / "coreg_log.json")
         if dry_run:
-            print(f"  [dry-run] {coreg_src.name}")
+            print(f"  [dry-run] coreg_log.json ({len(merged)} records)")
         else:
-            shutil.copy2(coreg_src, dst_dir / coreg_src.name)
-        print(f"\nAlso copied   : {coreg_src.name}")
+            with (dst_dir / "coreg_log.json").open("w") as f:
+                json.dump(merged, f, indent=2)
+        if n_dst:
+            print(f"\ncoreg_log.json: {n_dst} existing + {n_new} new "
+                  f"(of {n_src} in source) = {len(merged)} records")
+        else:
+            print(f"\nAlso copied   : coreg_log.json ({len(merged)} records)")
     else:
         print(f"\nWARNING: {coreg_src} not found; skipped")
 
