@@ -122,8 +122,13 @@ def load_as_geoarray(filepath):
     return GeoArray(arr, geotransform=transform.to_gdal(), projection=projection)
 
 
-def compute_coreg_shift(dronefile, planetfile, planet_match_band=1):
-    drone_ga = load_as_geoarray(dronefile)
+def compute_coreg_shift(dronefile, planetfile, planet_match_band=1, drone_ga=None):
+    # The drone ortho is the expensive side: the globus M3M mosaics are ~4 GB
+    # each, and every Planet scene under a given label date shares one. Callers
+    # that loop over scenes pass it in preloaded; None keeps the standalone
+    # behaviour.
+    if drone_ga is None:
+        drone_ga = load_as_geoarray(dronefile)
     planet_ga = load_as_geoarray(planetfile)
 
     try:
@@ -394,9 +399,7 @@ def generate_ocm_png(ocm_path, pimg, outputpath):
     iio.imwrite(outputpath, rgba)
 
 
-def create_mask(dronedir, labelfile, planetfile, planetdir, outputdir, resize, mode, maskdir=None, drone_scale=None, bands=3):
-
-    dronefile = find_drone(labelfile, dronedir)
+def create_mask(dronefile, labelfile, planetfile, planetdir, outputdir, resize, mode, maskdir=None, drone_scale=None, bands=3, drone_ga=None):
 
     clear_fraction = None
     if maskdir is not None:
@@ -408,6 +411,7 @@ def create_mask(dronedir, labelfile, planetfile, planetdir, outputdir, resize, m
     planet_match_band = 3 if bands == 4 else 1
     x_shift, y_shift, coreg_ok = compute_coreg_shift(
         dronefile, planetfile, planet_match_band=planet_match_band,
+        drone_ga=drone_ga,
     )
 
     with rasterio.open(planetfile) as src:
@@ -499,12 +503,23 @@ def process_label(dronedir, labelfile, planet_df, planetdir, outputdir, timewind
     )
 
     date_mask = (planet_df["date"] - label_date).abs() <= pd.Timedelta(days=timewindow)
-    planetfiles = planet_df.loc[date_mask]["path"]
+    planetfiles = planet_df.loc[date_mask]["path"].tolist()
 
-    return [
-        create_mask(dronedir, labelfile, planetfile, planetdir, outputdir, resize, mode, maskdir, drone_scale, bands)
-        for planetfile in planetfiles.tolist()
-    ]
+    if not planetfiles:
+        return []
+
+    # Every scene in the window coregisters against the same drone ortho, so
+    # read it once here instead of once per scene inside create_mask().
+    dronefile = find_drone(labelfile, dronedir)
+    drone_ga = load_as_geoarray(dronefile)
+
+    try:
+        return [
+            create_mask(dronefile, labelfile, planetfile, planetdir, outputdir, resize, mode, maskdir, drone_scale, bands, drone_ga)
+            for planetfile in planetfiles
+        ]
+    finally:
+        del drone_ga
 
 
 def filter_files(planetfiles, filterdir):
