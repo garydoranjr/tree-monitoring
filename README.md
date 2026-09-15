@@ -132,6 +132,7 @@ planet_out_*/     Planet processing outputs
 | Crown extraction | `crown_extractor.py`, `extract_labeled_crowns.py`, `coreg_crown_sequence.py`, `match_crowns_to_labels.py` |
 | Analysis | `parse_*.py`, `*_analysis.py`, `illumination.py` |
 | Visualization | `plot_*.py` |
+| Interactive review | `deploy_planet_image_maskrcnn_interactive.py` (layers and predictions), `vet_planet_chips.py` (chip quality rating) — see [VISUALIZATION.md](VISUALIZATION.md) |
 | Video | `generate_sequence_video.py`, `crown_timelapse_mosaic.py` |
 
 ### Data flow

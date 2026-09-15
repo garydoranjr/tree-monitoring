@@ -122,11 +122,49 @@ globus) plus the drone reprojection in `generate_drone_png()` (~2.5 GB).
 On a 16 GB machine this runs but leaves little headroom; drop `-d 2` to
 skip the drone PNGs if it thrashes.
 
-### 3. Vet and assemble the curated set
+### 3. Review the coregistration
 
-Chips are rated by hand in Labelbox on a `Quality` radio
-(`Poor` < `Fair` < `Good`), keyed on `data_row.external_id` = `<stem>.png`.
-Exports live in `labels/` (gitignored).
+Before rating anything, check that the drone ortho, the Planet chip and the
+crown mask applied from the drone actually line up. `--model` is optional;
+without it the viewer drops the prediction layer and is just a layer
+comparator:
+
+```bash
+python scripts/deploy_planet_image_maskrcnn_interactive.py \
+  /Volumes/Earth03/flower/20260915_globus_label_application_x4_coreg_4band_stretch_stats \
+  --split whole
+```
+
+`--split whole` shows the entire chip rather than the 512 px training window.
+Tick *Show drone overlay*, then either **Blend** it against the chip on the
+opacity slider or **Swipe** it in from the left behind a hard edge; `b`
+blinks the layer on and off, which is the fastest way to see a shift. Arrow
+keys step through the set. The Δx/Δy readout comes from `coreg_log.json` and
+is display-only — a log rebuilt by `reconstruct_coreg_log.py` reads `n/a
+(reconstructed)` rather than a fabricated zero.
+
+A chip with no `.mask.png` (any scene whose coregistration failed) simply
+loses the ground-truth layer.
+
+### 4. Vet the chips
+
+Chips are rated `Poor` < `Fair` < `Good` on image quality — cloud, haze,
+partial scene coverage, nodata. This used to be a Labelbox `Quality` radio
+keyed on `data_row.external_id` = `<stem>.png`, with exports in `labels/`
+(gitignored); that access is gone, so rate them locally instead:
+
+```bash
+python scripts/vet_planet_chips.py \
+  /Volumes/Earth03/flower/20260915_globus_label_application_x4_coreg_4band_stretch_stats
+```
+
+A contact sheet of every chip, `1`/`2`/`3` or the P/F/G buttons to rate,
+click a thumbnail for the full-resolution view with an optional cloud-mask
+overlay and a note field. Ratings land in `<imagedir>/vetting.json` (or
+`-o`) after every click, so the pass is resumable; *Show: unrated* narrows
+the sheet to what is left.
+
+### 5. Assemble the curated set
 
 ```bash
 DST=/Volumes/Earth03/flower/20260915_full_label_extended_x4_coreg_4band_stretch_stats_curated
@@ -136,10 +174,14 @@ rsync -a /Volumes/Earth03/flower/20260706_full_label_application_x4_coreg_4band_
 
 # the newly vetted globus chips, merged into the log copied above
 python copy_good_planet_vetting.py \
-  --ndjson labels/20260915_planet_vetting_globus.ndjson \
+  --vetting /Volumes/Earth03/flower/20260915_globus_label_application_x4_coreg_4band_stretch_stats/vetting.json \
   --src /Volumes/Earth03/flower/20260915_globus_label_application_x4_coreg_4band_stretch_stats \
   --dst "$DST"
 ```
+
+`--vetting` takes either a `vetting.json` from `vet_planet_chips.py` or a
+`*.ndjson` Labelbox export, chosen by extension, so the historical exports
+still work (`--ndjson` remains as an alias).
 
 `copy_good_planet_vetting.py` copies every sibling file sharing an accepted
 stem and unions the two `coreg_log.json` files on `(scene, label)`, so the
