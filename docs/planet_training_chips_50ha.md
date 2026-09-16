@@ -116,11 +116,41 @@ KMP_DUPLICATE_LIB_OK=TRUE python scripts/apply_drone_labels_coreg.py \
 `KMP_DUPLICATE_LIB_OK=TRUE` works around a torch OpenMP duplicate-runtime
 abort on this machine.
 
-**Memory.** `process_label()` holds one drone ortho for the duration of a
-label date's scenes, so peak RSS is roughly the ortho size (~4.5 GB for
-globus) plus the drone reprojection in `generate_drone_png()` (~2.5 GB).
-On a 16 GB machine this runs but leaves little headroom; drop `-d 2` to
-skip the drone PNGs if it thrashes.
+**Yield.** 370 pairs, **154 coregistered (41.6 %)**, against 131/323
+(40.6 %) for the 2020–2023 build — the two eras agree closely, so the
+failure rate is weather and not a footprint or band-order problem. Applied
+shifts have median magnitude 4.30 m and max 27.83 m against the 30 m
+(`max_shift=10` px) bound, with mean (x, y) = (+2.25, −1.35) m: a
+sub-pixel systematic drone↔Planet georeferencing offset at the 3 m Planet
+scale, which is what the coregistration step exists to remove. Chip crown
+fraction has median 4.07 % (max 8.55 %), against 4.15 % for the 56 curated
+2020–2023 chips.
+
+Chip geometry is 820 × 1468 px for 152 of the 154; two partial-swath
+scenes come out 728 × 1468 and 820 × 1204. All three exceed the 512 px
+that `get_split()` needs in both dimensions.
+
+**Runtime and memory.** 2 h 49 m for the 370 pairs on a 64 GB / 16-core
+machine (~23 s per pair). `process_label()` holds one drone ortho for the
+duration of a label date's scenes, and **measured peak RSS is ~20 GB** —
+well above the ~7 GB that the ortho (~4.5 GB) plus the
+`generate_drone_png()` reprojection (~2.5 GB) would suggest. A 16 GB
+machine drives this deep into swap and runs roughly 4× slower per pair
+(~95 s); drop `-d 2` to skip the drone PNGs if that is the only option.
+
+**One Planet scene can pair with two label dates.** Chip stems are keyed
+on the Planet scene alone, so when two flights fall within `--timewindow`
+of one scene the second date's chip overwrites the first and only one of
+the two pairs keeps its output. In the globus set this affects 6 scenes /
+12 pairs (370 pairs → 364 unique scenes). `coreg_log.json` still records
+both pairs; only the files on disk collide.
+
+**If the final `json.dump` fails,** `scripts/reconstruct_coreg_log.py`
+rebuilds the log from the chips without re-running the build. Everything
+except the AROSICS shift is recoverable, and rebuilt records are flagged
+`reconstructed: true` with a null shift. This was needed once, for the
+float32 crash fixed in `compute_coreg_shift`; the recovered log was later
+confirmed to agree with a full re-run on all 370 `coreg_ok` values.
 
 ### 3. Vet and assemble the curated set
 
