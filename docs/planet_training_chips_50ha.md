@@ -127,8 +127,18 @@ fraction has median 4.07 % (max 8.55 %), against 4.15 % for the 56 curated
 2020–2023 chips.
 
 Chip geometry is 820 × 1468 px for 152 of the 154; two partial-swath
-scenes come out 728 × 1468 and 820 × 1204. All three exceed the 512 px
-that `get_split()` needs in both dimensions.
+scenes come out 728 × 1468 and 820 × 1204. `get_split()` needs
+`height >= size` and `width >= 2 * size` — 512 and **1024** at the default
+size, since the left and right windows must not overlap — and all three
+shapes clear it, the 820 × 1204 chip with the least room (+180 px of
+width). A narrower partial swath would raise `ValueError` rather than
+silently return an overlapping crop, so it fails loudly.
+
+Both loaders were smoke-tested over all 154 chips: every `*.mask.png`
+resolves to its `.tif`, `left` and `right` both crop to 512 × 512, and
+`PlanetMaskRCNNDataset` yields 14 794 crown instances on the left split
+(11 chips give zero instances — the fully clouded ones, which the vetting
+pass drops).
 
 **Runtime and memory.** 2 h 49 m for the 370 pairs on a 64 GB / 16-core
 machine (~23 s per pair). `process_label()` holds one drone ortho for the
