@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
 """
-Copy files for Planet vetting chips that meet a minimum "Quality" rating in
-a Labelbox export (e.g. `labels/20260706_planet_vetting.ndjson`) from the
-4-band stretch-stats source directory into the curated destination directory.
+Copy files for Planet vetting chips that meet a minimum "Quality" rating from
+the 4-band stretch-stats source directory into the curated destination
+directory.
 
-The Quality radio has three levels, ranked Poor < Fair < Good. By default only
-"Good" chips are copied (the original 50ha behaviour); pass `--min-quality Fair`
-to also include Fair chips, etc.
+Two rating file formats are accepted, chosen by extension:
+
+  *.json    a `vetting.json` written by `scripts/vet_planet_chips.py`
+  *.ndjson  a Labelbox export (e.g. `labels/20260706_planet_vetting.ndjson`)
+
+Labelbox access is gone, so new sets are rated with `vet_planet_chips.py`;
+the NDJSON path stays for the exports already in `labels/`. Both use the same
+three levels, ranked Poor < Fair < Good. By default only "Good" chips are
+copied (the original 50ha behaviour); pass `--min-quality Fair` to also
+include Fair chips, etc.
 
 For each accepted chip (external_id ends in `.png`), all sibling files that
 share the same stem are copied (e.g. `.png`, `.tif`, `.mask.png`,
@@ -23,7 +30,7 @@ from collections import Counter
 from pathlib import Path
 
 
-DEFAULT_NDJSON = Path("labels/20260706_planet_vetting.ndjson")
+DEFAULT_VETTING = Path("labels/20260706_planet_vetting.ndjson")
 DEFAULT_SRC = Path(
     "/Volumes/Earth03/flower/20260608_full_label_application_x4_coreg_4band_stretch_stats"
 )
@@ -35,8 +42,27 @@ DEFAULT_DST = Path(
 QUALITY_RANK = {"Poor": 0, "Fair": 1, "Good": 2}
 
 
-def collect_stems(ndjson_path: Path, min_quality: str) -> list[str]:
+def collect_stems(vetting_path: Path, min_quality: str) -> list[str]:
+    """Stems rated at least `min_quality`, from either rating file format."""
     min_rank = QUALITY_RANK[min_quality]
+    if vetting_path.suffix == ".ndjson":
+        return _collect_stems_labelbox(vetting_path, min_rank)
+    return _collect_stems_native(vetting_path, min_rank)
+
+
+def _collect_stems_native(vetting_path: Path, min_rank: int) -> list[str]:
+    """`{"ratings": {"<chip>.png": {"quality": "Good", ...}, ...}}`, keyed by
+    chip filename exactly as Labelbox keyed `data_row.external_id`."""
+    with vetting_path.open() as f:
+        ratings = json.load(f).get("ratings", {})
+    return [
+        Path(external_id).stem
+        for external_id, rec in sorted(ratings.items())
+        if QUALITY_RANK.get(rec.get("quality"), -1) >= min_rank
+    ]
+
+
+def _collect_stems_labelbox(ndjson_path: Path, min_rank: int) -> list[str]:
     stems: list[str] = []
     with ndjson_path.open() as f:
         for line in f:
@@ -81,19 +107,19 @@ def merge_coreg_log(src_log: Path, dst_log: Path) -> tuple[list[dict], int, int,
 
 
 def copy_good(
-    ndjson_path: Path,
+    vetting_path: Path,
     src_dir: Path,
     dst_dir: Path,
     min_quality: str = "Good",
     dry_run: bool = False,
 ) -> None:
-    print(f"NDJSON        : {ndjson_path}")
+    print(f"Ratings       : {vetting_path}")
     print(f"Source dir    : {src_dir}")
     print(f"Destination   : {dst_dir}")
     print(f"Min quality   : {min_quality}")
     print(f"Dry run       : {dry_run}\n")
 
-    stems = collect_stems(ndjson_path, min_quality)
+    stems = collect_stems(vetting_path, min_quality)
     print(f"Accepted chips: {len(stems)} (>= {min_quality})")
 
     if not dry_run:
@@ -106,7 +132,7 @@ def copy_good(
 
     missing = [s for s, m in src_files_by_stem.items() if not m]
     if missing:
-        print(f"WARNING: {len(missing)} Good stem(s) had no matching files:")
+        print(f"WARNING: {len(missing)} accepted stem(s) had no matching files:")
         for s in missing:
             print(f"  {s}")
 
@@ -147,7 +173,11 @@ def copy_good(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--ndjson", type=Path, default=DEFAULT_NDJSON)
+    # --ndjson kept as an alias so existing invocations keep working.
+    parser.add_argument("--vetting", "--ndjson", dest="vetting", type=Path,
+                        default=DEFAULT_VETTING,
+                        help="vetting.json from vet_planet_chips.py, or a "
+                             "Labelbox *.ndjson export.")
     parser.add_argument("--src", type=Path, default=DEFAULT_SRC)
     parser.add_argument("--dst", type=Path, default=DEFAULT_DST)
     parser.add_argument(
@@ -160,7 +190,7 @@ def main() -> None:
     args = parser.parse_args()
 
     copy_good(
-        args.ndjson, args.src, args.dst,
+        args.vetting, args.src, args.dst,
         min_quality=args.min_quality, dry_run=args.dry_run,
     )
 
