@@ -1,11 +1,17 @@
 #!/usr/bin/env python
-"""Interactive Dash viewer for Planet Mask R-CNN predictions.
+"""Interactive Dash viewer for Planet chips: drone ortho, ground truth and
+(optionally) Mask R-CNN predictions.
 
-Navigate images in a directory, toggle ground truth and prediction
-overlays, zoom into problem cases. A background worker pre-computes
-predictions for the whole directory; navigating to an uncached image
-bumps it to the front of the queue so the user waits at most a few
-seconds.
+Navigate images in a directory, toggle the layers, zoom into problem cases.
+With `--model` a background worker pre-computes predictions for the whole
+directory, and navigating to an uncached image bumps it to the front of the
+queue so the user waits at most a few seconds.
+
+Without `--model` the prediction layer is simply absent and the app becomes a
+coregistration reviewer: blend or swipe the drone ortho against the Planet
+chip, or hit `b` to blink it, to judge whether the two -- and the crown mask
+applied from the drone -- line up. Chips with no `.mask.png` (every scene
+whose coregistration failed) lose the ground-truth layer rather than erroring.
 """
 import atexit
 import io
@@ -17,6 +23,7 @@ import queue
 import sys
 import threading
 import urllib.parse
+from collections import OrderedDict
 from dataclasses import dataclass
 from glob import glob
 from typing import Optional
@@ -40,6 +47,7 @@ from train_planet_image_maskrcnn import (  # noqa: E402, F401
     OCMRoIHeads,
     _lookup_clear_at_centers,
     _split_window,
+    binary_mask_to_instances,
     classify_instances,
 )
 from util import select_device  # noqa: E402
@@ -177,6 +185,43 @@ class InferenceWorker(threading.Thread):
         )
 
 
+def crop_window(path, split, size):
+    """The (row_start, row_end, col_start, col_end) of the displayed region of
+    a chip, read from the PNG header. `split == "whole"` takes the full tile."""
+    with _PILImage.open(path) as im:
+        w, h = im.size
+    if split == 'whole':
+        return 0, h, 0, w
+    return _split_window(h, w, split, size)
+
+
+def load_display_shape_and_gt(path, split, size, min_instance_size):
+    """The `(h, w)` of the displayed crop and its ground-truth instances, read
+    from the PNGs alone.
+
+    The figure needs only the crop's dimensions -- the pixels on screen are
+    served straight from the PNG on disk -- so going through the PNG here
+    avoids re-reading and re-stretching the 4-band tif on every render. The
+    crop and the instance extraction match `load_image_and_gt` exactly, so the
+    ground truth is identical to what the model is scored against.
+
+    Returns an empty instance stack when the chip has no `.mask.png`, which is
+    the case for every scene whose coregistration failed.
+    """
+    r0, r1, c0, c1 = crop_window(path, split, size)
+    shape = (r1 - r0, c1 - c0)
+
+    maskfile = path[:-4] + '.mask.png' if path.endswith('.png') else path + '.mask.png'
+    if not os.path.exists(maskfile):
+        return shape, np.zeros((0, *shape), dtype=np.uint8)
+
+    mask = np.array(_PILImage.open(maskfile))
+    mask = (mask == 255).astype(np.uint8)[r0:r1, c0:c1]
+    return shape, binary_mask_to_instances(
+        mask, min_instance_size=min_instance_size,
+    )
+
+
 def _mask_to_polygon_xy(mask):
     contours = measure.find_contours(mask.astype(np.float32), 0.5)
     if not contours:
@@ -212,12 +257,11 @@ def _trace_visible(kind, label, show_gt, show_pred, filter_val):
     return label == filter_val
 
 
-def build_figure(img, gt_masks, pred_result, show_gt, show_pred,
-                 planet_url, filter_val='all',
-                 drone_url=None, show_drone=False,
+def build_figure(img_shape, gt_masks, pred_result, show_gt, show_pred,
+                 chip_url, filter_val='all',
                  ocm_array=None, show_ocm=False, coreg_meta=None,
-                 overlay_opacity=0.5):
-    h, w = img.shape[:2]
+                 ocm_opacity=0.5, swipe_frac=1.0, show_divider=False):
+    h, w = img_shape
     fig = go.Figure()
 
     # OCM is a go.Image trace so its alpha composites correctly above the
@@ -229,7 +273,7 @@ def build_figure(img, gt_masks, pred_result, show_gt, show_pred,
             z=ocm_array,
             colormodel='rgba256',
             x0=0, y0=0, dx=w / ow, dy=h / oh,
-            opacity=overlay_opacity,
+            opacity=ocm_opacity,
             hoverinfo='skip',
             name='ocm',
         ))
@@ -292,12 +336,25 @@ def build_figure(img, gt_masks, pred_result, show_gt, show_pred,
             ))
 
     if coreg_meta is not None:
-        x_m = coreg_meta.get('x_shift_m', 0.0)
-        y_m = coreg_meta.get('y_shift_m', 0.0)
+        x_m = coreg_meta.get('x_shift_m')
+        y_m = coreg_meta.get('y_shift_m')
         ok = coreg_meta.get('coreg_ok', False)
         p_res = coreg_meta.get('planet_res_m')
         d_res = coreg_meta.get('drone_res_m')
-        parts = [f'Δx={x_m:+.2f}m  Δy={y_m:+.2f}m  coreg={"OK" if ok else "FAIL"}']
+        # A log rebuilt by reconstruct_coreg_log.py carries no recoverable
+        # shift, so render the null as "n/a" and say where the record came
+        # from -- a missing offset must never read as a measured zero.
+        x_txt = 'n/a' if x_m is None else f'{x_m:+.2f}m'
+        y_txt = 'n/a' if y_m is None else f'{y_m:+.2f}m'
+        line = f'Δx={x_txt}  Δy={y_txt}  coreg={"OK" if ok else "FAIL"}'
+        flags = []
+        if coreg_meta.get('reconstructed'):
+            flags.append('reconstructed')
+        if coreg_meta.get('ambiguous_coreg_ok'):
+            flags.append('ambiguous')
+        if flags:
+            line += '  (' + ', '.join(flags) + ')'
+        parts = [line]
         if p_res is not None and d_res is not None:
             parts.append(f'Planet {p_res:.1f}m/px  Drone {d_res:.3f}m/px')
         fig.add_annotation(
@@ -309,6 +366,19 @@ def build_figure(img, gt_masks, pred_result, show_gt, show_pred,
             bgcolor='rgba(0,0,0,0.55)',
             borderpad=4,
         )
+
+    # Always present so the swipe slider can move it with a Patch; parked
+    # off the right edge (frac 1.0) when swiping is off.
+    x_div = swipe_frac * w
+    fig.add_trace(go.Scatter(
+        x=[x_div, x_div], y=[0, h],
+        mode='lines',
+        line=dict(color='white', width=1.5, dash='dot'),
+        name='swipe-divider',
+        showlegend=False,
+        hoverinfo='skip',
+        visible=bool(show_divider),
+    ))
 
     fig.update_layout(
         margin=dict(l=0, r=0, t=0, b=0),
@@ -324,28 +394,20 @@ def build_figure(img, gt_masks, pred_result, show_gt, show_pred,
         showlegend=False,
     )
 
-    # Within layer='below', the first entry in `images` is painted last
-    # (visually on top), so order [Drone, Planet] gives Drone over Planet.
-    overlays = []
-    if show_drone and drone_url is not None:
-        overlays.append(dict(
-            source=drone_url,
-            xref='x', yref='y',
-            x=0, y=0, sizex=w, sizey=h,
-            xanchor='left', yanchor='top',
-            sizing='stretch',
-            opacity=overlay_opacity,
-            layer='below',
-        ))
-    overlays.append(dict(
-        source=planet_url,
+    # A single image: the drone ortho is composited onto the Planet chip
+    # server-side (see `composite_chip`). Stacking them as two `layer='below'`
+    # entries does not work -- Plotly keys those on their footprint, so two
+    # images sharing a subplot and geometry collapse into one and the drone
+    # simply replaces the chip. Compositing also keeps the crown outlines
+    # drawing above both layers, which `layer='above'` would not.
+    fig.update_layout(images=[dict(
+        source=chip_url,
         xref='x', yref='y',
         x=0, y=0, sizex=w, sizey=h,
         xanchor='left', yanchor='top',
         sizing='stretch',
         layer='below',
-    ))
-    fig.update_layout(images=overlays)
+    )])
 
     return fig
 
@@ -354,7 +416,7 @@ _INDEX_HTML = '''<!DOCTYPE html>
 <html>
 <head>
 {%metas%}
-<title>Planet Mask R-CNN Viewer</title>
+<title>Planet Chip Viewer</title>
 {%favicon%}
 {%css%}
 <style>
@@ -364,6 +426,7 @@ body { font-family: sans-serif; margin: 0; padding: 12px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 #header { font-family: monospace; font-size: 13px; color: #444; margin-left: auto; }
 button { padding: 4px 10px; }
+.hotkeys { font-size: 12px; color: #888; }
 </style>
 </head>
 <body>
@@ -373,51 +436,116 @@ button { padding: 4px 10px; }
 {%scripts%}
 {%renderer%}
 </footer>
+<script>
+// Keyboard shortcuts. Dash has no keydown input, and dash_extensions is not
+// in environment.yml, so route keys to hidden buttons the callbacks listen on.
+(function () {
+    var KEYS = {
+        'b': 'btn-blink', ' ': 'btn-blink',
+        'ArrowLeft': 'btn-prev', 'ArrowRight': 'btn-next'
+    };
+    document.addEventListener('keydown', function (ev) {
+        if (ev.metaKey || ev.ctrlKey || ev.altKey) { return; }
+        var tag = (ev.target.tagName || '').toLowerCase();
+        if (tag === 'input' || tag === 'textarea') { return; }
+        var id = KEYS[ev.key];
+        if (!id) { return; }
+        var el = document.getElementById(id);
+        if (!el) { return; }
+        ev.preventDefault();
+        el.click();
+    });
+})();
+</script>
 </body>
 </html>
 '''
 
 
-def _cropped_rgba_array(path, fracs):
+def _load_crop(path, fracs):
+    """Open a chip PNG, cropped to the fractional box (`None` = the whole
+    tile). Fractions rather than pixels so the Planet chip, the 2x drone
+    ortho and the OCM all crop to the same ground footprint."""
     with _PILImage.open(path) as im:
-        if fracs is not None:
-            y0f, y1f, x0f, x1f = fracs
-            w_im, h_im = im.size
-            box = (
-                int(round(x0f * w_im)),
-                int(round(y0f * h_im)),
-                int(round(x1f * w_im)),
-                int(round(y1f * h_im)),
-            )
-            im = im.crop(box)
-        if im.mode != 'RGBA':
-            im = im.convert('RGBA')
-        return np.array(im)
-
-
-def _serve_cropped(path, fracs):
-    if fracs is None:
-        return flask.send_file(path, mimetype='image/png',
-                               conditional=True, max_age=86400)
-    y0f, y1f, x0f, x1f = fracs
-    with _PILImage.open(path) as im:
+        im.load()
+        if fracs is None:
+            return im.copy()
+        y0f, y1f, x0f, x1f = fracs
         w_im, h_im = im.size
-        box = (
+        return im.crop((
             int(round(x0f * w_im)),
             int(round(y0f * h_im)),
             int(round(x1f * w_im)),
             int(round(y1f * h_im)),
-        )
-        cropped = im.crop(box)
-        buf = io.BytesIO()
-        cropped.save(buf, format='PNG')
-    buf.seek(0)
-    return flask.send_file(buf, mimetype='image/png', max_age=86400)
+        ))
+
+
+def _cropped_rgba_array(path, fracs):
+    return np.array(_load_crop(path, fracs).convert('RGBA'))
+
+
+def composite_chip(planet_path, drone_path, fracs, drone_opacity, swipe):
+    """The Planet chip with the drone ortho composited over it.
+
+    Blending here rather than stacking two Plotly images is not a
+    micro-optimization: Plotly keys its `layer='below'` images on their
+    footprint, so two entries sharing a subplot and geometry collapse into
+    one and the drone simply replaces the chip. It also keeps the wire
+    payload to a single PNG and leaves the crown outlines drawing on top of
+    both layers.
+
+    `drone_opacity` blends the whole frame; `swipe < 1` instead wipes the
+    drone in only left of that fraction of the width, for a hard edge to
+    judge alignment against.
+    """
+    base = _load_crop(planet_path, fracs).convert('RGB')
+    if drone_path is None or drone_opacity <= 0:
+        return base
+
+    over = _load_crop(drone_path, fracs).convert('RGB')
+    if over.size != base.size:
+        over = over.resize(base.size, _PILImage.BILINEAR)
+
+    if swipe >= 1.0:
+        return _PILImage.blend(base, over, drone_opacity)
+
+    cut = int(round(max(swipe, 0.0) * base.size[0]))
+    if cut <= 0:
+        return base
+    box = (0, 0, cut, base.size[1])
+    out = base.copy()
+    out.paste(_PILImage.blend(base.crop(box), over.crop(box), drone_opacity),
+              box)
+    return out
+
+
+class _ImageCache:
+    """Bounded FIFO cache of encoded PNG bytes, keyed by request parameters.
+
+    The browser caches each distinct URL, so this only has to absorb the
+    first hit per (scene, opacity, swipe) -- enough for blinking and for
+    stepping back and forth through the set to feel immediate.
+    """
+
+    def __init__(self, maxsize=16):
+        self._lock = threading.Lock()
+        self._data = OrderedDict()
+        self._maxsize = maxsize
+
+    def get(self, key):
+        with self._lock:
+            return self._data.get(key)
+
+    def put(self, key, value):
+        with self._lock:
+            self._data[key] = value
+            while len(self._data) > self._maxsize:
+                self._data.popitem(last=False)
 
 
 def make_app(image_paths, cache, worker, split, size, min_instance_size,
              coreg_info=None, drone_paths=None, ocm_paths=None,
-             crop_fracs=None, channel_kinds=None):
+             crop_fracs=None):
     app = Dash(__name__)
     app.index_string = _INDEX_HTML
 
@@ -427,29 +555,84 @@ def make_app(image_paths, cache, worker, split, size, min_instance_size,
     planet_paths = {
         os.path.splitext(os.path.basename(p))[0]: p for p in image_paths
     }
+    mask_paths = {
+        scene: path[:-4] + '.mask.png'
+        for scene, path in planet_paths.items()
+        if os.path.exists(path[:-4] + '.mask.png')
+    }
+    has_model = worker is not None
 
-    @app.server.route('/planet/<scene>')
-    def _serve_planet(scene):
+    image_cache = _ImageCache()
+
+    def _float_arg(name, default):
+        try:
+            return min(max(float(flask.request.args.get(name, default)), 0.0), 1.0)
+        except (TypeError, ValueError):
+            return default
+
+    @app.server.route('/chip/<scene>')
+    def _serve_chip(scene):
         scene_key = urllib.parse.unquote(scene)
         path = planet_paths.get(scene_key)
         if path is None:
             flask.abort(404)
-        return _serve_cropped(path, crop_fracs.get(scene_key))
+        drone_op = _float_arg('drone', 0.0)
+        swipe = _float_arg('swipe', 1.0)
+        fracs = crop_fracs.get(scene_key)
 
-    @app.server.route('/drone/<scene>')
-    def _serve_drone(scene):
-        scene_key = urllib.parse.unquote(scene)
-        path = drone_paths.get(scene_key)
-        if path is None:
-            flask.abort(404)
-        return _serve_cropped(path, crop_fracs.get(scene_key))
+        if drone_op <= 0 and fracs is None:
+            return flask.send_file(path, mimetype='image/png',
+                                   conditional=True, max_age=86400)
+
+        key = (scene_key, round(drone_op, 3), round(swipe, 3))
+        png = image_cache.get(key)
+        if png is None:
+            im = composite_chip(path, drone_paths.get(scene_key), fracs,
+                                drone_op, swipe)
+            buf = io.BytesIO()
+            im.save(buf, format='PNG')
+            png = buf.getvalue()
+            image_cache.put(key, png)
+        return flask.send_file(io.BytesIO(png), mimetype='image/png',
+                               max_age=86400)
 
     filenames = [os.path.basename(p) for p in image_paths]
+
+    def drone_params(show_drone, mode, opacity_val, swipe_val):
+        """(drone opacity, swipe fraction) for the composite route. Swiping
+        wipes a hard edge, so the covered part is opaque; blending honours
+        the opacity slider across the whole frame."""
+        if not show_drone:
+            return 0.0, 1.0
+        if mode == 'swipe':
+            return 1.0, (0.5 if swipe_val is None else float(swipe_val))
+        return (0.5 if opacity_val is None else float(opacity_val)), 1.0
+
+    def chip_url(scene, drone_op, swipe):
+        scene_q = urllib.parse.quote(scene, safe='')
+        mtimes = [os.path.getmtime(planet_paths[scene])]
+        if scene in drone_paths:
+            mtimes.append(os.path.getmtime(drone_paths[scene]))
+        v = int(max(mtimes))
+        return (f'/chip/{scene_q}?v={v}'
+                f'&drone={drone_op:.3f}&swipe={swipe:.3f}')
+
+    def _respell_chip_url(src, drone_op, swipe):
+        """Re-point an existing chip URL at new overlay parameters, keeping
+        its scene and cache-busting stamp."""
+        return (f'{src.split("&drone=")[0]}'
+                f'&drone={drone_op:.3f}&swipe={swipe:.3f}')
+
+    SHOW = {'display': 'inline-block'}
+    HIDE = {'display': 'none'}
+    SHOW_FLEX = {'display': 'inline-flex', 'alignItems': 'center'}
 
     app.layout = html.Div([
         dcc.Store(id='store-current-idx', data=0),
         dcc.Store(id='store-last-rendered', data=None),
-        dcc.Interval(id='poll-cache', interval=500),
+        dcc.Interval(id='poll-cache', interval=500, disabled=not has_model),
+        # Clicked by the keydown handler in _INDEX_HTML; never shown.
+        html.Button(id='btn-blink', n_clicks=0, style=HIDE),
         html.Div(className='toolbar', children=[
             html.Button('◀ Prev', id='btn-prev', n_clicks=0),
             html.Button('Next ▶', id='btn-next', n_clicks=0),
@@ -460,57 +643,66 @@ def make_app(image_paths, cache, worker, split, size, min_instance_size,
                 value=0, clearable=False,
                 style={'minWidth': '360px'},
             ),
-            dcc.Checklist(
-                id='toggle-gt',
-                options=[{'label': ' Show ground truth', 'value': 'gt'}],
-                value=['gt'], inline=True,
-            ),
-            dcc.Dropdown(
-                id='dd-filter',
-                options=[
-                    {'label': 'All', 'value': 'all'},
-                    {'label': 'True Positive', 'value': 'TP'},
-                    {'label': 'False Positive', 'value': 'FP'},
-                    {'label': 'False Negative', 'value': 'FN'},
-                ],
-                value='all', clearable=False,
-                style={'minWidth': '180px'},
-            ),
-            html.Div(id='pred-toggle-slot', style={'display': 'inline-block'},
-                     children=[
+            html.Div(id='gt-toggle-slot', style=SHOW, children=[
+                dcc.Checklist(
+                    id='toggle-gt',
+                    options=[{'label': ' Show ground truth', 'value': 'gt'}],
+                    value=['gt'], inline=True,
+                ),
+            ]),
+            html.Div(id='filter-slot',
+                     style=SHOW if has_model else HIDE, children=[
+                dcc.Dropdown(
+                    id='dd-filter',
+                    options=[
+                        {'label': 'All', 'value': 'all'},
+                        {'label': 'True Positive', 'value': 'TP'},
+                        {'label': 'False Positive', 'value': 'FP'},
+                        {'label': 'False Negative', 'value': 'FN'},
+                    ],
+                    value='all', clearable=False,
+                    style={'minWidth': '180px'},
+                ),
+            ]),
+            html.Div(id='pred-toggle-slot',
+                     style=SHOW if has_model else HIDE, children=[
                 dcc.Checklist(
                     id='toggle-pred',
                     options=[{'label': ' Show predictions', 'value': 'pred'}],
                     value=['pred'], inline=True,
-                    style={'display': 'inline-block'},
+                    style=SHOW,
                 ),
-                html.Span(id='pred-spinner', style={'display': 'none'},
-                          children=[
+                html.Span(id='pred-spinner', style=HIDE, children=[
                     html.Span(className='spinner'),
                     html.Span(' computing predictions…',
                               style={'marginLeft': '6px'}),
                 ]),
             ]),
-            html.Div(id='drone-toggle-slot', style={'display': 'none'},
-                     children=[
+            html.Div(id='drone-toggle-slot', style=HIDE, children=[
                 dcc.Checklist(
                     id='toggle-drone',
                     options=[{'label': ' Show drone overlay', 'value': 'drone'}],
                     value=[], inline=True,
-                    style={'display': 'inline-block'},
+                    style=SHOW,
                 ),
             ]),
-            html.Div(id='ocm-toggle-slot', style={'display': 'none'},
-                     children=[
+            html.Div(id='ocm-toggle-slot', style=HIDE, children=[
                 dcc.Checklist(
                     id='toggle-ocm',
                     options=[{'label': ' Show cloud mask', 'value': 'ocm'}],
                     value=[], inline=True,
-                    style={'display': 'inline-block'},
+                    style=SHOW,
                 ),
             ]),
-            html.Div(id='overlay-opacity-slot', style={'display': 'none'},
-                     children=[
+            html.Div(id='drone-mode-slot', style=HIDE, children=[
+                dcc.RadioItems(
+                    id='drone-mode',
+                    options=[{'label': ' Blend', 'value': 'blend'},
+                             {'label': ' Swipe', 'value': 'swipe'}],
+                    value='blend', inline=True,
+                ),
+            ]),
+            html.Div(id='overlay-opacity-slot', style=HIDE, children=[
                 html.Span('Overlay opacity:',
                           style={'fontSize': '13px', 'marginRight': '8px'}),
                 html.Div(
@@ -525,6 +717,23 @@ def make_app(image_paths, cache, worker, split, size, min_instance_size,
                            'verticalAlign': 'middle'},
                 ),
             ]),
+            html.Div(id='swipe-slot', style=HIDE, children=[
+                html.Span('Swipe:',
+                          style={'fontSize': '13px', 'marginRight': '8px'}),
+                html.Div(
+                    dcc.Slider(
+                        id='slider-swipe',
+                        min=0, max=1, step=0.01, value=0.5,
+                        marks=None, updatemode='mouseup',
+                        tooltip={'always_visible': False,
+                                 'placement': 'bottom'},
+                    ),
+                    style={'width': '200px', 'display': 'inline-block',
+                           'verticalAlign': 'middle'},
+                ),
+            ]),
+            html.Span('← → navigate  ·  b blinks the drone layer',
+                      className='hotkeys'),
             html.Div(id='header'),
         ]),
         dcc.Graph(
@@ -566,120 +775,162 @@ def make_app(image_paths, cache, worker, split, size, min_instance_size,
         Output('viewer', 'figure'),
         Output('pred-spinner', 'style'),
         Output('toggle-pred', 'style'),
+        Output('gt-toggle-slot', 'style'),
         Output('drone-toggle-slot', 'style'),
         Output('ocm-toggle-slot', 'style'),
+        Output('drone-mode-slot', 'style'),
         Output('overlay-opacity-slot', 'style'),
+        Output('swipe-slot', 'style'),
         Output('store-last-rendered', 'data'),
         Input('store-current-idx', 'data'),
         Input('poll-cache', 'n_intervals'),
-        Input('toggle-drone', 'value'),
         Input('toggle-ocm', 'value'),
+        Input('drone-mode', 'value'),
         State('store-last-rendered', 'data'),
         State('toggle-gt', 'value'),
         State('toggle-pred', 'value'),
+        State('toggle-drone', 'value'),
         State('dd-filter', 'value'),
         State('slider-overlay-opacity', 'value'),
+        State('slider-swipe', 'value'),
     )
-    def render(idx, _tick, drone_val, ocm_val, last, gt_val, pred_val,
-               filter_val, opacity_val):
+    def render(idx, _tick, ocm_val, mode, last, gt_val, pred_val, drone_val,
+               filter_val, opacity_val, swipe_val):
         idx = idx or 0
         path = image_paths[idx]
         scene = os.path.splitext(os.path.basename(path))[0]
-        if ctx.triggered_id == 'store-current-idx':
+        if has_model and ctx.triggered_id == 'store-current-idx':
             worker.bump(path)
 
-        pred = cache.get(path)
+        pred = cache.get(path) if has_model else None
         pred_available = pred is not None
 
         drone_available = scene in drone_paths
         ocm_available = scene in ocm_paths
+        mask_available = scene in mask_paths
 
         show_drone = 'drone' in (drone_val or []) and drone_available
         show_ocm = 'ocm' in (ocm_val or []) and ocm_available
+        mode = mode or 'blend'
+        drone_op, swipe = drone_params(show_drone, mode, opacity_val, swipe_val)
 
-        if last is not None:
-            if (last.get('path') == path
-                    and last.get('pred_available') == pred_available
-                    and last.get('drone_available') == drone_available
-                    and last.get('ocm_available') == ocm_available
-                    and last.get('show_drone') == show_drone
-                    and last.get('show_ocm') == show_ocm):
-                raise dash.exceptions.PreventUpdate
+        # Everything that changes the figure's *structure*. Layer visibility
+        # and opacity are patched instead, so they are deliberately absent:
+        # this is what keeps the 500 ms cache poll from thrashing the figure.
+        state = {
+            'path': path,
+            'pred_available': pred_available,
+            'drone_available': drone_available,
+            'ocm_available': ocm_available,
+            'mask_available': mask_available,
+            'show_ocm': show_ocm,
+            'mode': mode,
+        }
+        if last == state:
+            raise dash.exceptions.PreventUpdate
 
-        img, gt_masks, _ = load_image_and_gt(
+        img_shape, gt_masks = load_display_shape_and_gt(
             path, split=split, size=size,
             min_instance_size=min_instance_size,
-            channel_kinds=channel_kinds,
         )
 
-        scene_q = urllib.parse.quote(scene, safe='')
-        v_planet = int(os.path.getmtime(path))
-        planet_url = f'/planet/{scene_q}?v={v_planet}'
-        drone_url = None
-        if drone_available:
-            v = int(os.path.getmtime(drone_paths[scene]))
-            drone_url = f'/drone/{scene_q}?v={v}'
         ocm_array = None
         if show_ocm:
             ocm_array = _cropped_rgba_array(
                 ocm_paths[scene], crop_fracs.get(scene),
             )
 
-        show_gt = 'gt' in (gt_val or [])
+        show_gt = 'gt' in (gt_val or []) and mask_available
         show_pred = 'pred' in (pred_val or []) and pred_available
         coreg_meta = (coreg_info or {}).get(scene)
-        opacity = 0.5 if opacity_val is None else float(opacity_val)
-        fig = build_figure(img, gt_masks, pred, show_gt, show_pred,
-                           planet_url=planet_url,
+        ocm_opacity = 0.5 if opacity_val is None else float(opacity_val)
+        fig = build_figure(img_shape, gt_masks, pred, show_gt, show_pred,
+                           chip_url=chip_url(scene, drone_op, swipe),
                            filter_val=filter_val or 'all',
-                           drone_url=drone_url, show_drone=show_drone,
                            ocm_array=ocm_array, show_ocm=show_ocm,
                            coreg_meta=coreg_meta,
-                           overlay_opacity=opacity)
+                           ocm_opacity=ocm_opacity,
+                           swipe_frac=swipe,
+                           show_divider=show_drone and mode == 'swipe')
         fig.update_layout(uirevision=scene)
 
-        if pred_available:
-            spinner_style = {'display': 'none'}
-            toggle_style = {'display': 'inline-block'}
+        if not has_model:
+            spinner_style, toggle_style = HIDE, HIDE
+        elif pred_available:
+            spinner_style, toggle_style = HIDE, SHOW
         else:
-            spinner_style = {'display': 'inline-block'}
-            toggle_style = {'display': 'none'}
+            spinner_style, toggle_style = SHOW, HIDE
 
-        drone_slot_style = {'display': 'inline-block'} if drone_available else {'display': 'none'}
-        ocm_slot_style = {'display': 'inline-block'} if ocm_available else {'display': 'none'}
         any_overlay = drone_available or ocm_available
-        opacity_slot_style = (
-            {'display': 'inline-flex', 'alignItems': 'center'}
-            if any_overlay else {'display': 'none'}
+        return (
+            fig,
+            spinner_style,
+            toggle_style,
+            SHOW if mask_available else HIDE,
+            SHOW if drone_available else HIDE,
+            SHOW if ocm_available else HIDE,
+            SHOW if drone_available else HIDE,
+            SHOW_FLEX if (any_overlay and mode == 'blend') else HIDE,
+            SHOW_FLEX if (drone_available and mode == 'swipe') else HIDE,
+            state,
         )
 
-        return (fig, spinner_style, toggle_style, drone_slot_style, ocm_slot_style,
-                opacity_slot_style,
-                {'path': path, 'pred_available': pred_available,
-                 'drone_available': drone_available, 'ocm_available': ocm_available,
-                 'show_drone': show_drone, 'show_ocm': show_ocm})
+    # `b` / spacebar blinks the drone layer by flipping its checkbox; the
+    # opacity callback below turns that into a one-number Patch.
+    app.clientside_callback(
+        """
+        function (n, value) {
+            if (!n) { return window.dash_clientside.no_update; }
+            var on = (value || []).indexOf('drone') !== -1;
+            return on ? [] : ['drone'];
+        }
+        """,
+        Output('toggle-drone', 'value'),
+        Input('btn-blink', 'n_clicks'),
+        State('toggle-drone', 'value'),
+        prevent_initial_call=True,
+    )
 
     @app.callback(
         Output('viewer', 'figure', allow_duplicate=True),
+        Input('toggle-drone', 'value'),
         Input('slider-overlay-opacity', 'value'),
+        Input('slider-swipe', 'value'),
+        State('drone-mode', 'value'),
+        State('store-last-rendered', 'data'),
         State('viewer', 'figure'),
         prevent_initial_call=True,
     )
-    def on_opacity(opacity_val, fig):
+    def on_overlay(drone_val, opacity_val, swipe_val, mode, last, fig):
+        """Re-point the composite at new overlay parameters and move the wipe
+        edge. The figure is patched, never rebuilt, so blinking the drone
+        layer costs one cached image fetch."""
         if not fig:
             raise dash.exceptions.PreventUpdate
         images = (fig.get('layout') or {}).get('images') or []
-        data = fig.get('data') or []
-        value = 0.5 if opacity_val is None else float(opacity_val)
+        if not images:
+            raise dash.exceptions.PreventUpdate
+
+        mode = mode or 'blend'
+        show_drone = ('drone' in (drone_val or [])
+                      and bool((last or {}).get('drone_available')))
+        drone_op, swipe = drone_params(show_drone, mode, opacity_val, swipe_val)
+        ocm_opacity = 0.5 if opacity_val is None else float(opacity_val)
+
         patched = Patch()
-        for i, im in enumerate(images):
-            src = im.get('source') or ''
-            if src.startswith('/planet/'):
-                continue
-            patched['layout']['images'][i]['opacity'] = value
-        for i, trace in enumerate(data):
+        patched['layout']['images'][0]['source'] = _respell_chip_url(
+            images[0].get('source') or '', drone_op, swipe,
+        )
+
+        x_range = ((fig.get('layout') or {}).get('xaxis') or {}).get('range')
+        w = x_range[1] if x_range else 1.0
+        for i, trace in enumerate(fig.get('data') or []):
             if trace.get('type') == 'image':
-                patched['data'][i]['opacity'] = value
+                patched['data'][i]['opacity'] = ocm_opacity
+            elif trace.get('name') == 'swipe-divider':
+                patched['data'][i]['x'] = [swipe * w, swipe * w]
+                patched['data'][i]['visible'] = bool(
+                    show_drone and mode == 'swipe')
         return patched
 
     @app.callback(
@@ -710,24 +961,32 @@ def make_app(image_paths, cache, worker, split, size, min_instance_size,
 
 
 @click.command()
-@click.argument('modelfile')
 @click.argument('imagedir')
+@click.option('--model', 'modelfile', default=None,
+              type=click.Path(exists=True),
+              help='Mask R-CNN checkpoint. Without it the prediction layer is '
+                   'omitted and the app is a drone/Planet coregistration '
+                   'reviewer.')
 @click.option('--score-thresh', default=0.5, type=float,
               help='Minimum score for a prediction to be kept.')
 @click.option('--mask-thresh', default=0.5, type=float,
               help='Threshold applied to soft Mask R-CNN mask logits.')
 @click.option('--split', default='right',
-              type=click.Choice(['left', 'right']),
-              help='Which half of each tile to visualize (test=right).')
+              type=click.Choice(['left', 'right', 'whole']),
+              help='Which part of each tile to visualize (test=right, '
+                   'whole=the entire chip).')
 @click.option('--size', default=512, type=int)
+@click.option('--min-instance-size', default=4, type=int,
+              help='Minimum ground-truth instance size in pixels. Ignored '
+                   'with --model, which takes it from the checkpoint.')
 @click.option('--iou-thresh', default=0.25, type=float,
               help='IoU threshold for TP/FP/FN matching.')
 @click.option('--host', default='127.0.0.1', type=str)
 @click.option('--port', default=8050, type=int)
 @click.option('--logfile', default=None, type=click.Path(exists=False),
               help='Path to coreg_log.json (default: imagedir/coreg_log.json).')
-def main(modelfile, imagedir, score_thresh, mask_thresh, split,
-         size, iou_thresh, host, port, logfile):
+def main(imagedir, modelfile, score_thresh, mask_thresh, split,
+         size, min_instance_size, iou_thresh, host, port, logfile):
 
     SIDECAR_SUFFIXES = ('.mask.png', '.drone.png', '.ocm.png')
     image_paths = sorted(glob(os.path.join(imagedir, '*.png')))
@@ -735,19 +994,23 @@ def main(modelfile, imagedir, score_thresh, mask_thresh, split,
     if not image_paths:
         raise click.ClickException(f'no Planet *.png tiles in {imagedir}')
 
-    def _meets_size(p):
-        from PIL import Image as _Image
-        with _Image.open(p) as im:
-            h, w = im.height, im.width
-        return h >= size and w >= 2 * size
+    # 'whole' consumes the tile as-is, so the left/right window constraint
+    # does not apply and nothing needs to be dropped for being too small.
+    if split != 'whole':
+        def _meets_size(p):
+            with _PILImage.open(p) as im:
+                h, w = im.height, im.width
+            return h >= size and w >= 2 * size
 
-    skipped = [p for p in image_paths if not _meets_size(p)]
-    image_paths = [p for p in image_paths if _meets_size(p)]
-    if skipped:
-        print(f'Skipping {len(skipped)} image(s) smaller than {size}x{2*size}: '
-              + ', '.join(os.path.basename(p) for p in skipped))
-    if not image_paths:
-        raise click.ClickException(f'no images meet the minimum size ({size}x{2*size})')
+        skipped = [p for p in image_paths if not _meets_size(p)]
+        image_paths = [p for p in image_paths if _meets_size(p)]
+        if skipped:
+            print(f'Skipping {len(skipped)} image(s) smaller than '
+                  f'{size}x{2*size}: '
+                  + ', '.join(os.path.basename(p) for p in skipped))
+        if not image_paths:
+            raise click.ClickException(
+                f'no images meet the minimum size ({size}x{2*size})')
 
     if logfile is None:
         logfile = os.path.join(imagedir, 'coreg_log.json')
@@ -768,7 +1031,11 @@ def main(modelfile, imagedir, score_thresh, mask_thresh, split,
         ocm_png = os.path.join(imagedir, f'{scene}.ocm.png')
         if os.path.exists(ocm_png):
             ocm_paths[scene] = ocm_png
-        if scene in drone_paths or scene in ocm_paths:
+        # Every served layer is cropped by the same *fractional* box, so the
+        # Planet chip, the 2x drone ortho and the OCM line up despite their
+        # different resolutions. The Planet chip needs it too, whether or not
+        # it has sidecars, since the axes are sized to the crop.
+        if split != 'whole':
             with _PILImage.open(p) as im:
                 w_p, h_p = im.size
             row_start, row_end, col_start, col_end = _split_window(
@@ -779,33 +1046,41 @@ def main(modelfile, imagedir, score_thresh, mask_thresh, split,
                 col_start / w_p, col_end / w_p,
             )
 
-    device = select_device()
-    ckpt = torch.load(modelfile, map_location='cpu', weights_only=False)
-    model = ckpt['model']
-    min_instance_size = ckpt['params']['min_instance_size']
-    use_ocm_masks = ckpt['params'].get('use_ocm_masks', False)
-    channel_kinds = ckpt['params'].get('channel_kinds')
+    cache = None
+    worker = None
+    device = None
+    use_ocm_masks = False
+    if modelfile is not None:
+        device = select_device()
+        ckpt = torch.load(modelfile, map_location='cpu', weights_only=False)
+        model = ckpt['model']
+        min_instance_size = ckpt['params']['min_instance_size']
+        use_ocm_masks = ckpt['params'].get('use_ocm_masks', False)
+        channel_kinds = ckpt['params'].get('channel_kinds')
 
-    cache = PredictionCache()
-    worker = InferenceWorker(
-        model=model, device=device, cache=cache,
-        image_paths=image_paths, split=split, size=size,
-        score_thresh=score_thresh, mask_thresh=mask_thresh,
-        iou_thresh=iou_thresh, min_instance_size=min_instance_size,
-        use_ocm_masks=use_ocm_masks, channel_kinds=channel_kinds,
-    )
-    worker.start()
-    atexit.register(worker.stop)
+        cache = PredictionCache()
+        worker = InferenceWorker(
+            model=model, device=device, cache=cache,
+            image_paths=image_paths, split=split, size=size,
+            score_thresh=score_thresh, mask_thresh=mask_thresh,
+            iou_thresh=iou_thresh, min_instance_size=min_instance_size,
+            use_ocm_masks=use_ocm_masks, channel_kinds=channel_kinds,
+        )
+        worker.start()
+        atexit.register(worker.stop)
 
     app = make_app(image_paths, cache, worker, split=split, size=size,
                    min_instance_size=min_instance_size,
                    coreg_info=coreg_info, drone_paths=drone_paths,
-                   ocm_paths=ocm_paths, crop_fracs=crop_fracs,
-                   channel_kinds=channel_kinds)
-    print(f'Serving on http://{host}:{port} (device={device}, '
+                   ocm_paths=ocm_paths, crop_fracs=crop_fracs)
+    if modelfile is None:
+        model_desc = 'no model'
+    else:
+        model_desc = (f'device={device}, '
+                      f"ocm_filtering={'on' if use_ocm_masks else 'off'}")
+    print(f'Serving on http://{host}:{port} ({model_desc}, '
           f'{len(image_paths)} images, {len(drone_paths)} drone overlays, '
-          f'{len(ocm_paths)} cloud masks, '
-          f"ocm_filtering={'on' if use_ocm_masks else 'off'})")
+          f'{len(ocm_paths)} cloud masks)')
     app.run(host=host, port=port, debug=False)
 
 

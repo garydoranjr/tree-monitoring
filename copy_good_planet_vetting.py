@@ -1,17 +1,26 @@
 #!/usr/bin/env python3
 """
-Copy files for Planet vetting chips that meet a minimum "Quality" rating in
-a Labelbox export (e.g. `labels/20260706_planet_vetting.ndjson`) from the
-4-band stretch-stats source directory into the curated destination directory.
+Copy files for Planet vetting chips that meet a minimum "Quality" rating from
+the 4-band stretch-stats source directory into the curated destination
+directory.
 
-The Quality radio has three levels, ranked Poor < Fair < Good. By default only
-"Good" chips are copied (the original 50ha behaviour); pass `--min-quality Fair`
-to also include Fair chips, etc.
+Two rating file formats are accepted, chosen by extension:
+
+  *.json    a `vetting.json` written by `scripts/vet_planet_chips.py`
+  *.ndjson  a Labelbox export (e.g. `labels/20260706_planet_vetting.ndjson`)
+
+Labelbox access is gone, so new sets are rated with `vet_planet_chips.py`;
+the NDJSON path stays for the exports already in `labels/`. Both use the same
+three levels, ranked Poor < Fair < Good. By default only "Good" chips are
+copied (the original 50ha behaviour); pass `--min-quality Fair` to also
+include Fair chips, etc.
 
 For each accepted chip (external_id ends in `.png`), all sibling files that
 share the same stem are copied (e.g. `.png`, `.tif`, `.mask.png`,
 `.drone.png`, `.ocm.png`). The source root's `coreg_log.json` is also
-copied.
+copied, or *merged* into the destination's when one is already there — so a
+set assembled from more than one source build (e.g. the 2020-2023 local
+mosaics plus the 2024-2026 globus mosaics) keeps the provenance of both.
 """
 
 import argparse
@@ -21,7 +30,7 @@ from collections import Counter
 from pathlib import Path
 
 
-DEFAULT_NDJSON = Path("labels/20260706_planet_vetting.ndjson")
+DEFAULT_VETTING = Path("labels/20260706_planet_vetting.ndjson")
 DEFAULT_SRC = Path(
     "/Volumes/Earth03/flower/20260608_full_label_application_x4_coreg_4band_stretch_stats"
 )
@@ -33,8 +42,27 @@ DEFAULT_DST = Path(
 QUALITY_RANK = {"Poor": 0, "Fair": 1, "Good": 2}
 
 
-def collect_stems(ndjson_path: Path, min_quality: str) -> list[str]:
+def collect_stems(vetting_path: Path, min_quality: str) -> list[str]:
+    """Stems rated at least `min_quality`, from either rating file format."""
     min_rank = QUALITY_RANK[min_quality]
+    if vetting_path.suffix == ".ndjson":
+        return _collect_stems_labelbox(vetting_path, min_rank)
+    return _collect_stems_native(vetting_path, min_rank)
+
+
+def _collect_stems_native(vetting_path: Path, min_rank: int) -> list[str]:
+    """`{"ratings": {"<chip>.png": {"quality": "Good", ...}, ...}}`, keyed by
+    chip filename exactly as Labelbox keyed `data_row.external_id`."""
+    with vetting_path.open() as f:
+        ratings = json.load(f).get("ratings", {})
+    return [
+        Path(external_id).stem
+        for external_id, rec in sorted(ratings.items())
+        if QUALITY_RANK.get(rec.get("quality"), -1) >= min_rank
+    ]
+
+
+def _collect_stems_labelbox(ndjson_path: Path, min_rank: int) -> list[str]:
     stems: list[str] = []
     with ndjson_path.open() as f:
         for line in f:
@@ -54,20 +82,44 @@ def collect_stems(ndjson_path: Path, min_quality: str) -> list[str]:
     return stems
 
 
+def merge_coreg_log(src_log: Path, dst_log: Path) -> tuple[list[dict], int, int, int]:
+    """Union of the source and destination coreg logs, keyed on (scene, label).
+
+    Destination records win on a collision, so re-running against the same
+    source is idempotent and an existing curated log is never rewritten by a
+    later build. Returns (merged, n_src, n_dst, n_new).
+    """
+    with src_log.open() as f:
+        src_records = json.load(f)
+
+    dst_records = []
+    if dst_log.exists():
+        with dst_log.open() as f:
+            dst_records = json.load(f)
+
+    def key(rec):
+        return (rec.get("scene"), rec.get("label"))
+
+    seen = {key(r) for r in dst_records}
+    new_records = [r for r in src_records if key(r) not in seen]
+
+    return dst_records + new_records, len(src_records), len(dst_records), len(new_records)
+
+
 def copy_good(
-    ndjson_path: Path,
+    vetting_path: Path,
     src_dir: Path,
     dst_dir: Path,
     min_quality: str = "Good",
     dry_run: bool = False,
 ) -> None:
-    print(f"NDJSON        : {ndjson_path}")
+    print(f"Ratings       : {vetting_path}")
     print(f"Source dir    : {src_dir}")
     print(f"Destination   : {dst_dir}")
     print(f"Min quality   : {min_quality}")
     print(f"Dry run       : {dry_run}\n")
 
-    stems = collect_stems(ndjson_path, min_quality)
+    stems = collect_stems(vetting_path, min_quality)
     print(f"Accepted chips: {len(stems)} (>= {min_quality})")
 
     if not dry_run:
@@ -80,7 +132,7 @@ def copy_good(
 
     missing = [s for s, m in src_files_by_stem.items() if not m]
     if missing:
-        print(f"WARNING: {len(missing)} Good stem(s) had no matching files:")
+        print(f"WARNING: {len(missing)} accepted stem(s) had no matching files:")
         for s in missing:
             print(f"  {s}")
 
@@ -99,11 +151,17 @@ def copy_good(
 
     coreg_src = src_dir / "coreg_log.json"
     if coreg_src.exists():
+        merged, n_src, n_dst, n_new = merge_coreg_log(coreg_src, dst_dir / "coreg_log.json")
         if dry_run:
-            print(f"  [dry-run] {coreg_src.name}")
+            print(f"  [dry-run] coreg_log.json ({len(merged)} records)")
         else:
-            shutil.copy2(coreg_src, dst_dir / coreg_src.name)
-        print(f"\nAlso copied   : {coreg_src.name}")
+            with (dst_dir / "coreg_log.json").open("w") as f:
+                json.dump(merged, f, indent=2)
+        if n_dst:
+            print(f"\ncoreg_log.json: {n_dst} existing + {n_new} new "
+                  f"(of {n_src} in source) = {len(merged)} records")
+        else:
+            print(f"\nAlso copied   : coreg_log.json ({len(merged)} records)")
     else:
         print(f"\nWARNING: {coreg_src} not found; skipped")
 
@@ -115,7 +173,11 @@ def copy_good(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--ndjson", type=Path, default=DEFAULT_NDJSON)
+    # --ndjson kept as an alias so existing invocations keep working.
+    parser.add_argument("--vetting", "--ndjson", dest="vetting", type=Path,
+                        default=DEFAULT_VETTING,
+                        help="vetting.json from vet_planet_chips.py, or a "
+                             "Labelbox *.ndjson export.")
     parser.add_argument("--src", type=Path, default=DEFAULT_SRC)
     parser.add_argument("--dst", type=Path, default=DEFAULT_DST)
     parser.add_argument(
@@ -128,7 +190,7 @@ def main() -> None:
     args = parser.parse_args()
 
     copy_good(
-        args.ndjson, args.src, args.dst,
+        args.vetting, args.src, args.dst,
         min_quality=args.min_quality, dry_run=args.dry_run,
     )
 

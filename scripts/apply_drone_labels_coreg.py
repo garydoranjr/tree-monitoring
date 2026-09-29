@@ -122,8 +122,13 @@ def load_as_geoarray(filepath):
     return GeoArray(arr, geotransform=transform.to_gdal(), projection=projection)
 
 
-def compute_coreg_shift(dronefile, planetfile, planet_match_band=1):
-    drone_ga = load_as_geoarray(dronefile)
+def compute_coreg_shift(dronefile, planetfile, planet_match_band=1, drone_ga=None):
+    # The drone ortho is the expensive side: the globus M3M mosaics are ~4 GB
+    # each, and every Planet scene under a given label date shares one. Callers
+    # that loop over scenes pass it in preloaded; None keeps the standalone
+    # behaviour.
+    if drone_ga is None:
+        drone_ga = load_as_geoarray(dronefile)
     planet_ga = load_as_geoarray(planetfile)
 
     try:
@@ -147,8 +152,13 @@ def compute_coreg_shift(dronefile, planetfile, planet_match_band=1):
     info = coreg.coreg_info
     success = bool(info.get('success', False))
     shift = info.get('corrected_shifts_map', {})
+    # AROSICS returns these as numpy scalars on some paths, which json.dump
+    # cannot serialize; coerce here so every consumer sees a plain float. The
+    # shift is None on a failed match, which must survive as None.
     x_shift = shift.get('x', 0.0)
     y_shift = shift.get('y', 0.0)
+    x_shift = None if x_shift is None else float(x_shift)
+    y_shift = None if y_shift is None else float(y_shift)
 
     return x_shift, y_shift, success
 
@@ -240,6 +250,22 @@ def render_rgb_from_4band(pimg, clear_mask, lower_pct=2.0, upper_pct=98.0):
         out[..., i] = scaled.astype(np.uint8)
 
     return out
+
+
+def _json_default(o):
+    """Last-resort coercion for numpy scalars reaching json.dump."""
+    if isinstance(o, np.generic):
+        return o.item()
+    raise TypeError(f'Object of type {o.__class__.__name__} is not JSON serializable')
+
+
+def write_coreg_log(records, out_path):
+    """Write records to out_path atomically, via a sibling temporary file."""
+    out_path = Path(out_path)
+    tmp_path = out_path.with_suffix('.json.tmp')
+    with open(tmp_path, 'w') as f:
+        json.dump(records, f, indent=2, default=_json_default)
+    os.replace(tmp_path, out_path)
 
 
 def _round_sig(x, sig=5):
@@ -394,9 +420,7 @@ def generate_ocm_png(ocm_path, pimg, outputpath):
     iio.imwrite(outputpath, rgba)
 
 
-def create_mask(dronedir, labelfile, planetfile, planetdir, outputdir, resize, mode, maskdir=None, drone_scale=None, bands=3):
-
-    dronefile = find_drone(labelfile, dronedir)
+def create_mask(dronefile, labelfile, planetfile, planetdir, outputdir, resize, mode, maskdir=None, drone_scale=None, bands=3, drone_ga=None):
 
     clear_fraction = None
     if maskdir is not None:
@@ -408,6 +432,7 @@ def create_mask(dronedir, labelfile, planetfile, planetdir, outputdir, resize, m
     planet_match_band = 3 if bands == 4 else 1
     x_shift, y_shift, coreg_ok = compute_coreg_shift(
         dronefile, planetfile, planet_match_band=planet_match_band,
+        drone_ga=drone_ga,
     )
 
     with rasterio.open(planetfile) as src:
@@ -499,12 +524,23 @@ def process_label(dronedir, labelfile, planet_df, planetdir, outputdir, timewind
     )
 
     date_mask = (planet_df["date"] - label_date).abs() <= pd.Timedelta(days=timewindow)
-    planetfiles = planet_df.loc[date_mask]["path"]
+    planetfiles = planet_df.loc[date_mask]["path"].tolist()
 
-    return [
-        create_mask(dronedir, labelfile, planetfile, planetdir, outputdir, resize, mode, maskdir, drone_scale, bands)
-        for planetfile in planetfiles.tolist()
-    ]
+    if not planetfiles:
+        return []
+
+    # Every scene in the window coregisters against the same drone ortho, so
+    # read it once here instead of once per scene inside create_mask().
+    dronefile = find_drone(labelfile, dronedir)
+    drone_ga = load_as_geoarray(dronefile)
+
+    try:
+        return [
+            create_mask(dronefile, labelfile, planetfile, planetdir, outputdir, resize, mode, maskdir, drone_scale, bands, drone_ga)
+            for planetfile in planetfiles
+        ]
+    finally:
+        del drone_ga
 
 
 def filter_files(planetfiles, filterdir):
@@ -555,6 +591,9 @@ def main(labelfiles, dronedir, planetdir, outputdir, timewindow, resize, filterd
         format="%Y%m%d",
     )
 
+    out_path = Path(outputdir) / 'coreg_log.json'
+    Path(outputdir).mkdir(parents=True, exist_ok=True)
+
     all_records = []
     for labelfile in tqdm(labelfiles):
         records = process_label(
@@ -562,12 +601,13 @@ def main(labelfiles, dronedir, planetdir, outputdir, timewindow, resize, filterd
             outputdir, timewindow, resize, mode, maskdir, drone_scale, bands,
         )
         all_records.extend(records)
+        # Rewrite the log after every label date. A multi-hour build that dies
+        # on the last date should not lose every record, and writing to a
+        # temporary file first keeps the log parseable even if we die mid-write.
+        if all_records:
+            write_coreg_log(all_records, out_path)
 
     if all_records:
-        out_path = Path(outputdir) / 'coreg_log.json'
-        Path(outputdir).mkdir(parents=True, exist_ok=True)
-        with open(out_path, 'w') as f:
-            json.dump(all_records, f, indent=2)
         n_failed = sum(1 for r in all_records if not r['coreg_ok'])
         log.info(
             "Wrote %d records (%d succeeded, %d failed) to %s",
