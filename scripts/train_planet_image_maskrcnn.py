@@ -1061,11 +1061,31 @@ def evaluate(model, dataloader, device, iou_metric, map_metric,
               help='Probability that a given training chip gets pasted crowns '
                    'when --copy-paste is on; chips are re-randomized every '
                    'epoch, so the un-augmented chip is still seen.')
+@click.option('--lr-schedule', default='none',
+              type=click.Choice(['none', 'cosine']),
+              help="Learning-rate schedule. 'none' (default) holds --lr flat "
+                   "for the whole run, reproducing earlier runs. 'cosine' "
+                   'decays --lr to zero over --num-epochs with a linear '
+                   'warmup over --warmup-epochs.')
+@click.option('--warmup-epochs', default=0, type=int,
+              help='Linear warmup from lr/100 to --lr over this many epochs '
+                   'before the cosine decay starts. Only used with '
+                   '--lr-schedule cosine.')
+@click.option('--select-metric', default='test_map/map_50',
+              help='Metric used to pick best_model.pth. Maximized; must be '
+                   'one of the logged test metric keys (e.g. test_iou, '
+                   'test_map/map, test_map/map_50).')
+@click.option('--save-every-epoch/--no-save-every-epoch', default=True,
+              help='Write epoch_NNN.pth every epoch (default, ~170 MB each: '
+                   '200 epochs is ~34 GB). --no-save-every-epoch keeps only '
+                   'best_model.pth and last_model.pth.')
 @click.option('--wandb/--no-wandb', 'use_wandb', default=True)
 def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
          min_instance_size, nms_thresh, score_thresh, detections_per_img,
          use_ocm_masks, fourth_band, replace, nir_init, extra_train_dirs,
-         use_copy_paste, copy_paste_count, copy_paste_prob, use_wandb):
+         use_copy_paste, copy_paste_count, copy_paste_prob,
+         lr_schedule, warmup_epochs, select_metric, save_every_epoch,
+         use_wandb):
 
     os.makedirs(outputdir, exist_ok=True)
 
@@ -1118,6 +1138,9 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
         'num_epochs': num_epochs,
         'batch_size': batch_size,
         'lr': lr,
+        'lr_schedule': lr_schedule,
+        'warmup_epochs': warmup_epochs,
+        'select_metric': select_metric,
         'size': size,
         'min_instance_size': min_instance_size,
         'nms_thresh': nms_thresh,
@@ -1197,7 +1220,33 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
     ).to(device)
     optimizer = optim.AdamW(model.parameters(), lr=lr)
 
+    # Flat LR is the historical behavior; cosine decay (with optional warmup)
+    # exists because test metrics on this task peak within the first ~10-25
+    # epochs and then degrade for the rest of a 200-epoch run.
+    if lr_schedule == 'cosine':
+        if warmup_epochs > 0:
+            scheduler = optim.lr_scheduler.SequentialLR(
+                optimizer,
+                schedulers=[
+                    optim.lr_scheduler.LinearLR(
+                        optimizer, start_factor=0.01, total_iters=warmup_epochs,
+                    ),
+                    optim.lr_scheduler.CosineAnnealingLR(
+                        optimizer, T_max=max(num_epochs - warmup_epochs, 1),
+                    ),
+                ],
+                milestones=[warmup_epochs],
+            )
+        else:
+            scheduler = optim.lr_scheduler.CosineAnnealingLR(
+                optimizer, T_max=max(num_epochs, 1),
+            )
+    else:
+        scheduler = None
+
     iou_metric = torchmetrics.JaccardIndex(task="binary").to(device)
+    best_score = -float('inf')
+    best_epoch = None
     map_metric = MeanAveragePrecision(iou_type="segm").to(device)
 
     for epoch in tqdm(range(num_epochs)):
@@ -1237,24 +1286,62 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
             use_ocm_masks=use_ocm_masks,
         )
 
-        log = {'epoch': epoch, 'test_iou': test_iou}
+        log = {'epoch': epoch, 'test_iou': test_iou,
+               'lr': optimizer.param_groups[0]['lr']}
         log.update({f'train/{k}': v for k, v in avg_losses.items()})
         for k, v in test_map.items():
             if isinstance(v, torch.Tensor) and v.numel() == 1:
                 log[f'test_map/{k}'] = v.item()
         log.update({f'test_event/{k}': v for k, v in test_event.items()})
+
+        if scheduler is not None:
+            scheduler.step()
+
+        # Track the best epoch by --select-metric. The final epoch of a long
+        # run is heavily overfit (recall collapses while precision climbs), so
+        # the last checkpoint is a poor choice for downstream inference.
+        if select_metric not in log:
+            raise KeyError(
+                f"--select-metric {select_metric!r} is not a logged metric; "
+                f"available: {sorted(k for k in log if k.startswith('test'))}"
+            )
+        score = log[select_metric]
+        is_best = score > best_score
+        if is_best:
+            best_score, best_epoch = score, epoch + 1
+
         print(
             f"Epoch {epoch+1}/{num_epochs} - loss: {avg_losses['loss_total']:.4f}"
             f" - test_iou: {test_iou:.4f}"
             f" - test_map50: {log.get('test_map/map_50', float('nan')):.4f}"
             f" - P/R/A: {test_event['precision']:.3f}"
             f"/{test_event['recall']:.3f}/{test_event['accuracy']:.3f}"
+            f"{' *best*' if is_best else ''}"
         )
+        log['best/score'] = best_score
+        log['best/epoch'] = best_epoch
         if run is not None:
             run.log(log)
 
-        outputfile = os.path.join(outputdir, f'epoch_{epoch+1:03d}.pth')
-        torch.save({'model': model, 'params': params}, outputfile)
+        ckpt = {'model': model, 'params': params,
+                'epoch': epoch + 1, select_metric: score}
+        if save_every_epoch:
+            torch.save(
+                ckpt, os.path.join(outputdir, f'epoch_{epoch+1:03d}.pth')
+            )
+        torch.save(ckpt, os.path.join(outputdir, 'last_model.pth'))
+        if is_best:
+            torch.save(ckpt, os.path.join(outputdir, 'best_model.pth'))
+
+    if best_epoch is not None:
+        print(
+            f"Best {select_metric}: {best_score:.4f} at epoch {best_epoch} "
+            f"-> {os.path.join(outputdir, 'best_model.pth')}"
+        )
+        if run is not None:
+            run.summary['best/score'] = best_score
+            run.summary['best/epoch'] = best_epoch
+            run.summary['best/metric'] = select_metric
 
     if run is not None:
         run.finish()
