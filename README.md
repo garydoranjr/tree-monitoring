@@ -56,7 +56,12 @@ python scripts/train_drone_image_segformer.py <img_dir> <mask_dir> <output_dir> 
 # Inference
 python scripts/crown_classification.py <model_path> <image_path> <crownmap_shp> <output_dir>
 python scripts/apply_drone_labels.py <model_path> <crownmap_shp> <image_dir> <output_dir>
+
+# Per-crown mean of each mask band -> NetCDF (tag x date, plus species)
+python scripts/extract_crown_stats_from_masks.py <crownmap_timeseries> <mask_tifs...> <output_nc>
 ```
+
+`extract_crown_stats_from_masks.py` needs a timeseries crown map with `tag`, `latin`, and `date` columns, where `date` is a `YYYY_MM_DD` string matching the `_YYYY_MM_DD_` date in each mask filename; crowns whose date matches no mask are silently skipped, so a date-format mismatch yields all-NaN output. The crown map used in the original run was not recorded, but was most likely `/Volumes/Earth03/flower/crowns_20240803/BCI_50ha_crownmap_timeseries.shp` (106 dates, 2018-04-04 to 2024-03-18, 2,345 crowns per date). `BCI_ava_crownmap_timeseries.gpkg` will not work as-is because its dates are hyphenated (`YYYY-MM-DD`).
 
 Batch shell scripts: `run_classification_flower.sh`, `run_classification_decid.sh`, `run_merge_flower.sh`, `run_merge_decid.sh`.
 
