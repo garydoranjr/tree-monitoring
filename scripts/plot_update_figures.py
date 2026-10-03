@@ -55,6 +55,13 @@ DEFAULT_OUT = FLOWER / 'figs' / '202610_updates'
 PHANTOM_CHIPS = FLOWER / '20260706_full_label_application_x4_coreg_4band_stretch_stats_curated'
 PHANTOM_EXT_CHIPS = FLOWER / '20261002_phantomext_label_application_x4_coreg_4band_stretch_stats'
 MAVIC_CHIPS = FLOWER / '20260915_globus_label_application_x4_coreg_4band_stretch_stats_rerun'
+# Raw local and global phantom builds, for the alignment comparison. The
+# 2020-23 local build is the uncurated parent of PHANTOM_CHIPS.
+PHANTOM_LOCAL_BUILDS = [FLOWER / '20260608_full_label_application_x4_coreg_4band_stretch_stats',
+                        PHANTOM_EXT_CHIPS]
+PHANTOM_GLOBAL_BUILDS = [FLOWER / '20261003_fullglobal_label_application_x4_coreg_4band_stretch_stats',
+                         FLOWER / '20261003_phantomextglobal_label_application_x4_coreg_4band_stretch_stats']
+C_PHANTOM_GLOBAL = '#17becf'
 
 PHANTOM_RELEASES = {'24782016': FLOWER / 'stri/24782016', 'C3KW2X': FLOWER / 'stri/C3KW2X'}
 MAVIC_RGB = FLOWER / 'stri/globus/RGB'
@@ -903,6 +910,112 @@ def coreg_stats(outdir):
         click.echo(f"{b['name'].splitlines()[0]}: {b['pairs']} pairs, {b['ok']} ok, "
                    f"{b['good']} Good / {b['fair']} Fair / {b['poor']} Poor, median shift "
                    f"{np.median(b['shifts']):.2f} m")
+
+
+def phantom_good_scenes():
+    """Planet scene stems rated Good in the phantom local builds.
+
+    The 56 Labelbox-curated 2020-23 chips plus the C3KW2X chips rated Good in
+    vetting.json. Ratings judge Planet image quality (cloud, haze, nodata), so
+    they carry over to the global-alignment chips of the same scenes.
+    """
+    good = set(chip_stems(PHANTOM_CHIPS))
+    good |= set(chip_stems(PHANTOM_EXT_CHIPS, PHANTOM_EXT_CHIPS / 'vetting.json'))
+    return good
+
+
+def load_logs(dirs):
+    return pd.concat([pd.DataFrame(json.loads((d / 'coreg_log.json').read_text()))
+                      for d in dirs], ignore_index=True)
+
+
+@cli.command('coreg-stats-alignment')
+@out_option
+def coreg_stats_alignment(outdir):
+    """Label-transfer yield and AROSICS shifts: phantom local vs phantom global vs mavic.
+
+    Both phantom releases are pooled. Phantom Good counts use the local-build
+    ratings of the same Planet scenes; global chips whose scene failed
+    coregistration in the local build were never rated and are counted as
+    unrated. Also writes phantom_good_paired_stems.txt, the Good scenes
+    coregistered in both alignments (for measure_chip_local_offsets.py
+    --only-stems).
+    """
+    good = phantom_good_scenes()
+    loc, glo = load_logs(PHANTOM_LOCAL_BUILDS), load_logs(PHANTOM_GLOBAL_BUILDS)
+    mav = load_logs([MAVIC_CHIPS])
+    mav_q = pd.Series({k[:-len('.png')]: v['quality'] for k, v in
+                       json.loads((MAVIC_CHIPS / 'vetting.json').read_text())['ratings'].items()})
+    rated_local = set(loc.loc[loc['coreg_ok'], 'scene'])
+    builds = []
+    for name, log, color, is_good, rated in (
+            ('phantom local\n(24782016 + C3KW2X)', loc, C_PHANTOM, lambda s: s in good, rated_local),
+            ('phantom global\n(24782016 + C3KW2X)', glo, C_PHANTOM_GLOBAL, lambda s: s in good, rated_local),
+            ('mavic global\n(M3M)', mav, C_MAVIC, lambda s: mav_q.get(s) == 'Good', set(mav_q.index))):
+        ok = log[log['coreg_ok']]
+        builds.append(dict(name=name, color=color, pairs=len(log), ok=len(ok),
+                           good=int(ok['scene'].map(is_good).sum()),
+                           unrated=int((~ok['scene'].isin(rated)).sum()),
+                           shifts=np.hypot(ok['x_shift_m'], ok['y_shift_m']), log=log))
+
+    both = (loc[loc['coreg_ok']].set_index('scene')[['x_shift_m', 'y_shift_m']]
+            .join(glo[glo['coreg_ok']].set_index('scene')[['x_shift_m', 'y_shift_m']],
+                  lsuffix='_local', rsuffix='_global', how='inner'))
+    paired = sorted(s for s in both.index if s in good)
+    (outdir / 'phantom_good_paired_stems.txt').write_text('\n'.join(paired) + '\n')
+
+    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 4.8),
+                                        gridspec_kw={'width_ratios': [1.25, 1, 0.85]})
+    stages = ['drone-Planet\npairs (±2 d)', 'AROSICS\ncoregistered', 'rated\nGood']
+    x = np.arange(len(stages))
+    w = 0.8 / len(builds)
+    for i, b in enumerate(builds):
+        vals = [b['pairs'], b['ok'], b['good']]
+        bars = ax1.bar(x + (i - (len(builds) - 1) / 2) * w, vals, w, color=b['color'],
+                       label=b['name'].replace('\n', ' '))
+        for bar, v in zip(bars, vals):
+            pct = '' if v == b['pairs'] else f'\n{v / b["pairs"]:.0%}'
+            ax1.text(bar.get_x() + bar.get_width() / 2, v + 4, f'{v}{pct}',
+                     ha='center', va='bottom', fontsize=7.5)
+    ax1.set_xticks(x, stages)
+    ax1.set_ylabel('count')
+    ax1.set_ylim(0, max(b['pairs'] for b in builds) * 1.25)
+    ax1.set_title('Drone label -> Planet chip yield')
+    ax1.legend(fontsize=8, loc='upper right')
+
+    bins = np.arange(0, 33, 1.5)
+    for b in builds:
+        ax2.hist(b['shifts'], bins=bins, histtype='step', lw=2, color=b['color'],
+                 density=True,
+                 label=f"{b['name'].splitlines()[0]}: median "
+                       f"{np.median(b['shifts']):.1f} m (n={len(b['shifts'])})")
+    ax2.axvline(3, color='k', ls=':', lw=1)
+    ax2.text(3.3, ax2.get_ylim()[1] * 0.9, '1 Planet pixel', fontsize=8)
+    ax2.set_xlabel('applied AROSICS shift magnitude (m)')
+    ax2.set_ylabel('density')
+    ax2.set_title('Global drone -> Planet shift per scene')
+    ax2.legend(fontsize=8)
+
+    ml = np.hypot(both['x_shift_m_local'], both['y_shift_m_local'])
+    mg = np.hypot(both['x_shift_m_global'], both['y_shift_m_global'])
+    ax3.scatter(ml, mg, s=10, color='k', alpha=0.5, lw=0)
+    lim = max(ml.max(), mg.max()) * 1.05
+    ax3.plot([0, lim], [0, lim], color=C_GREY, lw=0.8)
+    ax3.set_xlim(0, lim)
+    ax3.set_ylim(0, lim)
+    ax3.set_aspect('equal')
+    ax3.set_xlabel('phantom local shift (m)')
+    ax3.set_ylabel('phantom global shift (m)')
+    ax3.set_title(f'Same scene, both alignments (n={len(both)})')
+    fig.tight_layout()
+    save(fig, outdir, 'coreg_stats_by_alignment')
+    for b in builds:
+        click.echo(f"{b['name'].splitlines()[0]}: {b['pairs']} pairs, {b['ok']} ok, "
+                   f"{b['good']} Good, {b['unrated']} coregistered but unrated, "
+                   f"median shift {np.median(b['shifts']):.2f} m")
+    click.echo(f'{len(both)} scenes coregistered in both phantom alignments; '
+               f'{len(paired)} of them rated Good -> phantom_good_paired_stems.txt; '
+               f'median |global| - |local| shift {np.median(mg - ml):+.2f} m')
 
 
 # --------------------------------------------------------------------------

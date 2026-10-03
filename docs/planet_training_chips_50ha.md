@@ -205,9 +205,9 @@ before the build.
 **Yield.** 16 label dates → 91 pairs, all on distinct Planet scenes
 (2023-12-05 has no scene within ±2 days), and **46 coregistered (50.5 %)**.
 Median applied shift is 7.37 m (max 29.2 m), close to the 8.45 m of the
-2020–2023 phantom build and above the mavic 4.30 m. That fits the shift
-reflecting the phantom local-alignment georeferencing rather than the
-Planet scenes. Several adjacent Planet frames from the same strip got
+2020–2023 phantom build and above the mavic 4.30 m. The global-alignment
+builds (step 2c) show that this is a phantom-vs-Planet offset shared by
+both alignments, not something the local warp adds. Several adjacent Planet frames from the same strip got
 shifts that differ by more than 10 m (e.g. `20240209_155640_21_24ad`
 19.5 m vs `20240209_155642_52_24ad` 7.9 m). `measure_chip_local_offsets.py`
 nevertheless finds both well aligned after their shift (median window
@@ -227,6 +227,42 @@ and they are in the 126-chip extended set:
 `20240304_155459_24_24f6`, `20240306_150044_82_24ba`,
 `20240306_150046_96_24ba`, `20240307_150321_14_24a8` and
 `20240317_150402_66_2455`. They are handled at assembly (step 5).
+
+### 2c. Apply labels (phantom, global alignment, `20261003` sets)
+
+Phantom training chips use the local alignment. To compare alignments,
+both phantom releases were also built from their globally aligned mosaics
+and global classifications, with the same flags. One build per release,
+because `find_drone()` looks in a single `DRONEDIR`:
+
+```bash
+F=/Volumes/Earth03/flower
+for spec in "24782016 fullglobal" "C3KW2X phantomextglobal"; do
+  set -- $spec; REL=$1; TOK=$2
+  ORTHO=$F/stri/$REL/BCI_50ha_timeseries_global_alignment
+  LABELS=()
+  for f in $ORTHO/BCI_50ha_*_global.tif; do
+    LABELS+=($F/results/classifications/$(basename "$f" .tif)_classifications.tif)
+  done
+  KMP_DUPLICATE_LIB_OK=TRUE python scripts/apply_drone_labels_coreg.py "${LABELS[@]}" \
+    $ORTHO $F/planet_clipped/4band \
+    $F/20261003_${TOK}_label_application_x4_coreg_4band_stretch_stats \
+    -b 4 -r 4 -t 2 -d 2 -k $F/planet_clipped/ocm
+done
+```
+
+| Build | Pairs | Coregistered | Median shift | Local-alignment counterpart |
+|---|---|---|---|---|
+| `20261003_fullglobal_...` (24782016) | 323 | 128 (39.6 %) | 8.41 m | 131 (40.6 %), 8.45 m |
+| `20261003_phantomextglobal_...` (C3KW2X) | 91 | 43 (47.3 %) | 7.40 m | 46 (50.5 %), 7.37 m |
+
+Runtime was 3 h 03 m and 40 min on the 16 GB laptop. These sets are
+analysis-only and were not vetted. They are compared with the local chips
+on the same Planet scenes, using the local ratings, because ratings judge
+Planet image quality and not the drone alignment. 151 scenes coregistered
+under both alignments, and AROSICS gave each almost the same shift either
+way (median difference in magnitude +0.01 m). See `plot_update_figures.py
+coreg-stats-alignment`.
 
 ### 3. Review the coregistration
 
