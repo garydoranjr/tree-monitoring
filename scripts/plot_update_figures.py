@@ -281,11 +281,14 @@ def coverage(outdir, clear_threshold):
 # --------------------------------------------------------------------------
 # ocm-example
 # --------------------------------------------------------------------------
-def read_rgb_preview(path):
+def read_rgb_preview(path, stretch_mask=None):
+    """2-98 % stretched RGB; percentiles over stretch_mask pixels if given."""
     import rasterio
     with rasterio.open(path) as src:
         a = src.read([1, 2, 3]).astype(np.float32)
     valid = a.sum(axis=0) > 0
+    if stretch_mask is not None and (valid & stretch_mask).any():
+        valid &= stretch_mask
     out = np.zeros(a.shape[1:] + (3,), np.float32)
     for i in range(3):
         b = a[i]
@@ -345,9 +348,10 @@ def ocm_example(outdir, scenes, start, end):
     fig, axes = plt.subplots(len(scenes), 2, figsize=(11, 3.3 * len(scenes)),
                              squeeze=False)
     for (a0, a1), s in zip(axes, scenes):
-        rgb = read_rgb_preview(rgb_dir / s[:4] / f'{s}_rgb.tif')
         with rasterio.open(ocm_path(s)) as src:
             lab = src.read(1)
+        # Stretch on clear pixels so bright cloud does not black out the ground.
+        rgb = read_rgb_preview(rgb_dir / s[:4] / f'{s}_rgb.tif', stretch_mask=lab == 0)
         a0.imshow(rgb)
         a1.imshow(rgb)
         over = np.zeros(lab.shape + (4,))
