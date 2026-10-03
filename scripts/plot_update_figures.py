@@ -688,6 +688,155 @@ def same_date(outdir, decimate, threshold):
     click.echo(pd.DataFrame(summary).round(3).to_string(index=False))
 
 
+def same_date_paths(d):
+    """(phantom local, mavic) classification rasters for a SAME_DATES entry."""
+    return (CLASSIFICATIONS / f'BCI_50ha_{d}_local_classifications.tif',
+            CLASSIFICATIONS / f'BCI_50ha_{d}_M3M_aligned_global_RGB_classifications.tif')
+
+
+def read_bounds(path, bounds, bands, factor=1):
+    """Read a map-bounds crop of `bands` at 1/factor resolution."""
+    import rasterio
+    from rasterio.windows import from_bounds
+    with rasterio.open(path) as src:
+        win = from_bounds(*bounds, transform=src.transform)
+        win = win.round_offsets().round_lengths()
+    return read_decimated(path, factor, bands, win)
+
+
+@cli.command('same-date-maps')
+@out_option
+@click.option('--decimate', default=16, show_default=True)
+def same_date_maps(outdir, decimate):
+    """Whole-plot phantom vs mavic RGB and P(flowering) on the dates both flew."""
+    import geopandas as gpd
+    crowns = gpd.read_file(CROWNMAP)
+    cb = crowns.total_bounds
+    pad = 30
+    bounds = (cb[0] - pad, cb[1] - pad, cb[2] + pad, cb[3] + pad)
+    fig, axes = plt.subplots(len(SAME_DATES), 4, figsize=(20, 2.55 * len(SAME_DATES) + 0.5),
+                             squeeze=False, layout='constrained')
+    for r, d in enumerate(SAME_DATES):
+        for c0, (label, cls) in enumerate(zip(('phantom (C3KW2X, local align)', 'mavic (M3M)'),
+                                              same_date_paths(d))):
+            rgb, t_rgb = read_bounds(drone_ortho_for(cls), bounds, [1, 2, 3], decimate)
+            p, t_p = read_bounds(cls, bounds, [1], decimate)
+            a_rgb, a_p = axes[r, 2 * c0], axes[r, 2 * c0 + 1]
+            a_rgb.imshow(rgb_display(rgb), extent=extent(rgb, t_rgb))
+            a_p.set_facecolor('#dddddd')
+            im = a_p.imshow(np.ma.masked_invalid(p[0]), cmap='magma', vmin=0, vmax=1,
+                            extent=extent(p, t_p), interpolation='nearest')
+            a_rgb.set_title(f'{d.replace("_", "-")} {label} RGB', fontsize=9)
+            a_p.set_title(f'{d.replace("_", "-")} {label} P(flowering)', fontsize=9)
+            for a in (a_rgb, a_p):
+                a.set_xlim(bounds[0], bounds[2])
+                a.set_ylim(bounds[1], bounds[3])
+                a.set_xticks([])
+                a.set_yticks([])
+    fig.colorbar(im, ax=axes.ravel().tolist(), shrink=0.8, pad=0.01,
+                 label='P(flowering) (grey = not classified)')
+    fig.suptitle('Same-day flights by both drones, classified by the same flowering model '
+                 '(windows placed by the static 2022-09-29 crown map)', fontsize=11)
+    save(fig, outdir, 'same_date_maps')
+
+
+@cli.command('same-date-examples')
+@out_option
+@click.option('--n-mavic-only', default=8, show_default=True,
+              help='Crowns flowering on mavic only (P > 0.5 vs phantom < 0.2).')
+@click.option('--pad-m', default=6.0, show_default=True)
+def same_date_examples(outdir, n_mavic_only, pad_m):
+    """Crowns where phantom and mavic classifications disagree on the same day.
+
+    Reads OUTDIR/same_date_crowns.csv (from `same-date`). Writes
+    same_date_mavic_only_flowering.png/.pdf (the dominant disagreement) and
+    same_date_other_cases.png/.pdf (crowns flowering on both, flowering on
+    phantom only, and deciduous on phantom only). Every crown is shown at
+    full mosaic resolution with each sensor's RGB and probability map.
+    """
+    import geopandas as gpd
+    crowns = gpd.read_file(CROWNMAP)
+    df = pd.read_csv(outdir / 'same_date_crowns.csv')
+    w = df.pivot_table(index=['date', 'crown'], columns='mosaic',
+                       values=['p_flower', 'p_decid']).dropna()
+    f, dc = w['p_flower'], w['p_decid']
+
+    def pick(mask, key, n):
+        """Top-n crown-dates by `key`, at most one row per crown."""
+        s = key[mask].sort_values(ascending=False)
+        s = s[~s.index.get_level_values('crown').duplicated()]
+        return [(d, c) for d, c in s.index[:n]]
+
+    mavic_only = pick((f['mavic'] > 0.5) & (f['phantom local'] < 0.2),
+                      f['mavic'] - f['phantom local'], n_mavic_only)
+    both = pick((f['mavic'] > 0.5) & (f['phantom local'] > 0.5),
+                f[['mavic', 'phantom local']].min(axis=1), 2)
+    phantom_only = pick((f['phantom local'] > 0.5) & (f['mavic'] < 0.3),
+                        f['phantom local'] - f['mavic'], 3)
+    decid_phantom = pick((dc['phantom local'] > 0.5) & (dc['mavic'] < 0.3),
+                         dc['phantom local'] - dc['mavic'], 3)
+    click.echo(f'{len(mavic_only)} mavic-only flowering, {len(both)} both, '
+               f'{len(phantom_only)} phantom-only flowering, '
+               f'{len(decid_phantom)} phantom-only deciduous')
+
+    def draw(axes4, d, c, band, case):
+        geom = crowns.geometry.iloc[c]
+        x0, y0, x1, y1 = geom.bounds
+        half = max(x1 - x0, y1 - y0) / 2 + pad_m
+        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+        b = (cx - half, cy - half, cx + half, cy + half)
+        var = 'p_flower' if band == 1 else 'p_decid'
+        name = 'P(flowering)' if band == 1 else 'P(deciduous)'
+        dd = d.replace('-', '_')
+        for k, (label, cls, col) in enumerate(zip(('phantom', 'mavic'), same_date_paths(dd),
+                                                  ('phantom local', 'mavic'))):
+            rgb, t_rgb = read_bounds(drone_ortho_for(cls), b, [1, 2, 3])
+            p, t_p = read_bounds(cls, b, [band], 4)
+            a_rgb, a_p = axes4[2 * k], axes4[2 * k + 1]
+            a_rgb.imshow(rgb_display(rgb), extent=extent(rgb, t_rgb))
+            a_p.set_facecolor('#dddddd')
+            a_p.imshow(np.ma.masked_invalid(p[0]), cmap='magma', vmin=0, vmax=1,
+                       extent=extent(p, t_p), interpolation='nearest')
+            for a in (a_rgb, a_p):
+                gpd.GeoSeries([geom]).boundary.plot(ax=a, color='cyan', lw=0.9)
+                a.set_xlim(b[0], b[2])
+                a.set_ylim(b[1], b[3])
+                a.set_xticks([])
+                a.set_yticks([])
+            a_rgb.set_title(f'{label} RGB', fontsize=8)
+            a_p.set_title(f'{label} {name} = {w.loc[(d, c), (var, col)]:.2f}', fontsize=8)
+        axes4[0].set_ylabel(f'{case}\n{d} crown {c}', fontsize=8)
+
+    # Figure 1: the dominant disagreement, two crowns per row.
+    rows = int(np.ceil(len(mavic_only) / 2))
+    fig, axes = plt.subplots(rows, 8, figsize=(22, 2.9 * rows), squeeze=False)
+    for ax in axes.ravel():
+        ax.set_axis_off()
+    for i, (d, c) in enumerate(mavic_only):
+        a4 = axes[i // 2, 4 * (i % 2):4 * (i % 2) + 4]
+        for a in a4:
+            a.set_axis_on()
+        draw(a4, d, c, 1, 'mavic only')
+    fig.suptitle('Crowns flowering on mavic but not phantom on the same day '
+                 '(mean P(flowering) > 0.5 on mavic, < 0.2 on phantom)', fontsize=11)
+    fig.tight_layout()
+    save(fig, outdir, 'same_date_mavic_only_flowering')
+
+    # Figure 2: the other cases, one crown per row.
+    cases = ([(d, c, 1, 'both flowering') for d, c in both]
+             + [(d, c, 1, 'phantom only') for d, c in phantom_only]
+             + [(d, c, 2, 'deciduous,\nphantom only') for d, c in decid_phantom])
+    fig, axes = plt.subplots(len(cases), 4, figsize=(11.5, 2.9 * len(cases)), squeeze=False)
+    for row, (d, c, band, case) in zip(axes, cases):
+        draw(row, d, c, band, case)
+    fig.suptitle('Same-day crowns: agreement and the rarer disagreements', fontsize=11)
+    fig.tight_layout()
+    save(fig, outdir, 'same_date_other_cases')
+    pd.DataFrame([dict(case=case.replace('\n', ' '), date=d, crown=c)
+                  for d, c, _, case in [(d, c, 1, 'mavic only') for d, c in mavic_only]
+                  + cases]).to_csv(outdir / 'same_date_examples.csv', index=False)
+
+
 # --------------------------------------------------------------------------
 # coreg-stats
 # --------------------------------------------------------------------------
