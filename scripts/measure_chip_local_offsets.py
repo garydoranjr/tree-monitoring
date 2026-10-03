@@ -35,6 +35,10 @@ Typical usage:
         --set "2024-26 mavic=/Volumes/Earth03/flower/20260915_globus_label_application_x4_coreg_4band_stretch_stats_rerun" \\
         --vetting "2024-26 mavic=/Volumes/Earth03/flower/20260915_globus_label_application_x4_coreg_4band_stretch_stats_rerun/vetting.json" \\
         /Volumes/Earth03/flower/figs/202609_updates
+
+A set can span several chip directories (repeat ``--set`` with the same NAME),
+and ``--only-stems NAME=FILE`` restricts it to the chip stems listed in FILE,
+one per line, e.g. to compare two alignments of the same Planet scenes.
 """
 import os
 
@@ -130,21 +134,33 @@ def chip_summary(wdf):
 
 def parse_pairs(values, what):
     out = {}
+    for k, p in parse_multi(values, what).items():
+        out[k] = p[-1]
+    return out
+
+
+def parse_multi(values, what):
+    """NAME=PATH pairs; a NAME given more than once keeps every PATH, in order."""
+    out = {}
     for v in values:
         if '=' not in v:
             raise click.BadParameter(f'{what} must be NAME=PATH, got {v!r}')
         k, p = v.split('=', 1)
-        out[k] = Path(p)
+        out.setdefault(k, []).append(Path(p))
     return out
 
 
 @click.command()
 @click.argument('outdir', type=click.Path(file_okay=False, path_type=Path))
 @click.option('--set', 'sets', multiple=True, required=True,
-              help='NAME=CHIPDIR; repeatable. Order sets the plot colours.')
+              help='NAME=CHIPDIR; repeatable, and a NAME may be repeated to '
+                   'pool several directories. Order sets the plot colours.')
 @click.option('--vetting', 'vettings', multiple=True,
               help='NAME=vetting.json; restrict that set to chips rated at '
-                   'least --min-quality.')
+                   'least --min-quality. Repeat to pool several rating files.')
+@click.option('--only-stems', 'only_stems', multiple=True,
+              help='NAME=FILE; restrict that set to the chip stems listed in '
+                   'FILE (one per line, with or without .png).')
 @click.option('--min-quality', type=click.Choice(list(QUALITY_RANK)),
               default='Good', show_default=True)
 @click.option('--window', default=128, show_default=True,
@@ -162,26 +178,35 @@ def parse_pairs(values, what):
 @click.option('--prefix', default='residual_offsets', show_default=True)
 @click.option('--color', 'set_colors', multiple=True,
               help='NAME=COLOR; overrides the order-based colour of a set.')
-def main(outdir, sets, vettings, min_quality, window, min_valid, min_ncc,
-         max_shift_m, sigma, min_windows, prefix, set_colors):
+def main(outdir, sets, vettings, only_stems, min_quality, window, min_valid,
+         min_ncc, max_shift_m, sigma, min_windows, prefix, set_colors):
     outdir.mkdir(parents=True, exist_ok=True)
-    sets = parse_pairs(sets, '--set')
-    vettings = parse_pairs(vettings, '--vetting')
+    sets = parse_multi(sets, '--set')
+    vettings = parse_multi(vettings, '--vetting')
+    only_stems = parse_pairs(only_stems, '--only-stems')
     colors = dict(zip(sets, SET_COLORS))
     colors.update({k: str(v) for k, v in parse_pairs(set_colors, '--color').items()})
 
     wrows, crows = [], []
-    for name, chipdir in sets.items():
-        chips = sorted(p for p in chipdir.glob('*.png')
-                       if p.name.count('.') == 1)
+    for name, chipdirs in sets.items():
+        chips = sorted((p for d in chipdirs for p in d.glob('*.png')
+                        if p.name.count('.') == 1), key=lambda p: p.name)
         if name in vettings:
-            ratings = json.loads(vettings[name].read_text())['ratings']
+            ratings = {}
+            for v in vettings[name]:
+                ratings.update(json.loads(v.read_text())['ratings'])
             keep = {k for k, v in ratings.items()
                     if QUALITY_RANK[v['quality']] >= QUALITY_RANK[min_quality]}
             chips = [p for p in chips if p.name in keep]
-        click.echo(f'{name}: {len(chips)} chips from {chipdir}')
+        if name in only_stems:
+            listed = {ln.strip().removesuffix('.png')
+                      for ln in only_stems[name].read_text().splitlines() if ln.strip()}
+            chips = [p for p in chips if p.name[:-len('.png')] in listed]
+        click.echo(f'{name}: {len(chips)} chips from '
+                   + ', '.join(str(d) for d in chipdirs))
 
         for chip in chips:
+            chipdir = chip.parent
             stem = chip.name[:-len('.png')]
             planet, drone, valid = load_chip(chip)
             recs = list(window_offsets(planet, drone, valid, window, min_valid,
