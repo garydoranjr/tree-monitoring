@@ -114,6 +114,13 @@ imagery the SegFormer models were trained on, so they are passed through
 untouched. `config/crown_classification_mavic.yml` applies only to the
 uint16 mavic rasters.
 
+The 16 local classifications were turned into Planet training chips on
+2026-10-02 (`/Volumes/Earth03/flower/20261002_phantomext_label_application_x4_coreg_4band_stretch_stats`:
+91 pairs, 46 coregistered). See
+[planet_training_chips_50ha.md](planet_training_chips_50ha.md), step 2b.
+The merged tifs are also in `/Volumes/Earth03/flower/results/classifications/`;
+the per-crown tile directories exist only on Gattaca2.
+
 **Do not read a phenology step at the 2023-10-24 / 2023-10-31 boundary as
 biology.** That boundary is where the series crosses from the 2023 release
 (24782016) to the 2024 one (C3KW2X), and the 2024 release reprocessed every

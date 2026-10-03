@@ -19,7 +19,7 @@ Sets are named `<YYYYMMDD>_<scope>_label_application_x4_coreg_4band_stretch_stat
 | Token | Meaning |
 |---|---|
 | `YYYYMMDD` | build date |
-| `full` / `globus` | which label set was applied (see *Inputs*) |
+| `full` / `globus` / `phantomext` | which label set was applied (see *Inputs*): `full` = phantom 24782016 (2020–2023), `globus` = mavic (2024–2026), `phantomext` = phantom C3KW2X (2023–2024); `full` in a `_curated` name means a merged set. Dataset names are explained in [data_sources.md](data_sources.md#dataset-names) |
 | `x4` | `--resize 4`: the 3 m Planet cutout is upsampled to 0.75 m, 367 × 205 → 1468 × 820 px |
 | `coreg` | per-scene AROSICS drone↔Planet shift applied to the label raster before rasterizing (`ws=(200,200)`, `max_shift=10`, matched on Red in both images) |
 | `4band` | `--bands 4`: chips come from `*4band.tif` and are written as 4-band uint16 GeoTIFFs (Blue, Green, Red, NIR) |
@@ -52,20 +52,27 @@ non-clear OCM pixel, so partly clouded crowns are not labelled.
 
 ## Inputs
 
-Two drone sources, disjoint in time, each with its own classification
-rasters under `/Volumes/Earth03/flower/results/classifications/`. Both
-classification products are 2-band float32
+Three drone label sources, each with its own classification rasters under
+`/Volumes/Earth03/flower/results/classifications/`: the phantom (Phantom 4
+Pro) record in two releases, 24782016 and C3KW2X, and the mavic (Mavic 3M)
+record. All classification products are 2-band float32
 `(flowering_probability, deciduous_probability)` in EPSG:32617; the default
 `--mode both` takes their union, `1 - Π(1 - p)`.
 
-| | 2020–2023 | 2024–2026 (`globus`) |
-|---|---|---|
-| Orthos | `stri/24782016/BCI_50ha_timeseries_local_alignment/` | `stri/globus/RGB/` |
-| Ortho format | 4-band uint8, ~23425 × 12697, ~1.2 GB | 4-band uint16 (R, G, B, Alpha), ~25000 × 21000, ~4 GB |
-| Ortho footprint | 1056 × 572 m | 1199 × 1022 m |
-| Labels | `*_local_classifications.tif` | `*_M3M_aligned_global_RGB_classifications.tif` |
-| Dates | 2020-01-24 → 2023-10-24 | 2024-03-06 → 2026-01-20, 96 flights |
-| Provenance | — | synced by `scripts/globus_https_sync.py`, classified by `run_crown_pipeline.sh config/pipeline_mavic.sh` (see [NOTES.md](../NOTES.md)) |
+| | phantom 2020–2023 (`full`) | phantom 2023–2024 (`phantomext`) | mavic 2024–2026 (`globus`) |
+|---|---|---|---|
+| Orthos | `stri/24782016/BCI_50ha_timeseries_local_alignment/` | `stri/C3KW2X/BCI_50ha_timeseries_local_alignment/` | `stri/globus/RGB/` |
+| Ortho format | 4-band uint8, ~23425 × 12697, ~1.2 GB | same as 24782016 | 4-band uint16 (R, G, B, Alpha), ~25000 × 21000, ~4 GB |
+| Ortho footprint | 1056 × 572 m | same as 24782016 | 1199 × 1022 m |
+| Labels | the 24782016 dates of `*_local_classifications.tif` | the 16 C3KW2X dates of `*_local_classifications.tif` | `*_M3M_aligned_global_RGB_classifications.tif` |
+| Dates | 2020-01-24 → 2023-10-24 | 2023-10-31 → 2024-03-18, 16 flights | 2024-03-06 → 2026-01-20, 96 flights |
+| Provenance | doi:10.25573/data.24782016 | doi:10.60635/C3KW2X, classified by `run_crown_pipeline.sh config/pipeline_phantom_ext_local.sh` | synced by `scripts/globus_https_sync.py`, classified by `run_crown_pipeline.sh config/pipeline_mavic.sh` (see [NOTES.md](../NOTES.md)) |
+
+**`*_local_classifications.tif` now matches both phantom releases** (106
+dates). The two releases keep their orthos in different directories, and
+`find_drone()` looks only in the one `DRONEDIR` it is given, so a build must
+pass the labels of one release at a time. The commands below build the
+label list from the release's ortho directory.
 
 `find_drone()` matches a label to its ortho by filename prefix, so
 `BCI_50ha_2024_03_06_M3M_aligned_global_RGB_classifications.tif` resolves to
@@ -83,12 +90,21 @@ scene within `--timewindow 2` days.
 
 ## Build
 
-### 1. Apply labels (2020–2023, `20260608` set)
+### 1. Apply labels (phantom 2020–2023, `20260608` set)
+
+When this set was built the glob `*_local_classifications.tif` matched only
+the 90 24782016 dates; with the C3KW2X rasters alongside it, list the
+24782016 labels explicitly:
 
 ```bash
+ORTHO=/Volumes/Earth03/flower/stri/24782016/BCI_50ha_timeseries_local_alignment
+LABELS=()
+for f in $ORTHO/BCI_50ha_*_local.tif; do
+  LABELS+=(/Volumes/Earth03/flower/results/classifications/$(basename "$f" .tif)_classifications.tif)
+done
 KMP_DUPLICATE_LIB_OK=TRUE python scripts/apply_drone_labels_coreg.py \
-  /Volumes/Earth03/flower/results/classifications/*_local_classifications.tif \
-  /Volumes/Earth03/flower/stri/24782016/BCI_50ha_timeseries_local_alignment \
+  "${LABELS[@]}" \
+  $ORTHO \
   /Volumes/Earth03/flower/planet_clipped/4band \
   /Volumes/Earth03/flower/20260608_full_label_application_x4_coreg_4band_stretch_stats \
   -b 4 -r 4 -t 2 -d 2 \
@@ -97,7 +113,7 @@ KMP_DUPLICATE_LIB_OK=TRUE python scripts/apply_drone_labels_coreg.py \
 
 323 (label, scene) pairs, 131 coregistered.
 
-### 2. Apply labels (2024–2026 globus, `20260915` set)
+### 2. Apply labels (mavic 2024–2026, `20260915` set)
 
 Identical flags; only the label glob and the ortho directory change.
 
@@ -162,6 +178,56 @@ except the AROSICS shift is recoverable, and rebuilt records are flagged
 float32 crash fixed in `compute_coreg_shift`; the recovered log was later
 confirmed to agree with a full re-run on all 370 `coreg_ok` values.
 
+### 2b. Apply labels (phantom 2023–2024, C3KW2X, `20261002` set)
+
+The 16 C3KW2X dates fill what used to be the gap between the two records.
+Same flags; local alignment, like the 2020–2023 phantom build:
+
+```bash
+ORTHO=/Volumes/Earth03/flower/stri/C3KW2X/BCI_50ha_timeseries_local_alignment
+LABELS=()
+for f in $ORTHO/BCI_50ha_*_local.tif; do
+  LABELS+=(/Volumes/Earth03/flower/results/classifications/$(basename "$f" .tif)_classifications.tif)
+done
+KMP_DUPLICATE_LIB_OK=TRUE python scripts/apply_drone_labels_coreg.py \
+  "${LABELS[@]}" \
+  $ORTHO \
+  /Volumes/Earth03/flower/planet_clipped/4band \
+  /Volumes/Earth03/flower/20261002_phantomext_label_application_x4_coreg_4band_stretch_stats \
+  -b 4 -r 4 -t 2 -d 2 \
+  -k /Volumes/Earth03/flower/planet_clipped/ocm
+```
+
+No new cloud masks were needed. All 175 50ha Planet scenes acquired
+2023-10-29 to 2024-03-20 already had readable OCM masks, which were checked
+before the build.
+
+**Yield.** 16 label dates → 91 pairs, all on distinct Planet scenes
+(2023-12-05 has no scene within ±2 days), and **46 coregistered (50.5 %)**.
+Median applied shift is 7.37 m (max 29.2 m), close to the 8.45 m of the
+2020–2023 phantom build and above the mavic 4.30 m. That fits the shift
+reflecting the phantom local-alignment georeferencing rather than the
+Planet scenes. Several adjacent Planet frames from the same strip got
+shifts that differ by more than 10 m (e.g. `20240209_155640_21_24ad`
+19.5 m vs `20240209_155642_52_24ad` 7.9 m). `measure_chip_local_offsets.py`
+nevertheless finds both well aligned after their shift (median window
+residual 0.2 m and 0.8 m), so the per-scene Planet georeferencing really
+does differ by that much. Over all 46 chips the median window residual is
+0.59 m. Only two chips are misregistered (12.5 m and 19.6 m residual),
+both mostly clouded.
+
+Runtime was 62 min on the 16 GB laptop, about 41 s per pair. The orthos are
+the 1.2 GB uint8 ones, not the 4 GB mavic ones, but the machine still ran
+deep into swap while other jobs were reading the volume.
+
+**Chip names collide with the mavic set.** The 2024-03-06 and 2024-03-18
+phantom flights pair with five Planet scenes that the mavic build also
+used. Those chips have identical stems, all five are Good in both sets,
+and they are in the 126-chip extended set:
+`20240304_155459_24_24f6`, `20240306_150044_82_24ba`,
+`20240306_150046_96_24ba`, `20240307_150321_14_24a8` and
+`20240317_150402_66_2455`. They are handled at assembly (step 5).
+
 ### 3. Review the coregistration
 
 Before rating anything, check that the drone ortho, the Planet chip and the
@@ -204,6 +270,14 @@ overlay and a note field. Ratings land in `<imagedir>/vetting.json` (or
 `-o`) after every click, so the pass is resumable; *Show: unrated* narrows
 the sheet to what is left.
 
+**Phantom 2023–2024 (`20261002_phantomext_...`).** The 46 coregistered
+chips were pre-rated by Claude on 2026-10-02. The ratings went into that
+set's `vetting.json` with notes prefixed `[Claude pre-rating]`, to be
+reviewed in `vet_planet_chips.py` before assembly. The pre-ratings were
+calibrated by viewing a sample of the mavic ratings. They judge image
+quality the same way, plus a residual-offset check on chips with
+unusually large AROSICS shifts. The result was 23 Good, 9 Fair and 14 Poor.
+
 ### 5. Assemble the curated set
 
 ```bash
@@ -231,6 +305,38 @@ merged log carries the provenance of both builds and re-runs are idempotent.
 The earlier 50ha curated set was the same step with
 `labels/20260706_planet_vetting.ndjson` (56 of 131 Good; 25 Fair, 50 Poor).
 
+The mavic ratings actually live in
+`20260915_globus_label_application_x4_coreg_4band_stretch_stats_rerun/vetting.json`
+(70 Good, 35 Fair, 49 Poor). The `_rerun` directory has the same 370-pair /
+154-chip log as the first build.
+
+**Phantom 2023–2024 sets (`20261002`).** Two sets add the vetted C3KW2X
+chips:
+
+- a phantom-only extension of the 56 base chips, which tests same-sensor
+  extra data against the mavic extension;
+- an all-sources set extending the 126.
+
+`--no-overwrite` keeps the mavic copy of the five colliding scenes in the
+all-sources set, so that set's mavic half stays identical to the 126-chip
+set:
+
+```bash
+F=/Volumes/Earth03/flower
+PE=$F/20261002_phantomext_label_application_x4_coreg_4band_stretch_stats
+
+DST=$F/20261002_phantom_label_extended_x4_coreg_4band_stretch_stats_curated
+rsync -a $F/20260706_full_label_application_x4_coreg_4band_stretch_stats_curated/ "$DST"/
+python copy_good_planet_vetting.py --vetting $PE/vetting.json --src $PE --dst "$DST" --no-overwrite
+
+DST=$F/20261002_full_label_extended2_x4_coreg_4band_stretch_stats_curated
+rsync -a $F/20260915_full_label_extended_x4_coreg_4band_stretch_stats_curated/ "$DST"/
+python copy_good_planet_vetting.py --vetting $PE/vetting.json --src $PE --dst "$DST" --no-overwrite
+```
+
+Run each copy with `--dry-run` first. The second one lists the five
+colliding stems as kept.
+
 ### Alternative: the programmatic filter
 
 Where no vetting export exists, `scripts/filter_label_application.py`
@@ -244,6 +350,88 @@ python scripts/filter_label_application.py <src_dir> <dst_dir> config/filter_lab
 
 `copy_4band_filtered.py` mirrors an RGB `_filt` selection onto the matching
 4-band set.
+
+## Training head-to-head on Gattaca2 (October 2026)
+
+The September comparison (`figs/202609_updates/headtohead_sweep.json`)
+scored two runs on the right (test) halves of the 56 base chips:
+
+- `base`, trained on the 56 base chips: `/home/gdoran/Documents/tree-flowering/20260824_maskrcnn_out_min064`;
+- `ext`, trained on the 126 chips: `.../202609_full_curated_maskrcnn_out_min064`.
+
+October adds two runs on the `20261002` sets above, and keeps the existing
+`base` and `ext` checkpoints:
+
+- `phantom`, trained on the 56 base chips plus the C3KW2X Good chips;
+- `full`, trained on the 126 chips plus those Good chips.
+
+The two training commands were not recorded. Read the settings back from a
+base checkpoint and match them, in particular whether
+`--extra-train-dir .../ava/train_filtered/` was passed. The local copy of a
+126-chip run (`full_curated_maskrcnn_out_min064`) used RGB, `--ocm-masks`,
+`--min-instance-size 64`, lr 1e-4 flat, batch 4, 200 epochs, and that AVA
+directory:
+
+```bash
+cd ~/Documents/tree-flowering/scripts
+python -c "
+import __main__, torch, train_planet_image_maskrcnn as t
+for n in dir(t): setattr(__main__, n, getattr(t, n))
+for run in ('20260824_maskrcnn_out_min064', '202609_full_curated_maskrcnn_out_min064'):
+    p = f'/home/gdoran/Documents/tree-flowering/{run}/epoch_001.pth'
+    print(run, torch.load(p, map_location='cpu', weights_only=False)['params'])"
+```
+
+Copy the two sets to the cluster (adjust the host to however you reach Gattaca2):
+
+```bash
+rsync -a /Volumes/Earth03/flower/20261002_phantom_label_extended_x4_coreg_4band_stretch_stats_curated \
+         /Volumes/Earth03/flower/20261002_full_label_extended2_x4_coreg_4band_stretch_stats_curated \
+         gattaca2:/scratch/ecopro-hpc/flower/
+```
+
+Then train. Per-epoch checkpoints stay on, because the sweep scores
+twelve of them. Add `--extra-train-dir` only if the base run used it:
+
+```bash
+S=/scratch/ecopro-hpc/flower
+O=/home/gdoran/Documents/tree-flowering
+python scripts/train_planet_image_maskrcnn.py \
+  $S/20261002_phantom_label_extended_x4_coreg_4band_stretch_stats_curated \
+  $O/202610_phantom_curated_maskrcnn_out_min064 \
+  --ocm-masks --min-instance-size 64 --lr 1e-4 --num-epochs 200 --no-wandb
+python scripts/train_planet_image_maskrcnn.py \
+  $S/20261002_full_label_extended2_x4_coreg_4band_stretch_stats_curated \
+  $O/202610_full2_curated_maskrcnn_out_min064 \
+  --ocm-masks --min-instance-size 64 --lr 1e-4 --num-epochs 200 --no-wandb
+```
+
+Score all four runs on the same 56 base test halves, at the September
+epochs:
+
+```bash
+CK=()
+for e in 001 002 003 005 008 012 017 025 040 060 100 200; do
+  CK+=(--checkpoint base_e$e=$O/20260824_maskrcnn_out_min064/epoch_$e.pth
+       --checkpoint ext_e$e=$O/202609_full_curated_maskrcnn_out_min064/epoch_$e.pth
+       --checkpoint phantom_e$e=$O/202610_phantom_curated_maskrcnn_out_min064/epoch_$e.pth
+       --checkpoint full_e$e=$O/202610_full2_curated_maskrcnn_out_min064/epoch_$e.pth)
+done
+python scripts/compare_maskrcnn_runs.py \
+  --chip-dir $S/20260706_full_label_application_x4_coreg_4band_stretch_stats_curated \
+  "${CK[@]}" --ocm-masks --min-instance-size 64 --json-out headtohead_sweep_202610.json
+```
+
+Copy the JSON to `figs/202610_updates/headtohead_sweep.json` and plot it:
+
+```bash
+python scripts/plot_update_figures.py maskrcnn-summary \
+  --label base="phantom 2020-23 only (56)" --label ext="+ mavic 2024-26 (126)" \
+  --label phantom="+ phantom 2023-24 (56+N)" --label full="all three (126+N)"
+python scripts/plot_headtohead_epochs.py \
+  /Volumes/Earth03/flower/figs/202610_updates/headtohead_sweep.json \
+  /Volumes/Earth03/flower/figs/202610_updates/maskrcnn_headtohead.png --label ...
+```
 
 ## Consumers
 
