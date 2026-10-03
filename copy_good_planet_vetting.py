@@ -21,6 +21,11 @@ share the same stem are copied (e.g. `.png`, `.tif`, `.mask.png`,
 copied, or *merged* into the destination's when one is already there — so a
 set assembled from more than one source build (e.g. the 2020-2023 local
 mosaics plus the 2024-2026 mavic mosaics) keeps the provenance of both.
+
+Chip filenames come from the Planet scene alone, so two builds can produce
+chips with the same name when one scene pairs with flights from both (e.g.
+the phantom and mavic flights of 2024-03-06). Plain copying overwrites the
+destination's chip; `--no-overwrite` keeps it and lists the skipped stems.
 """
 
 import argparse
@@ -112,15 +117,26 @@ def copy_good(
     dst_dir: Path,
     min_quality: str = "Good",
     dry_run: bool = False,
+    no_overwrite: bool = False,
 ) -> None:
     print(f"Ratings       : {vetting_path}")
     print(f"Source dir    : {src_dir}")
     print(f"Destination   : {dst_dir}")
     print(f"Min quality   : {min_quality}")
-    print(f"Dry run       : {dry_run}\n")
+    print(f"Dry run       : {dry_run}")
+    print(f"No overwrite  : {no_overwrite}\n")
 
     stems = collect_stems(vetting_path, min_quality)
     print(f"Accepted chips: {len(stems)} (>= {min_quality})")
+
+    existing = [s for s in stems if (dst_dir / f"{s}.png").exists()]
+    if existing:
+        action = "kept, source chip skipped" if no_overwrite else "OVERWRITTEN"
+        print(f"{len(existing)} accepted chip(s) already in destination ({action}):")
+        for s in existing:
+            print(f"  {s}")
+        if no_overwrite:
+            stems = [s for s in stems if s not in set(existing)]
 
     if not dry_run:
         dst_dir.mkdir(parents=True, exist_ok=True)
@@ -187,11 +203,15 @@ def main() -> None:
         help='Minimum Quality rating to copy (Poor < Fair < Good). Default: Good.',
     )
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--no-overwrite", action="store_true",
+                        help="Skip accepted chips whose <stem>.png already "
+                             "exists in --dst instead of overwriting them.")
     args = parser.parse_args()
 
     copy_good(
         args.vetting, args.src, args.dst,
         min_quality=args.min_quality, dry_run=args.dry_run,
+        no_overwrite=args.no_overwrite,
     )
 
 
