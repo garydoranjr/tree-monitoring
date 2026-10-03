@@ -270,13 +270,15 @@ overlay and a note field. Ratings land in `<imagedir>/vetting.json` (or
 `-o`) after every click, so the pass is resumable; *Show: unrated* narrows
 the sheet to what is left.
 
-**Phantom 2023–2024 (`20261002_phantomext_...`).** The 46 coregistered
-chips were pre-rated by Claude on 2026-10-02. The ratings went into that
-set's `vetting.json` with notes prefixed `[Claude pre-rating]`, to be
-reviewed in `vet_planet_chips.py` before assembly. The pre-ratings were
-calibrated by viewing a sample of the mavic ratings. They judge image
-quality the same way, plus a residual-offset check on chips with
-unusually large AROSICS shifts. The result was 23 Good, 9 Fair and 14 Poor.
+**Phantom 2023–2024 (`20261002_phantomext_...`).** Claude pre-rated the
+46 coregistered chips on 2026-10-02, writing them into that set's
+`vetting.json` with notes prefixed `[Claude pre-rating]`. The pre-ratings
+were calibrated by viewing a sample of the mavic ratings. They judge image
+quality the same way, plus a residual-offset check on chips with unusually
+large AROSICS shifts. The ratings were then reviewed in
+`vet_planet_chips.py`, which moved the two partly shadowed
+`20240220_1459*_24ca` chips from Good to Fair. **Final: 21 Good, 11 Fair,
+14 Poor.**
 
 ### 5. Assemble the curated set
 
@@ -336,6 +338,17 @@ python copy_good_planet_vetting.py --vetting $PE/vetting.json --src $PE --dst "$
 
 Run each copy with `--dry-run` first. The second one lists the five
 colliding stems as kept.
+
+Result (2026-10-02):
+
+| Set | Chips | `coreg_log.json` records | Left-split crown instances (`--min-instance-size 64`) |
+|---|---|---|---|
+| `20261002_phantom_label_extended_..._curated` | 56 + 21 = **77** | 323 + 91 = 414 | 3,258 |
+| `20261002_full_label_extended2_..._curated` | 126 + 16 = **142** | 693 + 91 = 784 | 7,908 |
+
+In the all-sources set the five colliding chips are byte-identical to
+their mavic copies. Every chip in both sets crops to 512 × 512 on both
+halves, and none has zero instances.
 
 ### Alternative: the programmatic filter
 
@@ -427,7 +440,7 @@ Copy the JSON to `figs/202610_updates/headtohead_sweep.json` and plot it:
 ```bash
 python scripts/plot_update_figures.py maskrcnn-summary \
   --label base="phantom 2020-23 only (56)" --label ext="+ mavic 2024-26 (126)" \
-  --label phantom="+ phantom 2023-24 (56+N)" --label full="all three (126+N)"
+  --label phantom="+ phantom 2023-24 (77)" --label full="all three (142)"
 python scripts/plot_headtohead_epochs.py \
   /Volumes/Earth03/flower/figs/202610_updates/headtohead_sweep.json \
   /Volumes/Earth03/flower/figs/202610_updates/maskrcnn_headtohead.png --label ...
