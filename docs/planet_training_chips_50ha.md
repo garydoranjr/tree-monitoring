@@ -378,46 +378,60 @@ October adds two runs on the `20261002` sets above, and keeps the existing
 - `phantom`, trained on the 56 base chips plus the C3KW2X Good chips;
 - `full`, trained on the 126 chips plus those Good chips.
 
-The two training commands were not recorded. Read the settings back from a
-base checkpoint and match them, in particular whether
-`--extra-train-dir .../ava/train_filtered/` was passed. The local copy of a
-126-chip run (`full_curated_maskrcnn_out_min064`) used RGB, `--ocm-masks`,
-`--min-instance-size 64`, lr 1e-4 flat, batch 4, 200 epochs, and that AVA
-directory:
+The two training commands were not recorded, so the settings were read
+back from `params` in `epoch_001.pth` of each base checkpoint. Both
+`base` and `ext` agree on all sixteen recorded settings: RGB
+(`channel_kinds: [red, green, blue]`, `n_channels: 3`,
+`fourth_band: none`), `use_ocm_masks: true`, `min_instance_size: 64`,
+lr 1e-4 flat, batch 4, 200 epochs, no copy-paste — and
+**`extra_train_dirs: []`**, so neither passed `--extra-train-dir`. The
+AVA directory belongs to the separate local run
+`full_curated_maskrcnn_out_min064`, not to `ext`, and no AVA chip set
+exists under `/scratch/ecopro-hpc/flower`. The October runs therefore
+drop that flag; their `epoch_001.pth` params match the two base runs
+exactly.
+
+Both `20261002` sets already live on `/scratch/ecopro-hpc/flower`. Stage
+them, and the 56-chip test set, onto node-local disk before training:
+reading a chip's 512 x 512 window off GPFS costs **540-675 ms**, against
+**14-17 ms** from `/local`, a ~40x gap that leaves the GPU at 0% and the
+process in `cxiWaitEventWait`. The loader touches every chip twice per
+epoch (train split, then eval split), so GPFS alone accounted for ~85 s
+of each 140 s epoch; from `/local` epochs took 36 s.
 
 ```bash
-cd ~/Documents/tree-flowering/scripts
-python -c "
-import __main__, torch, train_planet_image_maskrcnn as t
-for n in dir(t): setattr(__main__, n, getattr(t, n))
-for run in ('20260824_maskrcnn_out_min064', '202609_full_curated_maskrcnn_out_min064'):
-    p = f'/home/gdoran/Documents/tree-flowering/{run}/epoch_001.pth'
-    print(run, torch.load(p, map_location='cpu', weights_only=False)['params'])"
+mkdir -p /local/gdoran_flower
+for d in 20261002_phantom_label_extended_x4_coreg_4band_stretch_stats_curated \
+         20261002_full_label_extended2_x4_coreg_4band_stretch_stats_curated \
+         20260706_full_label_application_x4_coreg_4band_stretch_stats_curated; do
+  cp -r /scratch/ecopro-hpc/flower/$d /local/gdoran_flower/
+done
 ```
 
-Copy the two sets to the cluster (adjust the host to however you reach Gattaca2):
-
-```bash
-rsync -a /Volumes/Earth03/flower/20261002_phantom_label_extended_x4_coreg_4band_stretch_stats_curated \
-         /Volumes/Earth03/flower/20261002_full_label_extended2_x4_coreg_4band_stretch_stats_curated \
-         gattaca2:/scratch/ecopro-hpc/flower/
-```
+`/local` is node-local, so this ties the run to one node and the copies
+should be checksummed against `/scratch` before use.
 
 Then train. Per-epoch checkpoints stay on, because the sweep scores
-twelve of them. Add `--extra-train-dir` only if the base run used it:
+twelve of them, and `--no-wandb` is needed because wandb is on by
+default. Run on a GPU node inside the `flower` env; the two runs go
+back to back, since a one-core allocation serialises the in-process
+data loading and gains nothing from overlapping them:
 
 ```bash
-S=/scratch/ecopro-hpc/flower
+L=/local/gdoran_flower
 O=/home/gdoran/Documents/tree-flowering
 python scripts/train_planet_image_maskrcnn.py \
-  $S/20261002_phantom_label_extended_x4_coreg_4band_stretch_stats_curated \
+  $L/20261002_phantom_label_extended_x4_coreg_4band_stretch_stats_curated \
   $O/202610_phantom_curated_maskrcnn_out_min064 \
   --ocm-masks --min-instance-size 64 --lr 1e-4 --num-epochs 200 --no-wandb
 python scripts/train_planet_image_maskrcnn.py \
-  $S/20261002_full_label_extended2_x4_coreg_4band_stretch_stats_curated \
+  $L/20261002_full_label_extended2_x4_coreg_4band_stretch_stats_curated \
   $O/202610_full2_curated_maskrcnn_out_min064 \
   --ocm-masks --min-instance-size 64 --lr 1e-4 --num-epochs 200 --no-wandb
 ```
+
+On one A100 with one CPU core: 1 h 30 m for `phantom` (36 s/epoch) and
+3 h 04 m for `full` (70 s/epoch), 35 G of checkpoints each.
 
 Score all four runs on the same 56 base test halves, at the September
 epochs:
@@ -431,11 +445,48 @@ for e in 001 002 003 005 008 012 017 025 040 060 100 200; do
        --checkpoint full_e$e=$O/202610_full2_curated_maskrcnn_out_min064/epoch_$e.pth)
 done
 python scripts/compare_maskrcnn_runs.py \
-  --chip-dir $S/20260706_full_label_application_x4_coreg_4band_stretch_stats_curated \
+  --chip-dir $L/20260706_full_label_application_x4_coreg_4band_stretch_stats_curated \
   "${CK[@]}" --ocm-masks --min-instance-size 64 --json-out headtohead_sweep_202610.json
 ```
 
-Copy the JSON to `figs/202610_updates/headtohead_sweep.json` and plot it:
+Scoring the 48 checkpoints took 16 min. `base` and `ext` are re-scored
+rather than carried over, which makes the JSON self-consistent and
+checks the harness: their 144 metric values reproduce the September
+sweep to a maximum absolute difference of 0, i.e. bit-identical.
+
+Result (2026-10-03), peak over the twelve scored epochs:
+
+| Run | Chips | Peak `map_50` | at | Peak `test_iou` | at | P/R at `map_50` peak |
+|---|---|---|---|---|---|---|
+| `base` | 56 | **0.1681** | e012 | **0.3076** | e017 | 0.129 / 0.320 |
+| `ext` | 126 | 0.1513 | e005 | 0.2686 | e025 | 0.070 / 0.342 |
+| `phantom` | 77 | 0.1562 | e005 | 0.2988 | e017 | 0.111 / 0.293 |
+| `full` | 142 | 0.1637 | e008 | 0.2730 | e025 | 0.095 / 0.329 |
+
+The C3KW2X Good chips help the extended set — `ext` (126) to `full`
+(142) gains 0.0124 `map_50` and 0.0044 `test_iou` — but hurt the base
+set, `base` (56) to `phantom` (77) losing 0.0119 and 0.0088. The same
+chips cannot both help and hurt, so on 56 test chips a ~0.01 `map_50`
+difference is within noise, and the honest reading is that none of the
+three larger sets beats the 56-chip baseline on this benchmark.
+
+Two caveats before concluding that more chips do not pay. First, the
+test halves are the right halves of the 56 base chips, whose left halves
+are in *every* run's training set; `base` draws its entire training
+distribution from those scenes while `ext`/`full` dilute it with mavic
+2024-26 scenes, so the benchmark structurally favours `base` and says
+nothing about generalisation to new dates. Second, all four runs peak
+between e005 and e012 on the scored grid and then collapse (`phantom`
+falls from 0.1562 at e005 to 0.0475 at e200), so these are
+early-stopping scores on a heavily
+overfitting fit, and the 200-epoch budget is far past useful. (On the
+full 200-epoch grid each run's own validation puts the best even
+earlier: epoch 6 for `phantom`, epoch 4 for `full`.)
+
+The JSON lands at `logs/headtohead_sweep_202610.json` on the cluster;
+the plotters hardcode `FLOWER = Path('/Volumes/Earth03/flower')`, so
+copy it to `figs/202610_updates/headtohead_sweep.json` and plot on the
+Mac:
 
 ```bash
 python scripts/plot_update_figures.py maskrcnn-summary \
