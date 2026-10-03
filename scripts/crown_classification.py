@@ -48,7 +48,7 @@ def to_uint8(data, scaling):
 
     The models were trained on 8-bit imagery. When `scaling` is provided, each
     band is mapped with its own gain/offset so the histograms line up with that
-    training domain; see config/crown_classification_globus.yml for how the
+    training domain; see config/crown_classification_mavic.yml for how the
     coefficients were fitted and why they are fixed rather than per-image.
     """
     if data.dtype == np.uint8:
@@ -58,7 +58,7 @@ def to_uint8(data, scaling):
         raise ValueError(
             f"Image is {data.dtype}, not uint8, and no --scaling-config was "
             "given. Pass a config with per-band uint16_to_uint8 coefficients "
-            "(e.g. config/crown_classification_globus.yml)."
+            "(e.g. config/crown_classification_mavic.yml)."
         )
 
     gains, offsets = scaling
@@ -148,7 +148,7 @@ def extract_centered_window(src, polygon, min_size=512, pixel_buffer=100,
 
     # --- 6. Read and return ---
     # Only the first three bands (R, G, B) are used: the fourth band is an alpha
-    # mask in the globus mosaics and photogrammetric height in the uint8 ones.
+    # mask in the mavic mosaics and photogrammetric height in the uint8 ones.
     data = src.read(indexes=[1, 2, 3], window=window)
     data = to_uint8(data, scaling)
 
@@ -287,7 +287,7 @@ def save_window_geotiff(output_path, array, src, window):
     })
 
     # The confidence raster has its own value range, so any nodata inherited
-    # from the source imagery does not apply. The globus mosaics declare
+    # from the source imagery does not apply. The mavic mosaics declare
     # nodata=0, which would otherwise mask out genuine zero-confidence pixels
     # and make merge_classifications.py drop them from the average.
     profile.pop("nodata", None)
@@ -342,7 +342,7 @@ def select_polygons(shp, image_file):
 @click.option('--scaling-config', default=None,
               type=click.Path(exists=True, dir_okay=False),
               help='YAML with per-band uint16 -> uint8 gains/offsets. Required '
-                   'for uint16 imagery such as the globus 50ha mosaics.')
+                   'for uint16 imagery such as the mavic 50ha mosaics.')
 def main(modelfile, image_file, shapefile_path, output_dir, scaling_config):
 
     model = torch.load(modelfile, weights_only=False, map_location=torch.device('cpu'))

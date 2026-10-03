@@ -20,7 +20,7 @@ share the same stem are copied (e.g. `.png`, `.tif`, `.mask.png`,
 `.drone.png`, `.ocm.png`). The source root's `coreg_log.json` is also
 copied, or *merged* into the destination's when one is already there — so a
 set assembled from more than one source build (e.g. the 2020-2023 local
-mosaics plus the 2024-2026 globus mosaics) keeps the provenance of both.
+mosaics plus the 2024-2026 mavic mosaics) keeps the provenance of both.
 """
 
 import argparse

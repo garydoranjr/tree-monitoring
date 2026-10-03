@@ -123,7 +123,7 @@ def load_as_geoarray(filepath):
 
 
 def compute_coreg_shift(dronefile, planetfile, planet_match_band=1, drone_ga=None):
-    # The drone ortho is the expensive side: the globus M3M mosaics are ~4 GB
+    # The drone ortho is the expensive side: the mavic M3M mosaics are ~4 GB
     # each, and every Planet scene under a given label date shares one. Callers
     # that loop over scenes pass it in preloaded; None keeps the standalone
     # behaviour.

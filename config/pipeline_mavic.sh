@@ -1,7 +1,7 @@
-# Crown classification pipeline settings for the globus 50ha RGB mosaics.
+# Crown classification pipeline settings for the mavic 50ha RGB mosaics.
 #
 # Submit with:
-#   ./run_crown_pipeline.sh config/pipeline_globus.sh
+#   ./run_crown_pipeline.sh config/pipeline_mavic.sh
 #
 # Sourced by run_crown_pipeline.sh, which exports these to the stage scripts.
 
@@ -22,7 +22,7 @@ KEYS="flower decid"
 MODEL_TEMPLATE="drone_{key}_geo_out/epoch_020.pth"
 
 # These mosaics are uint16 while the models were trained on 8-bit data.
-SCALING_CONFIG=config/crown_classification_globus.yml
+SCALING_CONFIG=config/crown_classification_mavic.yml
 
 # Timings measured on one 25595x21815 mosaic (558 Mpx, 2280 crowns):
 #   classify ~2.2 crowns/s -> ~17 min, plus ~1.5 min to load the model

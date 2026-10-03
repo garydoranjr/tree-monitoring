@@ -65,7 +65,7 @@ classification products are 2-band float32
 | Ortho footprint | 1056 × 572 m | 1199 × 1022 m |
 | Labels | `*_local_classifications.tif` | `*_M3M_aligned_global_RGB_classifications.tif` |
 | Dates | 2020-01-24 → 2023-10-24 | 2024-03-06 → 2026-01-20, 96 flights |
-| Provenance | — | synced by `scripts/globus_https_sync.py`, classified by `run_crown_pipeline.sh config/pipeline_globus.sh` (see [NOTES.md](../NOTES.md)) |
+| Provenance | — | synced by `scripts/globus_https_sync.py`, classified by `run_crown_pipeline.sh config/pipeline_mavic.sh` (see [NOTES.md](../NOTES.md)) |
 
 `find_drone()` matches a label to its ortho by filename prefix, so
 `BCI_50ha_2024_03_06_M3M_aligned_global_RGB_classifications.tif` resolves to

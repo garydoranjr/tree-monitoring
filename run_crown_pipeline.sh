@@ -16,7 +16,7 @@
 #   ./run_crown_pipeline.sh <config.sh>          # submit
 #   ./run_crown_pipeline.sh <config.sh> --dry-run
 #
-# See config/pipeline_globus.sh for a worked example.
+# See config/pipeline_mavic.sh for a worked example.
 
 set -euo pipefail
 

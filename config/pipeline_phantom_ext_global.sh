@@ -25,17 +25,17 @@ SHAPE=/scratch/tree-monitoring/stri/24784053/BCI_50ha_2022_09_29_crownmap_improv
 # concat_classifications.py expects both, in this order.
 KEYS="flower decid"
 
-# {key} is substituted per task; epoch_020 matches the globus and ava runs.
+# {key} is substituted per task; epoch_020 matches the mavic and ava runs.
 MODEL_TEMPLATE="drone_{key}_geo_out/epoch_020.pth"
 
 # No SCALING_CONFIG. These rasters are 4-band uint8 (23425x12697, EPSG:32617),
 # the same dtype as the 24782016 mosaics the models were trained on, so they
-# are passed through untouched. config/crown_classification_globus.yml exists
-# only because the globus mosaics are uint16 and must not be used here.
+# are passed through untouched. config/crown_classification_mavic.yml exists
+# only because the mavic mosaics are uint16 and must not be used here.
 
-# 297 Mpx per image against 558 Mpx for globus, but the same 2280 crowns, so
+# 297 Mpx per image against 558 Mpx for mavic, but the same 2280 crowns, so
 # classify time is comparable (~17 min plus ~1.5 min to load the model) while
-# merge peak RSS is roughly half the 7.3 GB measured on a globus mosaic.
+# merge peak RSS is roughly half the 7.3 GB measured on a mavic mosaic.
 CLASSIFY_TIME=04:00:00
 CLASSIFY_MEM=16G
 MERGE_TIME=02:00:00
@@ -44,6 +44,6 @@ CONCAT_TIME=02:00:00
 CONCAT_MEM=32G
 
 CPUS=4
-# 10 rather than the globus 20, because the global and local runs are
+# 10 rather than the mavic 20, because the global and local runs are
 # submitted together and share the queue.
 MAX_CONCURRENT=10

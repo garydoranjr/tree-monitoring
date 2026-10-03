@@ -32,8 +32,8 @@ Outputs (in OUTDIR):
 Typical usage:
     python scripts/measure_chip_local_offsets.py \\
         --set "2020-23 local-align=/Volumes/Earth03/flower/20260706_full_label_application_x4_coreg_4band_stretch_stats_curated" \\
-        --set "2024-26 globus=/Volumes/Earth03/flower/20260915_globus_label_application_x4_coreg_4band_stretch_stats_rerun" \\
-        --vetting "2024-26 globus=/Volumes/Earth03/flower/20260915_globus_label_application_x4_coreg_4band_stretch_stats_rerun/vetting.json" \\
+        --set "2024-26 mavic=/Volumes/Earth03/flower/20260915_globus_label_application_x4_coreg_4band_stretch_stats_rerun" \\
+        --vetting "2024-26 mavic=/Volumes/Earth03/flower/20260915_globus_label_application_x4_coreg_4band_stretch_stats_rerun/vetting.json" \\
         /Volumes/Earth03/flower/figs/202609_updates
 """
 import os

@@ -183,7 +183,7 @@ def mosaic_average_rioxarray(original_path, tile_paths, output_path, dtype=np.fl
     
     # 5. Save result as GeoTIFF
     # Drop per-band metadata inherited from the source: the output is a
-    # single confidence band, so the source's band names (the globus mosaics
+    # single confidence band, so the source's band names (the mavic mosaics
     # label theirs 'Red'/'Green'/'Blue'/'Alpha') no longer describe it and
     # rioxarray refuses to write a long_name that outnumbers the bands.
     attrs = {k: v for k, v in original.attrs.items()

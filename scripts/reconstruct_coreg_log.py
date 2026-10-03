@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Rebuild a coreg_log.json that was lost or truncated by a failed write.
 
-The 20260915 globus build processed all 370 (label, scene) pairs and wrote
+The 20260915 mavic build processed all 370 (label, scene) pairs and wrote
 every chip, then died in the final `json.dump` on a numpy float32 shift
 (fixed since: see `compute_coreg_shift`). That left a truncated log holding
 19 complete records out of 370.

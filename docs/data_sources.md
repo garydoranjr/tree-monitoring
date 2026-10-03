@@ -57,6 +57,27 @@ Earlier (2023) figshare releases that are also used locally:
 > Smithsonian Tropical Research Institute, figshare.
 > https://doi.org/10.25573/data.24757284
 
+## Dataset names
+
+For internal record keeping the 50-ha drone mosaics are grouped by the drone
+that flew them:
+
+| Name | Drone / camera | Sources | Dates |
+|---|---|---|---|
+| **phantom** | DJI Phantom 4 Pro (`FC6310`) | 24782016 (90 dates) + C3KW2X (16 dates), global and local alignments | 2018-04-04 – 2024-03-18 |
+| **mavic** | DJI Mavic 3M (M3M) | the STRI Globus share in `stri/globus/RGB/`, global alignment only | 2024-03-06 – 2026-01-20 |
+
+The two overlap on 2024-03-06 and 2024-03-18. These names are used in
+code identifiers, configs (`config/pipeline_mavic.sh`,
+`config/crown_classification_mavic.yml`, `config/pipeline_phantom_ext_*.sh`),
+figure labels and new output directories. Existing on-disk names are **not**
+renamed, since coreg logs, checkpoints and docs record them: `stri/globus/`,
+`*_M3M_aligned_global_RGB*`, `/scratch/tree-monitoring/results/globus`, and
+the `20260915_globus_*` chip sets all refer to the mavic data. "Globus" on its
+own still means the transfer service (`scripts/globus_https_sync.py`,
+`NOTES.md`). Older figures and the September 2026 deck call phantom "STRI"
+and mavic "globus".
+
 ## Local copies
 
 Drone data lives under `/Volumes/Earth03/flower/stri/`. Gattaca2 has copies
@@ -87,11 +108,11 @@ subdirectory is named from the image stem, which already carries the
 `<stem>_classifications.tif` (band 1 flowering probability, band 2
 deciduous), and the `flower/`+`decid/` per-crown tile directories.
 
-Unlike the globus mosaics, these need **no `--scaling-config`**: they are
+Unlike the mavic (globus) mosaics, these need **no `--scaling-config`**: they are
 4-band uint8 (23425x12697, EPSG:32617), the same dtype as the 24782016
 imagery the SegFormer models were trained on, so they are passed through
-untouched. `config/crown_classification_globus.yml` applies only to the
-uint16 globus rasters.
+untouched. `config/crown_classification_mavic.yml` applies only to the
+uint16 mavic rasters.
 
 **Do not read a phenology step at the 2023-10-24 / 2023-10-31 boundary as
 biology.** That boundary is where the series crosses from the 2023 release
