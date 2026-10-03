@@ -35,6 +35,11 @@ LABEL_RE = re.compile(r'^(?P<run>.+)_e(?P<epoch>\d+)$')
 # recall, so only a readable subset gets a callout.
 ANNOT_EPOCHS = (1, 3, 5, 12, 25, 60, 200)
 
+# Fixed colours for the run prefixes used so far (base = phantom 2020-23 chips,
+# ext = + mavic, phantom = + C3KW2X phantom, full = all three); others cycle.
+RUN_COLORS = {'base': '#1f77b4', 'ext': '#d62728', 'phantom': '#2ca02c',
+              'full': '#9467bd'}
+
 
 def load(path):
     """Group a sweep JSON into {run: sorted-by-epoch list of rows}."""
@@ -64,15 +69,18 @@ def series(rows, key):
 def plot(blob, runs, display, outputfile):
     fig, axs = plt.subplots(ncols=2, nrows=2, figsize=(13, 9.5))
     ax_map, ax_iou, ax_pr, ax_traj = axs[0, 0], axs[0, 1], axs[1, 0], axs[1, 1]
-    colors = {'base': '#1f77b4', 'ext': '#d62728'}
+    cycle = iter(plt.rcParams['axes.prop_cycle'].by_key()['color'][4:])
+    colors = {run: RUN_COLORS.get(run) or next(cycle) for run in sorted(runs)}
     traj_scatter = []
 
     # Stagger the peak callouts per run so they don't land on top of each other
     # or on the curves, which peak at nearby epochs.
-    annot_offsets = {'base': (8, 10), 'ext': (8, -26)}
+    offsets = [(8, 10), (8, -26), (8, 24), (8, -40)]
+    annot_offsets = {run: offsets[i % len(offsets)] for i, run in enumerate(sorted(runs))}
+    vmax = max(r['epoch_n'] for rows in runs.values() for r in rows)
 
     for run, rows in sorted(runs.items()):
-        color = colors.get(run, None)
+        color = colors[run]
         label = display.get(run, run)
 
         # Top row: the selection metrics, each with its peak marked, since the
@@ -105,7 +113,7 @@ def plot(blob, runs, display, outputfile):
         ax_traj.plot(r, p, '-', color=color, lw=1.4, alpha=0.7, label=label)
         sc = ax_traj.scatter(r, p, c=x, cmap='viridis', s=46, zorder=4,
                              edgecolors=color, linewidths=1.1,
-                             norm=LogNorm(vmin=1, vmax=200))
+                             norm=LogNorm(vmin=1, vmax=vmax))
         for xi, ri, pi in zip(x, r, p):
             if int(xi) in ANNOT_EPOCHS:
                 ax_traj.annotate(f'ep{int(xi)}', xy=(ri, pi), xytext=(6, 5),
@@ -117,15 +125,17 @@ def plot(blob, runs, display, outputfile):
         ax.set_xscale('log')
         ax.set_xlabel('training epoch')
         ax.grid(alpha=0.3)
-        ax.set_xlim(0.9, 230)
+        ax.set_xlim(0.9, vmax * 1.15)
 
     # Headroom above the highest point so the peak callouts have somewhere to
     # sit without overlapping the curves.
+    top = {key: max(r[key] for rows in runs.values() for r in rows)
+           for key in ('test_map/map_50', 'test_iou')}
     ax_map.set_ylabel('mask mAP@50')
-    ax_map.set_ylim(0, 0.21)
+    ax_map.set_ylim(0, top['test_map/map_50'] * 1.25)
     ax_map.set_title('Mask mAP@50 vs epoch (star = peak)', fontsize=10)
     ax_iou.set_ylabel('binary IoU')
-    ax_iou.set_ylim(0, 0.37)
+    ax_iou.set_ylim(0, top['test_iou'] * 1.2)
     ax_iou.set_title('Binary IoU vs epoch (star = peak)', fontsize=10)
     ax_pr.set_ylabel('precision / recall')
     ax_pr.set_ylim(0, 0.92)
@@ -162,7 +172,7 @@ def plot(blob, runs, display, outputfile):
 
 
 def report(runs, display):
-    """Print peak-vs-final per run and the per-epoch gap between two runs."""
+    """Print peak-vs-final per run and each run's per-epoch gap to base."""
     for run, rows in sorted(runs.items()):
         print(f'\n{display.get(run, run)}:')
         for key in ('test_map/map_50', 'test_iou'):
@@ -171,14 +181,16 @@ def report(runs, display):
             print(f'  {key:18s} peak={y[i]:.4f} @ep{int(x[i]):<4d} '
                   f'final={y[-1]:.4f} (final/peak={y[-1] / y[i]:.2f})')
 
-    if set(runs) == {'base', 'ext'}:
-        print('\nper-epoch map_50, ext - base:')
-        b = {r['epoch_n']: r['test_map/map_50'] for r in runs['base']}
-        e = {r['epoch_n']: r['test_map/map_50'] for r in runs['ext']}
+    if 'base' not in runs:
+        return
+    b = {r['epoch_n']: r['test_map/map_50'] for r in runs['base']}
+    for run in sorted(set(runs) - {'base'}):
+        print(f'\nper-epoch map_50, {run} - base:')
+        e = {r['epoch_n']: r['test_map/map_50'] for r in runs[run]}
         for ep in sorted(set(b) & set(e)):
             d = e[ep] - b[ep]
             print(f'  ep{ep:<4d} {b[ep]:.4f} -> {e[ep]:.4f}  '
-                  f'{d:+.4f} {"ext better" if d > 0 else "base better"}')
+                  f'{d:+.4f} {run + " better" if d > 0 else "base better"}')
 
 
 @click.command()
