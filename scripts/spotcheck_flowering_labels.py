@@ -26,6 +26,7 @@ Typical usage:
     python scripts/spotcheck_flowering_labels.py sample
     python scripts/spotcheck_flowering_labels.py zoom zoom_mavic_likely_tp \\
         2025-06-17:854 2024-06-04:1523 2026-01-20:1881
+"""
 import os
 
 os.environ.setdefault('MPLBACKEND', 'Agg')
