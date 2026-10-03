@@ -761,6 +761,9 @@ def coreg_stats(outdir):
 # --------------------------------------------------------------------------
 RUN_COLORS = {'base': C_PHANTOM, 'ext': C_MAVIC, 'phantom': C_PHANTOM_EXT,
               'full': '#9467bd'}
+# Peak-callout offsets (points) per run, so runs peaking at the same epoch
+# do not print their labels on top of each other.
+RUN_ANNOT = {'base': (8, 8), 'ext': (8, -18), 'phantom': (-88, 10), 'full': (-70, 14)}
 
 
 @cli.command('maskrcnn-summary')
@@ -792,8 +795,8 @@ def maskrcnn_summary(outdir, sweep, labels):
         k = int(np.argmax(m))
         ax.plot(e[k], m[k], marker='*', ms=15, color=color)
         ax.annotate(f'{m[k]:.3f} @ ep {e[k]}', (e[k], m[k]),
-                    textcoords='offset points', xytext=(6, 8), fontsize=9,
-                    color=color, fontweight='bold')
+                    textcoords='offset points', xytext=RUN_ANNOT.get(run, (6, 8)),
+                    fontsize=9, color=color, fontweight='bold')
     if curves.keys() == {'base', 'ext'}:
         e, mb = curves['base']
         _, me = curves['ext']
