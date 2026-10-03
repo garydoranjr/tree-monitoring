@@ -1,29 +1,31 @@
 #!/usr/bin/env python
 """Spot-check crowns the drone classifier labels as flowering.
 
-The HPC SegFormer classification of the globus mosaics marks far more crowns
-as flowering than the STRI record does (median 1.8 % vs 0.5 % of crowns; see
-`plot_update_202609.py classification-timeseries`). This script puts the
-positives in front of a person so they can be judged against the imagery.
+The HPC SegFormer classification of the mavic mosaics marks far more crowns
+as flowering than the phantom record does (median 1.8 % vs 0.5 % of crowns in
+the September 2026 update; see `plot_update_figures.py
+classification-timeseries`). This script puts the positives in front of a
+person so they can be judged against the imagery.
 
 Subcommands:
 
   sample  Score every crown's mean P(flowering) on N evenly spaced dates per
-          source, sample crown-dates above --threshold, and render contact
+          series, sample crown-dates above --threshold, and render contact
           sheets (drone RGB with the crown outline | P(flowering) map).
-          Writes spotcheck_sample.csv plus globus_flowering_<k>.png and
-          stri_flowering_reference.png.
+          Writes spotcheck_sample.csv plus mavic_flowering_<k>.png,
+          phantom_flowering_reference.png (24782016 release) and
+          phantom_c3kw2x_flowering.png (C3KW2X release).
   zoom    Render chosen crown-dates from spotcheck_sample.csv at native mosaic
           resolution, for a close look or a slide.
 
-Globus RGB is shown after the same fixed uint16 -> uint8 mapping the
-classifier saw (config/crown_classification_globus.yml).
+Mavic RGB is shown after the same fixed uint16 -> uint8 mapping the
+classifier saw (config/crown_classification_mavic.yml); phantom RGB is uint8
+and shown as is.
 
 Typical usage:
     python scripts/spotcheck_flowering_labels.py sample
-    python scripts/spotcheck_flowering_labels.py zoom zoom_globus_likely_tp \\
+    python scripts/spotcheck_flowering_labels.py zoom zoom_mavic_likely_tp \\
         2025-06-17:854 2024-06-04:1523 2026-01-20:1881
-"""
 import os
 
 os.environ.setdefault('MPLBACKEND', 'Agg')
@@ -35,7 +37,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-import plot_update_202609 as pu
+import plot_update_figures as pu
 
 DEFAULT_OUT = pu.DEFAULT_OUT / 'spotcheck_flowering'
 
@@ -58,11 +60,6 @@ def crown_means(crowns, cls_path, decimate):
     return np.where(counts >= 10, sums / np.maximum(counts, 1), np.nan)
 
 
-def rgb_path(cls_path):
-    name = Path(cls_path).name.replace('_classifications.tif', '.tif')
-    return (pu.GLOBUS_RGB if 'M3M' in name else pu.STRI_LOCAL) / name
-
-
 def read_crop(path, bounds, bands, target_px=None):
     """Read a map-bounds crop; decimate so the width is about target_px."""
     import rasterio
@@ -75,9 +72,7 @@ def read_crop(path, bounds, bands, target_px=None):
 
 
 def to_display(arr):
-    if arr.dtype == np.uint8:
-        return np.moveaxis(arr[:3], 0, -1) / 255.0
-    return pu.globus_rgb_display(arr)
+    return pu.rgb_display(arr)
 
 
 def crown_bounds(geom, pad_frac, pad_m):
@@ -121,7 +116,7 @@ def contact_sheet(crowns, df, path, per_row=4):
     for j, (_, r) in enumerate(df.iterrows()):
         geom = crowns.geometry.iloc[r['crown']]
         b = crown_bounds(geom, 0.35, 5)
-        img, ti = read_crop(rgb_path(r['cls']), b, [1, 2, 3], target_px=220)
+        img, ti = read_crop(pu.drone_ortho_for(r['cls']), b, [1, 2, 3], target_px=220)
         cls, tc = read_crop(r['cls'], b, [1], target_px=220)
         a0 = axes[j // per_row, 2 * (j % per_row)]
         a1 = axes[j // per_row, 2 * (j % per_row) + 1]
@@ -151,31 +146,42 @@ def cli():
 @click.option('--outdir', type=click.Path(file_okay=False, path_type=Path),
               default=DEFAULT_OUT, show_default=True)
 @click.option('--dates', default=16, show_default=True,
-              help='Evenly spaced dates scored per source.')
-@click.option('--globus-crowns', default=32, show_default=True)
-@click.option('--stri-crowns', default=16, show_default=True)
+              help='Evenly spaced dates scored per series.')
+@click.option('--mavic-crowns', default=32, show_default=True)
+@click.option('--phantom-crowns', default=16, show_default=True,
+              help='Crown-dates sampled from the 24782016 phantom release.')
+@click.option('--phantom-ext-crowns', default=16, show_default=True,
+              help='Crown-dates sampled from the C3KW2X phantom release.')
 @click.option('--threshold', default=0.5, show_default=True,
               help='Minimum mean P(flowering) for a crown-date to be sampled.')
 @click.option('--decimate', default=16, show_default=True,
               help='Resolution divisor for scoring crowns (~0.75 m at 16).')
 @click.option('--per-sheet', default=16, show_default=True)
 @click.option('--seed', default=1, show_default=True)
-def sample(outdir, dates, globus_crowns, stri_crowns, threshold, decimate,
-           per_sheet, seed):
-    """Sample flowering-labelled crowns and render contact sheets."""
+def sample(outdir, dates, mavic_crowns, phantom_crowns, phantom_ext_crowns,
+           threshold, decimate, per_sheet, seed):
+    """Sample flowering-labelled crowns and render contact sheets.
+
+    Phantom crowns come from the locally aligned classifications.
+    """
     outdir.mkdir(parents=True, exist_ok=True)
     crowns = load_crowns()
-    globus = sorted(pu.CLASSIFICATIONS.glob('*_M3M_aligned_global_RGB_classifications.tif'))
-    stri = sorted(pu.CLASSIFICATIONS.glob('*_local_classifications.tif'))
-    g = sample_source(crowns, 'globus', globus, dates, globus_crowns,
-                      threshold, decimate, seed)
-    s = sample_source(crowns, 'STRI local', stri, dates, stri_crowns,
-                      threshold, decimate, seed)
-    pd.concat([g, s]).to_csv(outdir / 'spotcheck_sample.csv', index=False)
-    for k, start in enumerate(range(0, len(g), per_sheet), 1):
-        contact_sheet(crowns, g.iloc[start:start + per_sheet],
-                      outdir / f'globus_flowering_{k}.png')
-    contact_sheet(crowns, s, outdir / 'stri_flowering_reference.png')
+    groups = [(key, n, sample_source(crowns, key, pu.classification_files(key),
+                                     dates, n, threshold, decimate, seed))
+              for key, n in (('mavic', mavic_crowns),
+                             ('phantom-24782016', phantom_crowns),
+                             ('phantom-C3KW2X', phantom_ext_crowns)) if n > 0]
+    pd.concat([df for _, _, df in groups]).to_csv(outdir / 'spotcheck_sample.csv',
+                                                 index=False)
+    for key, _, df in groups:
+        if key == 'mavic':
+            for k, start in enumerate(range(0, len(df), per_sheet), 1):
+                contact_sheet(crowns, df.iloc[start:start + per_sheet],
+                              outdir / f'mavic_flowering_{k}.png')
+        elif key == 'phantom-24782016':
+            contact_sheet(crowns, df, outdir / 'phantom_flowering_reference.png')
+        else:
+            contact_sheet(crowns, df, outdir / 'phantom_c3kw2x_flowering.png')
 
 
 @cli.command()
@@ -184,26 +190,35 @@ def sample(outdir, dates, globus_crowns, stri_crowns, threshold, decimate,
 @click.option('--outdir', type=click.Path(file_okay=False, path_type=Path),
               default=DEFAULT_OUT, show_default=True)
 def zoom(name, picks, outdir):
-    """Render crown-dates (YYYY-MM-DD:CROWN) at native resolution as NAME.png."""
+    """Render crown-dates at native resolution as NAME.png.
+
+    Each pick is YYYY-MM-DD:CROWN, or YYYY-MM-DD:CROWN:SERIES (e.g.
+    2024-03-06:198:mavic) when a date is in more than one series.
+    """
     df = pd.read_csv(outdir / 'spotcheck_sample.csv', parse_dates=['date'])
     crowns = load_crowns()
     fig, axes = plt.subplots(1, len(picks), figsize=(5.2 * len(picks), 5.4),
                              squeeze=False)
     for ax, pick in zip(axes[0], picks):
-        d, c = pick.split(':')
+        d, c, *series = pick.split(':')
         match = df[(df['date'] == pd.Timestamp(d)) & (df['crown'] == int(c))]
+        if series:
+            match = match[match['source'] == series[0]]
         if match.empty:
             raise click.ClickException(f'{pick} is not in spotcheck_sample.csv')
+        if len(match) > 1:
+            raise click.ClickException(f'{pick} is in several series; append :SERIES')
         r = match.iloc[0]
         geom = crowns.geometry.iloc[int(c)]
         b = crown_bounds(geom, 0, 3)
-        img, t = read_crop(rgb_path(r['cls']), b, [1, 2, 3])
+        img, t = read_crop(pu.drone_ortho_for(r['cls']), b, [1, 2, 3])
         ax.imshow(to_display(img), extent=pu.extent(img, t))
         outline(ax, geom, 0.8)
         ax.set_xlim(b[0], b[2])
         ax.set_ylim(b[1], b[3])
         ax.set_axis_off()
-        ax.set_title(f"{r['source']} {d} crown {c}  mean P={r['p_flower']:.2f}",
+        label = pu.SERIES[r['source']][0]
+        ax.set_title(f"{label} {d} crown {c}  mean P={r['p_flower']:.2f}",
                      fontsize=9)
     fig.tight_layout()
     fig.savefig(outdir / f'{name}.png', dpi=120)
