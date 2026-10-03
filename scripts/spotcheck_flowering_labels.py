@@ -222,7 +222,7 @@ def zoom(name, picks, outdir):
         ax.set_title(f"{label} {d} crown {c}  mean P={r['p_flower']:.2f}",
                      fontsize=9)
     fig.tight_layout()
-    fig.savefig(outdir / f'{name}.png', dpi=120)
+    fig.savefig(outdir / f'{name}.png', dpi=120, bbox_inches='tight')
     click.echo(f"Wrote {outdir / f'{name}.png'}")
 
 
