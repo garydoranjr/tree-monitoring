@@ -102,6 +102,7 @@ def sample_source(crowns, source, files, n_dates, n_crowns, threshold,
                              'p_flower': float(m[i]),
                              'area_m2': float(crowns.geometry.iloc[i].area)})
     df = pd.DataFrame(rows)
+    df['species'] = df['crown'].map(pu.crown_species())
     click.echo(f'{source}: {len(df)} crown-dates above {threshold} on '
                f'{len(idx)} dates; sampling {min(n_crowns, len(df))}')
     return df.sample(min(n_crowns, len(df)), random_state=seed).sort_values('date')
@@ -110,7 +111,7 @@ def sample_source(crowns, source, files, n_dates, n_crowns, threshold,
 def contact_sheet(crowns, df, path, per_row=4):
     rows = int(np.ceil(len(df) / per_row))
     fig, axes = plt.subplots(rows, per_row * 2,
-                             figsize=(per_row * 2 * 2.3, rows * 2.55))
+                             figsize=(per_row * 2 * 2.3, rows * 2.85))
     axes = np.atleast_2d(axes)
     for ax in axes.ravel():
         ax.set_axis_off()
@@ -131,7 +132,8 @@ def contact_sheet(crowns, df, path, per_row=4):
             a.set_ylim(b[1], b[3])
         a0.set_title(f"#{j + 1} {r['date']:%Y-%m-%d} crown {r['crown']}",
                      fontsize=7)
-        a1.set_title(f"mean P={r['p_flower']:.2f}", fontsize=7)
+        a1.set_title(f"mean P={r['p_flower']:.2f}\n{pu.crown_species()[r['crown']]}",
+                     fontsize=6)
     fig.tight_layout()
     fig.savefig(path, dpi=110)
     plt.close(fig)
@@ -219,8 +221,8 @@ def zoom(name, picks, outdir):
         ax.set_ylim(b[1], b[3])
         ax.set_axis_off()
         label = pu.SERIES[r['source']][0]
-        ax.set_title(f"{label} {d} crown {c}  mean P={r['p_flower']:.2f}",
-                     fontsize=9)
+        ax.set_title(f"{label} {d} crown {c}  mean P={r['p_flower']:.2f}\n"
+                     f"{pu.crown_species()[int(c)]}", fontsize=9)
     fig.tight_layout()
     fig.savefig(outdir / f'{name}.png', dpi=120, bbox_inches='tight')
     click.echo(f"Wrote {outdir / f'{name}.png'}")

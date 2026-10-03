@@ -69,6 +69,9 @@ CLASSIFICATIONS = FLOWER / 'results/classifications'
 CROWNMAP = (FLOWER / 'stri/24784053/BCI_50ha_2022_09_29_crownmap_improved/'
             'BCI_50ha_2022_09_29_crownmap_improved.shp')
 MAVIC_SCALING = Path(__file__).resolve().parent.parent / 'config/crown_classification_mavic.yml'
+# Extra species sources for crowns the 2022-09-29 map leaves unnamed.
+CROWN_TIMESERIES = FLOWER / 'crowns_20240803/BCI_50ha_crownmap_timeseries.shp'
+AVUELO = FLOWER / 'stri/avuelo/AVUELO_combined_crownmaps_2025.gpkg'
 
 # Whole-island orthomosaics synced from Drive in 5dbbf8c (not on this volume).
 WHOLE_ISLAND_DATES = [
@@ -116,6 +119,47 @@ def path_date(p):
 
 def scene_date(scene_id):
     return pd.Timestamp(f'{scene_id[0:4]}-{scene_id[4:6]}-{scene_id[6:8]}')
+
+
+def _tag_key(t):
+    """Tags are zero-padded in some maps ('008305') and not in others."""
+    try:
+        return int(t)
+    except (TypeError, ValueError):
+        return t
+
+
+@functools.cache
+def crown_species():
+    """Species label per row of CROWNMAP: 'Latin name (code)', or the code alone.
+
+    The 2022-09-29 map names only some crowns in `latin` but gives most a BCI
+    six-letter `mnemonic`. Names are filled, in order of preference, from:
+    the crown's own `latin`; the map's own code -> name pairs; the dated crown
+    time-series map, by tag; and AVUELO (2026) by code, whose taxonomy is
+    newer (e.g. Handroanthus for Tabebuia), so it is used only as a last resort.
+    """
+    import geopandas as gpd
+    import pyogrio
+    g = gpd.read_file(CROWNMAP, ignore_geometry=True)
+    names = g['latin'].copy()
+    by_code = g.dropna(subset=['latin', 'mnemonic']).groupby('mnemonic')['latin'].first()
+    names = names.fillna(g['mnemonic'].map(by_code))
+    if CROWN_TIMESERIES.exists():
+        ts = pyogrio.read_dataframe(CROWN_TIMESERIES, read_geometry=False,
+                                    columns=['tag', 'latin']).dropna()
+        by_tag = ts.groupby(ts['tag'].map(_tag_key))['latin'].agg(lambda x: x.mode().iloc[0])
+        names = names.fillna(g['tag'].map(_tag_key).map(by_tag))
+    if AVUELO.exists():
+        av = pyogrio.read_dataframe(AVUELO, read_geometry=False,
+                                    columns=['Sp6', 'SpeciesName']).dropna()
+        av_code = av.groupby(av['Sp6'].str.lower())['SpeciesName'].first()
+        names = names.fillna(g['mnemonic'].map(av_code))
+    code = g['mnemonic'].fillna('')
+    label = [f'{n} ({c})' if isinstance(n, str) and c else
+             n if isinstance(n, str) else c or 'species unknown'
+             for n, c in zip(names, code)]
+    return pd.Series(label, index=g.index, name='species')
 
 
 def chip_stems(chipdir, vetting=None):
@@ -544,8 +588,8 @@ def classification_example(outdir, series, date, decimate, zoom_m):
                  label='classifier probability (grey = not classified)')
     fig.suptitle(f'HPC crown classification of the {date.replace("_", "-")} {label} '
                  f'mosaic; outlines = static 2022-09-29 crown map '
-                 f'({len(crowns):,} crowns); bottom row = {zoom_m:.0f} m zoom',
-                 fontsize=11)
+                 f'({len(crowns):,} crowns); bottom row = {zoom_m:.0f} m zoom on crown '
+                 f'{best} ({crown_species()[best]})', fontsize=11)
     save(fig, outdir, 'classification_example')
 
 
@@ -763,6 +807,7 @@ def same_date_examples(outdir, n_mavic_only, pad_m):
     """
     import geopandas as gpd
     crowns = gpd.read_file(CROWNMAP)
+    species = crown_species()
     df = pd.read_csv(outdir / 'same_date_crowns.csv')
     w = df.pivot_table(index=['date', 'crown'], columns='mosaic',
                        values=['p_flower', 'p_decid']).dropna()
@@ -812,11 +857,11 @@ def same_date_examples(outdir, n_mavic_only, pad_m):
                 a.set_yticks([])
             a_rgb.set_title(f'{label} RGB', fontsize=8)
             a_p.set_title(f'{label} {name} = {w.loc[(d, c), (var, col)]:.2f}', fontsize=8)
-        axes4[0].set_ylabel(f'{case}\n{d} crown {c}', fontsize=8)
+        axes4[0].set_ylabel(f'{case}\n{d} crown {c}\n{species[c]}', fontsize=8)
 
     # Figure 1: the dominant disagreement, two crowns per row.
     rows = int(np.ceil(len(mavic_only) / 2))
-    fig, axes = plt.subplots(rows, 8, figsize=(22, 2.9 * rows), squeeze=False)
+    fig, axes = plt.subplots(rows, 8, figsize=(22, 3.0 * rows), squeeze=False)
     for ax in axes.ravel():
         ax.set_axis_off()
     for i, (d, c) in enumerate(mavic_only):
@@ -839,7 +884,7 @@ def same_date_examples(outdir, n_mavic_only, pad_m):
     fig.suptitle('Same-day crowns: agreement and the rarer disagreements', fontsize=11)
     fig.tight_layout()
     save(fig, outdir, 'same_date_other_cases')
-    pd.DataFrame([dict(case=case.replace('\n', ' '), date=d, crown=c)
+    pd.DataFrame([dict(case=case.replace('\n', ' '), date=d, crown=c, species=species[c])
                   for d, c, _, case in [(d, c, 1, 'mavic only') for d, c in mavic_only]
                   + cases]).to_csv(outdir / 'same_date_examples.csv', index=False)
 
