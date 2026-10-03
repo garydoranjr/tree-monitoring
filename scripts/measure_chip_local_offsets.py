@@ -160,11 +160,15 @@ def parse_pairs(values, what):
 @click.option('--min-windows', default=5, show_default=True,
               help='Chips with fewer accepted windows are not summarized.')
 @click.option('--prefix', default='residual_offsets', show_default=True)
+@click.option('--color', 'set_colors', multiple=True,
+              help='NAME=COLOR; overrides the order-based colour of a set.')
 def main(outdir, sets, vettings, min_quality, window, min_valid, min_ncc,
-         max_shift_m, sigma, min_windows, prefix):
+         max_shift_m, sigma, min_windows, prefix, set_colors):
     outdir.mkdir(parents=True, exist_ok=True)
     sets = parse_pairs(sets, '--set')
     vettings = parse_pairs(vettings, '--vetting')
+    colors = dict(zip(sets, SET_COLORS))
+    colors.update({k: str(v) for k, v in parse_pairs(set_colors, '--color').items()})
 
     wrows, crows = [], []
     for name, chipdir in sets.items():
@@ -199,15 +203,15 @@ def main(outdir, sets, vettings, min_quality, window, min_valid, min_ncc,
         w = wdf[wdf['set'] == name]
         click.echo(f'  {name}: {len(g)} chips, {len(w)} windows | window '
                    f'|d| median {w["offset_m"].median():.2f} m, p90 '
-                   f'{w["offset_m"].quantile(0.9):.2f} m | chip spread median '
+                   f'{w["offset_m"].quantile(0.9):.2f} m, > 3 m '
+                   f'{(w["offset_m"] > 3).mean():.1%} | chip spread median '
                    f'{g["spread_m"].median():.2f} m | chip rigid residual '
                    f'median {g["median_offset_m"].median():.2f} m')
 
-    plot(wdf, cdf, list(sets), outdir / prefix, window, max_shift_m)
+    plot(wdf, cdf, list(sets), colors, outdir / prefix, window, max_shift_m)
 
 
-def plot(wdf, cdf, names, outbase, window, max_shift_m):
-    colors = dict(zip(names, SET_COLORS))
+def plot(wdf, cdf, names, colors, outbase, window, max_shift_m):
     fig, axes = plt.subplots(1, 3, figsize=(15, 4.6),
                              gridspec_kw={'width_ratios': [1, 1, 1.25]})
 
