@@ -11,10 +11,11 @@ Requires ``python-pptx``, which lives in the *base* conda env rather than
 
     /opt/miniconda3/bin/python scripts/make_update_deck.py
 
-With no arguments this reproduces the 2026-09 deck at
-``~/Documents/powerpoint/flower/20260929-TreeFlowering.pptx`` from the figures
-in ``/Volumes/Earth03/flower/figs/202609_updates``. For a later month, point
+With no arguments this reproduces the 2026-10 deck at
+``~/Documents/powerpoint/flower/20261003-TreeFlowering.pptx`` from the figures
+in ``/Volumes/Earth03/flower/figs/202610_updates``. For a later month, point
 ``--figdir``/``--out``/``--date`` at the new material and edit ``SLIDES``.
+Earlier months' ``SLIDES`` are in git history.
 """
 
 import argparse
@@ -33,9 +34,9 @@ LAYOUT_SECTION = 2
 LAYOUT_TWO_CONTENT = 3
 
 DEFAULT_TEMPLATE = "~/Documents/powerpoint/flower/20260818-TreeFlowering.pptx"
-DEFAULT_FIGDIR = "/Volumes/Earth03/flower/figs/202609_updates"
-DEFAULT_OUT = "~/Documents/powerpoint/flower/20260929-TreeFlowering.pptx"
-DEFAULT_DATE = "September 29, 2026"
+DEFAULT_FIGDIR = "/Volumes/Earth03/flower/figs/202610_updates"
+DEFAULT_OUT = "~/Documents/powerpoint/flower/20261003-TreeFlowering.pptx"
+DEFAULT_DATE = "October 3, 2026"
 
 DECK_TITLE = ("Monitoring the phenology, distribution, and mortality of "
               "selected tropical trees from space")
@@ -71,418 +72,671 @@ SLIDES = [
     ),
     dict(
         kind="content",
-        title="Updates",
-        bullets=[
-            (0, "New drone data: 96 globus 50ha mosaics, 13 whole-island orthomosaics"),
-            (0, "Planet imagery and cloud masks brought up to date"),
-            (0, "Drone crown classification on the HPC"),
-            (0, "Drone labels transferred to Planet: 70 new training chips"),
-            (0, "Result: the extended training set does not help Mask R-CNN"),
-            (0, "Diagnosing why: registration vs. label semantics"),
-        ],
-        notes="Covers the work since the new datasets arrived: the whole-island "
-              "orthomosaics and the extended (globus) 50ha record.",
-    ),
-    dict(
-        kind="content",
         title="Summary",
         bullets=[
-            (0, "Ingested two new drone datasets"),
-            (1, "96 globus 50ha mosaics, 2024-03 \u2192 2026-01 (355 GiB)"),
-            (1, "13 full-resolution whole-island orthomosaics, 2024-06 \u2192 2025-09 (856 GB)"),
-            (0, "Planet imagery current through 2026-08-11; new scenes cloud-masked with OmniCloudMask"),
-            (0, "Classified all 96 globus mosaics for flowering / deciduous crowns on the HPC, "
-                "using a new unified Slurm pipeline"),
-            (0, "Transferred the drone labels onto Planet: 70 new \u201cGood\u201d training chips (2024\u201326). "
-                "The 50ha training set grows from 56 to 126 chips"),
-            (0, "**Result: the extended training set does not improve Mask R-CNN.** Registration in the "
-                "new chips is not worse than in the old ones. The better lead is the labels themselves: "
-                "on globus mosaics the flowering classifier fires about 3.5\u00d7 as often as on the STRI record"),
+            (0, "**Gap filled.** Classified the 16 C3KW2X phantom dates (both "
+                "alignments, 32 mosaics). The 50ha drone record now runs without a "
+                "break from 2018-04-04 to 2026-01-20"),
+            (0, "**Deciduous phenology is continuous.** The deciduous share climbs "
+                "steadily through the 2023\u201324 dry season, from 0.2% to 4.1%, and "
+                "meets the first mavic dates at the same level"),
+            (0, "**The mavic flowering excess is a sensor effect.** On the two days "
+                "both drones flew, the same classifier calls 2.3% and 1.4% of crowns "
+                "flowering on mavic, against 0.5% and 0.4% on phantom. Deciduous "
+                "calls agree on both sensors"),
+            (0, "**New chips.** Drone labels went onto Planet: 91 pairs and 46 "
+                "coregistered (50.5%, the best yield so far), and 21 rated Good, as "
+                "well registered as any set we have. The curated sets now hold 77 "
+                "chips (phantom only) and 142 (all sources)"),
+            (0, "**Mask R-CNN: no extension beats the base peak.** base 0.168 mAP@50, "
+                "all three 0.164, +phantom 2023\u201324 0.156 and +mavic 0.151. Clean "
+                "same-sensor chips do not rescue mAP, so mavic labels are not the "
+                "whole story"),
         ],
-        notes="The data engineering is done and the new record is usable end to end. "
-              "The disappointing part is the model result, and the rest of the talk "
-              "works through why.",
+        notes="The same-day flights settle the sensor question. The training result "
+              "is less clean: it argues against the simple story that mavic labels "
+              "alone caused September's regression.\n\n"
+              "Runs that include mavic chips do lose about 0.03 binary IoU. These are "
+              "single-seed runs, and the gaps are close to the epoch-to-epoch noise.\n\n"
+              "Naming: from this month the 50ha drone records are named by drone. "
+              "Phantom is the Phantom 4 Pro record, the 24782016 release (90 dates, "
+              "2018-04-04 to 2023-10-24) plus the C3KW2X release (16 dates, "
+              "2023-10-31 to 2024-03-18). Mavic is the Mavic 3M record (96 dates, "
+              "2024-03-06 to 2026-01-20). September's slides called these STRI and "
+              "globus.",
     ),
     dict(
         kind="content",
-        title="New Data and How It Fits Together",
+        title="The 50ha Drone Record Is Now Continuous",
         layout="below",
         bullets=[
-            (0, "**Globus 50ha record:** 96 DJI M3M flights, 2024-03-06 \u2192 2026-01-20. "
-                "4-band uint16, globally aligned. 355 GiB over HTTPS in 5.6 h, byte-exact"),
-            (0, "**Whole-island orthomosaics:** 13 dates, 2024-06-11 \u2192 2025-09-15, "
-                "each about 150k \u00d7 139k px. 856 GB from Drive in 37 min"),
-            (0, "**Gap:** no 50ha mosaic between 2023-10-24 (last STRI) and 2024-03-06 (first globus)"),
-            (0, "**Crown outlines:** dated outlines stop at 2024-03-18; the 94 later globus dates use "
-                "the static 2022-09-29 crown map (2,280 crowns)"),
+            (0, "**C3KW2X:** 16 Phantom 4 Pro dates, 2023-10-31 \u2192 2024-03-18, from "
+                "the 2024 Smithsonian release (doi:10.60635/C3KW2X). Global and local "
+                "alignments, 4-band uint8, on the same grid as 24782016, classified "
+                "with no radiometric mapping"),
+            (0, "**Overlaps:** two dates, 2024-03-06 and 2024-03-18, were flown by "
+                "both drones"),
+            (0, "**Caveat at the release boundary.** The 2024 release reprocessed every "
+                "date, and RGB correlation on dates present in both releases is only "
+                "about 0.27. A step at 2023-10-24 \u2192 2023-10-31 is processing, not "
+                "phenology"),
+            (0, "**Correction to September.** Every mosaic, from both drones and every "
+                "date, was classified with the static 2022-09-29 crown map. Dated "
+                "outlines exist through 2024-03-18 but were never used"),
         ],
         figures=["coverage.png"],
         notes="Temporal coverage of the data feeding the 50ha training set. The top "
-              "panel shows the number of Planet scenes intersecting the 50ha plot per "
-              "month. Blue bars are scenes available before this month (2,051); red "
-              "bars are the 95 scenes added in the 2026-09-11 ingest. The black line "
-              "is the number of whole-island Planet scenes per month that are at least "
-              "50% clear according to OmniCloudMask. Planet coverage runs from 2020-01 "
-              "to 2026-08-11. The bottom panel shows the acquisition date of each drone "
-              "mosaic as a tick: the 90-date STRI 50ha locally aligned series "
-              "(2018-04-04 to 2023-10-24); the 96-date globus M3M globally aligned "
-              "series (2024-03-06 to 2026-01-20); the 13 whole-island orthomosaics "
-              "(2024-06-11 to 2025-09-15); and the Planet acquisition dates of the 56 "
-              "existing and 70 new training chips. The bottom bar marks the period "
-              "covered by dated crown outlines (2018-04-04 to 2024-03-18). The hatched "
-              "bar marks the globus period, where the static 2022-09-29 crown map was "
-              "used instead. Grey shading marks the 2023-10-24 to 2024-03-06 gap with "
-              "no 50ha mosaic.\n\n"
-              "The two drone records are disjoint: no globus date appears in the STRI "
-              "set. Only two globus dates, 2024-03-06 and 2024-03-18, have dated crown "
-              "outlines.",
+              "panel shows the number of 50ha Planet scenes per month (grey bars, "
+              "2,146 scenes, 2020-01 to 2026-08-11) and the number of whole-island "
+              "Planet scenes per month that are at least 50% clear according to "
+              "OmniCloudMask (black line). The bottom panel marks the acquisition date "
+              "of each drone mosaic with a tick: the 106-date phantom series, 90 dates "
+              "from the 24782016 release (blue, 2018-04-04 to 2023-10-24) and 16 from "
+              "the C3KW2X release (green, 2023-10-31 to 2024-03-18); the 96-date mavic "
+              "series (red, 2024-03-06 to 2026-01-20); and the 13 whole-island "
+              "orthomosaics (black, 2024-06-11 to 2025-09-15). The training-chip row "
+              "marks the Planet acquisition dates of the 56 phantom 2020\u201323 chips "
+              "(blue), the 21 Good phantom 2023\u201324 chips (green) and the 70 mavic "
+              "chips (red). The grey bar spans the dates classified with the static "
+              "2022-09-29 crown map, the hatched bar spans the dates for which dated "
+              "crown outlines exist (2018-04-04 to 2024-03-18), which no classification "
+              "used, and the dashed line marks the boundary between the 24782016 and "
+              "C3KW2X releases.\n\n"
+              "The September caption saying the STRI dates used dated outlines was "
+              "wrong; the static crown map was checked against the rasters' footprints.",
     ),
     dict(
         kind="content",
-        title="Planet Imagery Through the Present",
+        title="Planet and Cloud Masks for the New Window",
         bullets=[
-            (0, "Ordered and ingested 145 new PlanetScope scenes over BCI (orders to 2026-08-11); "
-                "95 of them intersect the 50ha plot"),
-            (0, "Holdings are now 3,184 island scenes and 2,146 50ha scenes "
-                "(2020-01-02 \u2192 2026-08-11). Nothing is missing at Planet"),
-            (0, "Fixed a silent failure: three truncated `_4band.tif` clips had passed a "
-                "\u201cfile exists and is non-empty\u201d check for two months"),
-            (1, "Outputs are now validated by opening the raster before a file is skipped"),
-        ],
-        notes="The red bars on the coverage figure (previous slide) are these 95 new "
-              "50ha scenes.",
-    ),
-    dict(
-        kind="content",
-        title="OmniCloudMask Cloud Masks for the New Scenes",
-        bullets=[
-            (0, "Ran OmniCloudMask on the new scenes"),
-            (1, "95 new 50ha masks, in 1 h 45 min"),
-            (1, "147 new whole-island masks, in 7 h 37 min"),
-            (1, "23 failures, all tiles smaller than 32 px, which OCM cannot process"),
-            (0, "Recomputed island-wide clear fraction for 3,166 scenes "
-                "(feeds observability and flight-coverage analyses)"),
-            (0, "Masks drive chip selection, and a crown touching a non-clear pixel is "
-                "dropped from the labels"),
+            (0, "No new Planet ingest this month; holdings already run to 2026-08-11"),
+            (0, "No new OmniCloudMask runs were needed: all 175 50ha scenes acquired "
+                "2023-10-29 \u2192 2024-03-20 already had readable masks, checked before "
+                "the chip build"),
+            (0, "Fixed the example figure: the RGB stretch is now computed on OCM-clear "
+                "pixels only"),
+            (1, "with a stretch over every pixel, bright cloud rendered the clear "
+                "forest of a half-clouded scene almost black, so it looked like "
+                "unmasked shadow"),
         ],
         figures=["ocm_example.png"],
-        notes="OmniCloudMask classification of two new 2026 PlanetScope scenes over the "
-              "50ha plot. The left column shows the scene RGB (2\u201398% stretch). The "
+        notes="OmniCloudMask classification of two PlanetScope scenes over the 50ha "
+              "plot from the C3KW2X period. The left column shows each scene's RGB, "
+              "stretched to the 2nd\u201398th percentiles of its OCM-clear pixels. The "
               "right column shows the same scene with thick cloud (white), thin cloud "
-              "(orange) and cloud shadow (purple) overlaid, and the fraction of valid "
-              "pixels classified clear in the title. OmniCloudMask runs at 10 m and is "
-              "upsampled nearest-neighbour to the 3 m Planet grid, so mask edges are "
-              "blocky at about 10 m. The scenes are 20260517_163455_99_2518 "
-              "(2026-05-17, 61% clear) and 20260618_155047_98_2555 (2026-06-18, 50% "
+              "(orange) and cloud shadow (purple) overlaid. Each title gives the "
+              "fraction of valid pixels classified clear. OmniCloudMask runs at 10 m "
+              "and is upsampled nearest-neighbour to the 3 m Planet grid, so mask "
+              "edges are blocky at about 10 m. The scenes are 20240314_150434_31_242b "
+              "(2024-03-14, 66% clear) and 20240124_150201_30_2415 (2024-01-24, 50% "
               "clear).",
     ),
     dict(
         kind="content",
-        title="Drone Crown Classification on the HPC",
-        bullets=[
-            (0, "One config-driven Slurm pipeline, `run_crown_pipeline.sh`, replaces six "
-                "near-duplicate array scripts: classify \u2192 merge \u2192 concat as dependent "
-                "arrays, restartable"),
-            (0, "Ran it on all 96 globus mosaics"),
-            (1, "about 17 min per mosaic (about 2.2 crowns/s)"),
-            (1, "merge step 7.7\u00d7 faster after a fix, numerically identical output"),
-            (0, "Globus mosaics are uint16; the SegFormer models were trained on 8-bit STRI "
-                "mosaics. A fixed per-band gain/offset fitted on p2/p98 over about 63 M pixels "
-                "cuts histogram distance from 0.146 to 0.033"),
-            (0, "The 94 post-2024-03-18 dates use the static 2022-09-29 crown map to place "
-                "the classification windows"),
-        ],
-        figures=["classification_example.png"],
-        notes="HPC SegFormer crown classification of one globus 50ha mosaic from "
-              "2025-06-24, the globus date with the most crowns classified as flowering. "
-              "The panels are the RGB mosaic (uint16 converted to uint8 with the fixed "
-              "per-band gain/offset used for classification), the per-pixel flowering "
-              "probability, and the per-pixel deciduous probability. Crown outlines are "
-              "the static 2022-09-29 crown map (2,280 crowns). The top row shows the "
-              "whole plot read at 1/16 resolution (about 0.75 m pixels). The bottom row "
-              "is a 120 m zoom, at 1/2 resolution (about 9 cm), centred on the crown "
-              "with the highest mean flowering probability. The green box marks the zoom "
-              "on the top row.\n\n"
-              "The classifier runs per pixel inside a window around each crown polygon, "
-              "and the polygon is not used to clip the output. Stale 2022 polygons "
-              "therefore change *where* the model looks, and can miss new or "
-              "much-changed crowns. They do not shift the labels off the crowns that "
-              "are classified.",
-    ),
-    dict(
-        kind="content",
-        title="Flag: Flowering Rate Runs 3.5\u00d7 Higher on Globus",
+        title="Crown Classification Across the Full Record",
         layout="below",
         bullets=[
-            (0, "The deciduous seasonal cycle continues across the gap"),
-            (0, "The globus **flowering** rate sits well above the STRI record all year: "
-                "a median of 1.8% of crowns vs 0.5%, never below 0.6%"),
-            (0, "That points to a sensor or radiometry shift in the flowering classifier, "
-                "not a real change in phenology"),
+            (0, "Classified all 32 C3KW2X mosaics with the September HPC pipeline "
+                "(`config/pipeline_phantom_ext_{global,local}.sh`). Values for the 186 "
+                "mosaics shared with September reproduce exactly"),
+            (0, "**Deciduous:** the C3KW2X dates trace the 2023\u201324 dry-season rise, "
+                "from 0.2% of crowns (2023-10-31) to 4.1% (2024-03-18), and the first "
+                "mavic dates sit on the same curve (2.7%, 3.8%, 4.1%)"),
+            (0, "**Flowering:** C3KW2X stays at or below 0.8% (median 0.15%), in line "
+                "with the 24782016 phantom record (median 0.5%); mavic jumps to 2.3% on "
+                "its first date and never falls below 0.6% (median 1.8%)"),
+            (0, "The jump happens at the change of sensor, not the change of season"),
         ],
         figures=["classification_timeseries.png"],
-        notes="Share of the 50ha plot's crowns classified as flowering (top, pink) or "
-              "deciduous (bottom, brown) at each drone mosaic date. A crown counts when "
-              "the mean classifier probability over its 2022-09-29 crown-map polygon "
-              "exceeds 0.5; 2,279 of the 2,280 crowns are large enough to score. "
+        notes="Share of the 50ha plot's crowns classified as flowering (top) or "
+              "deciduous (bottom) at each drone mosaic date. The three series are the "
+              "90 phantom mosaics of the 24782016 release (blue circles, locally "
+              "aligned, 2018-04-04 to 2023-10-24), the 16 phantom mosaics of the "
+              "C3KW2X release (green triangles, locally aligned, 2023-10-31 to "
+              "2024-03-18), and the 96 mavic mosaics (red squares, globally aligned, "
+              "2024-03-06 to 2026-01-20, converted from uint16 to uint8 with a fixed "
+              "per-band gain/offset before classification). A crown counts when the "
+              "mean classifier probability over its 2022-09-29 crown-map polygon "
+              "exceeds 0.5, and 2,279 of the 2,280 crowns are large enough to score. "
               "Probabilities were averaged from the classification rasters read at 1/16 "
-              "resolution (about 0.75 m). Circles are the 90 STRI locally aligned "
-              "mosaics (2018-04-04 to 2023-10-24), classified with dated crown "
-              "outlines. Squares are the 96 globus M3M mosaics (2024-03-06 to "
-              "2026-01-20), classified on the HPC with the static 2022-09-29 crown map "
-              "and the fixed uint16 \u2192 uint8 radiometric mapping. Dashed lines are the "
-              "median for each series. Grey shading marks the 2023-10-24 to 2024-03-06 "
-              "gap with no 50ha mosaic.",
+              "resolution (about 0.75 m). Dashed lines are the median of each series "
+              "over its own dates, and the dotted line marks the boundary between the "
+              "24782016 and C3KW2X releases.\n\n"
+              "The C3KW2X medians cover only the dry-season onset, so they are not "
+              "annual medians.",
+    ),
+    dict(
+        kind="figrow",
+        title="Classification Example: 2024-02-28 Phantom C3KW2X Mosaic",
+        figures=["classification_example.png"],
+        notes="HPC SegFormer crown classification of the 2024-02-28 phantom C3KW2X "
+              "mosaic (locally aligned), the C3KW2X date with the most crowns "
+              "classified as flowering. The panels are the RGB mosaic, the per-pixel "
+              "flowering probability and the per-pixel deciduous probability, with the "
+              "static 2022-09-29 crown map (2,280 crowns) outlined. The top row shows "
+              "the whole plot read at 1/16 resolution (about 0.75 m pixels). The bottom "
+              "row is a 120 m zoom at 1/2 resolution (about 9 cm), centred on the crown "
+              "with the highest mean flowering probability, and the green box marks the "
+              "zoom on the top row.",
     ),
     dict(
         kind="content",
-        title="Spot-Check: What Does the Classifier Call \u201cFlowering\u201d?",
+        title="Same-Day Flights: the Flowering Excess Is the Sensor",
         bullets=[
-            (0, "Sampled 32 globus crown-dates with mean P(flowering) > 0.5 over 16 dates, "
-                "plus 16 STRI crown-dates as a reference, and checked them against the drone RGB"),
-            (0, "**True positives exist and look right:** lilac, cream/tan, white and pink "
-                "flowering crowns (e.g. 2025-06-17 crown 854, 2024-06-04 crown 1523, "
-                "2026-01-20 crown 1881)"),
-            (0, "**Many are clear false positives**, of two kinds"),
-            (1, "bright yellow-green crowns, probably new-leaf flush, sometimes with bare branches"),
-            (1, "plain green or shaded crowns with no visible flowers"),
-            (0, "Roughly half the globus positives show no flowers. STRI positives are more "
-                "often visibly flowering, though several are ambiguous at that resolution"),
-            (0, "Fits a radiometric domain shift: under the fixed uint16 \u2192 uint8 mapping the "
-                "M3M greens come out paler and yellower than the STRI training imagery"),
-            (0, "The 2022 crown polygons also visibly misfit some globus crowns (e.g. 2025-01-28 "
-                "crown 164, 2025-06-17 crown 605)"),
+            (0, "2024-03-06 and 2024-03-18 were flown by both drones: the same crowns, "
+                "the same day, the same classifier"),
+            (0, "**Deciduous agrees** (Spearman \u03c1 0.73 and 0.80): 3.2% of crowns on "
+                "phantom vs 2.7% on mavic, and 4.1% vs 3.8%"),
+            (0, "**Flowering does not** (\u03c1 0.53 and 0.58): 0.5% vs 2.3%, and 0.4% "
+                "vs 1.4%"),
+            (1, "the extra mavic positives are crowns phantom scores around 0.1 \u2014 a "
+                "vertical streak in the scatter, not a scaled copy of the phantom "
+                "positives"),
+            (0, "Phantom local and global alignments agree with each other, so "
+                "alignment is not the cause"),
+            (0, "**Conclusion:** the excess comes from the mavic sensor or its uint16 "
+                "\u2192 uint8 mapping meeting a flowering model trained on phantom "
+                "imagery. It is not phenology, and it confirms last month's leading "
+                "explanation for the regression"),
         ],
-        notes="This is a visual spot-check, not a blind labelling; the proportions are "
-              "rough. A proper estimate needs a random sample rated blind at full "
-              "resolution, and the chip vetting tool could be adapted for that.\n\n"
-              "The labels are per-pixel, so polygon misfit affects which crowns get "
-              "scored, not where the label pixels sit.",
+        figures=["same_date_comparison.png"],
+        notes="Per-crown mean classifier probability on the two days flown by both "
+              "drones. The x axis is the phantom C3KW2X locally aligned mosaic, the y "
+              "axis the mavic mosaic, and each dot is one of the 2,279 scored crowns of "
+              "the 2022-09-29 crown map. Rows are 2024-03-06 and 2024-03-18; columns "
+              "are P(flowering) and P(deciduous). Probabilities are crown means from "
+              "classification rasters read at 1/16 resolution (about 0.75 m). The "
+              "dotted lines mark the 0.5 threshold on each axis, and the grey line is "
+              "y = x. Each inset gives the share of crowns above 0.5 on phantom local, "
+              "phantom global and mavic, and the Spearman rank correlation between "
+              "phantom local and mavic.",
+    ),
+    dict(
+        kind="content",
+        title="Spot-Check: C3KW2X Flowering Labels Look Like Flowers",
+        bullets=[
+            (0, "Sampled 16 C3KW2X crown-dates with mean P(flowering) > 0.5 (93 "
+                "candidates on 16 dates). The mavic and 24782016 samples are the same "
+                "32 and 16 crown-dates as in September"),
+            (0, "**C3KW2X positives are mostly real \u2014 about 9 of 16 show visible "
+                "flowers**"),
+            (1, "three are pink-flowered Tabebuia rosea (crowns 623, 1020 and 427, all "
+                "on 2024-02-28), a species that flowers in the dry season, which fits"),
+            (1, "others are cream-flowered, such as Nectandra lineata (2101) and "
+                "Cordia alliodora (113, 1452)"),
+            (1, "about 5 are ambiguous (yellowish crowns, or flowers on a neighbouring "
+                "crown); two show no flowers, Luehea seemannii 931 and Prioria "
+                "copaifera 66"),
+            (0, "Positives per date: about 6 on C3KW2X, about 18 on 24782016 and about "
+                "45 on mavic, out of 2,279 crowns"),
+            (0, "Several positives fall on a flowering crown that the 2022 polygon only "
+                "partly covers, for example 2024-02-28 crown 427 \u2014 real flowers "
+                "with stale outlines"),
+        ],
+        notes="This is a visual spot-check, not blind labelling; the proportions are "
+              "rough.",
     ),
     dict(
         kind="figstack",
-        title="Globus Crowns Labelled Flowering, With and Without Flowers",
+        title="Phantom C3KW2X Crowns Labelled Flowering, With and Without Flowers",
         figures=[
-            "spotcheck_flowering/zoom_globus_likely_tp.png",
-            "spotcheck_flowering/zoom_globus_suspect_fp.png",
+            "spotcheck_flowering/zoom_phantom_c3kw2x_likely_tp.png",
+            "spotcheck_flowering/zoom_phantom_c3kw2x_suspect_fp.png",
+        ],
+        captions=[
+            "Visible flowers (pink Tabebuia rosea, cream Nectandra and Cordia) "
+            "\u2014 likely true positives",
+            "No visible flowers \u2014 suspected false positives",
+        ],
+        notes="Phantom C3KW2X drone crowns labelled flowering by the HPC SegFormer "
+              "classifier. Each was selected because its mean P(flowering) over the "
+              "2022-09-29 crown polygon exceeds 0.5, and the title gives the flight "
+              "date, crown ID, mean probability and the polygon's species from the "
+              "crown map (Latin name and BCI six-letter code). Crowns are shown at "
+              "native mosaic resolution (about 4.5 cm) from the locally aligned uint8 "
+              "mosaic, with the crown polygon outlined in cyan. The top figure shows "
+              "crowns with visible flowers; the bottom figure shows crowns with no "
+              "visible flowers that were nonetheless labelled flowering.",
+    ),
+    dict(
+        kind="figstack",
+        title="For Comparison: Mavic Crowns Labelled Flowering (September's Picks)",
+        figures=[
+            "spotcheck_flowering/zoom_mavic_likely_tp.png",
+            "spotcheck_flowering/zoom_mavic_suspect_fp.png",
         ],
         captions=[
             "Visible flowers (lilac, cream, pink, white) \u2014 likely true positives",
             "No visible flowers \u2014 suspected false positives",
         ],
-        notes="Globus drone crowns labelled flowering by the HPC SegFormer classifier "
-              "(mean P(flowering) over the crown polygon > 0.5, shown in each title "
-              "with the flight date and crown ID), displayed at native mosaic "
-              "resolution (about 4.7 cm) after the fixed per-band uint16 \u2192 uint8 "
-              "mapping used for classification. Cyan outlines are the static 2022-09-29 "
-              "crown map. The top figure shows crowns with visible flowers (lilac, "
-              "cream, pink, white). The bottom figure shows crowns with no visible "
-              "flowers that were nonetheless labelled flowering.",
+        notes="The same construction for the mavic record, on the 32 crown-dates "
+              "sampled in September: mavic drone crowns with mean P(flowering) over the "
+              "2022-09-29 crown polygon above 0.5, at native mosaic resolution (about "
+              "4.7 cm) after the fixed per-band uint16 to uint8 mapping used for "
+              "classification, with the crown polygon outlined in cyan. Roughly half "
+              "the mavic positives show no flowers, against about 7 of 16 on C3KW2X.",
     ),
     dict(
         kind="content",
-        title="Drone Labels \u2192 Planet Training Chips (2024\u201326)",
-        layout="below",
+        title="Same-Day Crowns, Side by Side",
         bullets=[
-            (0, "Paired each globus flight with Planet scenes within \u00b12 days: 370 pairs over "
-                "96 flight dates (7 dates had no scene)"),
-            (0, "One AROSICS shift per scene: 154 coregistered (41.6%, against 40.6% for the "
-                "2020\u201323 build). Median applied shift 4.3 m (about 1.4 Planet pixels), "
-                "against 8.4 m for 2020\u201323"),
-            (0, "Rated the chips locally with a new vetting tool that replaces Labelbox: "
-                "70 Good, 35 Fair, 49 Poor. The Good chips join the 56 existing ones \u2192 126 chips"),
-            (0, "Labels look statistically like the old ones: median crown fraction 4.07% vs "
-                "4.15%, and 14,794 crown instances in the new chips"),
+            (0, "**Whole plot:** the mavic P(flowering) map is speckled with moderate "
+                "probabilities everywhere, and on 2024-03-06 it also shows ring-shaped "
+                "bands that follow no crown pattern in the RGB, most likely an "
+                "acquisition or mosaicking artifact. The phantom maps are dark except "
+                "for a few crowns"),
+            (0, "**Direction of disagreement:** 42 crown-dates are flowering on mavic "
+                "only (mavic > 0.5, phantom < 0.2), 1 on phantom only, and 16 on both"),
+            (0, "**Some mavic-only crowns may be real early flowering.** Crowns 1386 "
+                "and 1766 look plain green at this zoom, but both are Jacaranda "
+                "copaia, the species of crown 646, which both sensors call flowering a "
+                "few days later. Crown 1836 is red-flowered Symphonia globulifera"),
+            (0, "**Some are clear false positives.** Crown 823 is Cecropia insignis, "
+                "whose silvery leaves give the grey look the model seems to mistake for "
+                "flowers; crown 1150 (Trichilia tuberculata) is reddish-brown, more "
+                "likely new leaves or fruit"),
+            (0, "**On two the blob sits beside the polygon** \u2014 crowns 86 and 87 are "
+                "Astrocaryum standleyanum palms, and the high probability lies on a "
+                "neighbouring crown"),
+            (0, "**Deciduous:** the only disagreements are two bare-branched crowns "
+                "that phantom calls deciduous and mavic does not"),
+            (0, "**Caveat on species:** each label belongs to the tree tagged for that "
+                "polygon in the 2022-09-29 map. Where the polygon misfits, the visible "
+                "crown can be a neighbour"),
         ],
-        figures=["coreg_stats.png"],
-        notes="Yield and shift magnitude of the drone-label \u2192 Planet-chip transfer for "
-              "the 2020\u201323 build (blue, STRI locally aligned mosaics) and the 2024\u201326 "
-              "build (red, globus globally aligned mosaics). Left: number of "
-              "drone\u2013Planet pairs within \u00b12 days, the number successfully coregistered "
-              "by AROSICS, and the number rated Good in manual vetting, with the "
-              "percentage of pairs at each stage. The 2020\u201323 vetting was done in "
-              "Labelbox; the 2024\u201326 vetting used vet_planet_chips.py. Right: "
-              "distribution of the magnitude of the single rigid AROSICS shift applied "
-              "per coregistered scene (density; 1.5 m bins). The dotted line marks one "
-              "3 m Planet pixel.\n\n"
-              "Also fixed a crash that had discarded the coregistration log after a "
-              "2.9 h build, and added a log reconstruction tool.",
-    ),
-    dict(
-        kind="content",
-        title="Result: The Extended Training Set Does Not Help Mask R-CNN",
-        bullets=[
-            (0, "Both models scored on the same 56 2020\u201323 test chips (right halves), "
-                "because the two runs\u2019 own test splits differ"),
-            (0, "Base (56 chips) peaks at **mAP@50 0.168** (epoch 12); extended (126 chips) "
-                "peaks at **0.151** (epoch 5). Binary IoU peaks at 0.308 vs 0.269"),
-            (0, "The extended set is ahead only for epochs 1\u20133 (+0.075, +0.054, +0.032). "
-                "It is behind from epoch 8 onward, by as much as \u22120.068 at epoch 12"),
-            (0, "Both runs collapse late: recall is traded for precision "
-                "(recall 0.32 \u2192 0.07, precision 0.13 \u2192 0.60), finishing at about a third "
-                "of peak mAP"),
-            (0, "Training now keeps the best checkpoint and supports a cosine LR schedule"),
-        ],
-        figures=["maskrcnn_summary.png"],
-        notes="Mask R-CNN mask mAP@50 on the test (right-half) crops of the 56 2020\u201323 "
-              "training chips, against training epoch (log scale). The two curves are "
-              "models trained on the 56 2020\u201323 chips (blue) and on those plus the 70 "
-              "new 2024\u201326 globus chips (red, 126 chips). Twelve epochs between 1 and "
-              "200 were scored per run with OCM cloud masks and a 64-pixel minimum "
-              "instance size. Stars mark each run's peak. Shading shows which run is "
-              "ahead at each epoch: red where the extended set is better, blue where it "
-              "is worse.\n\n"
-              "Early epochs are the only place the extra data helps. That pattern fits "
-              "noisier or differently distributed labels, which regularize early and "
-              "hurt once the model fits them closely.",
-    ),
-    dict(
-        kind="content",
-        title="Is Drone\u2194Planet Misalignment the Cause?",
-        bullets=[
-            (0, "**Hypothesis:** the globus mosaics are globally (rigidly) aligned, the STRI "
-                "series locally (warped) aligned. One AROSICS shift per scene cannot remove "
-                "non-linear drone\u2194Planet warping, so the new labels could be offset from the "
-                "crowns in the Planet image"),
-            (0, "**Test:**"),
-            (1, "phase-correlate each chip\u2019s Planet image against its already-shifted drone "
-                "sidecar in 96 m windows"),
-            (1, "keep only clear, well-matched windows (NCC \u2265 0.3)"),
-            (1, "measure how far each window still has to move"),
-            (1, "the metric recovers injected 1.5\u20133 m shifts"),
-        ],
-        notes="Cross-sensor phase correlation against 3 m data is noisy. Read the "
-              "numbers as a comparison between the two sets, not as absolute accuracy.",
-    ),
-    dict(
-        kind="content",
-        title="Result: The Globus Chips Are Not Worse",
-        layout="below",
-        bullets=[
-            (0, "Median window offset 0.71 m vs 0.92 m for 2020\u201323; windows off by more than "
-                "3 m: 1.9% vs 7.9%; within-chip spread (the non-rigid part): 0.53 m vs 0.79 m"),
-            (0, "Same holds with 48 m windows: 0.54 vs 0.62 m median, 4.1% vs 8.8% above 3 m"),
-            (0, "**Conclusion:** at scales of about 50\u2013100 m and above, registration error does "
-                "not explain the regression. Crown-scale warps smaller than the window are "
-                "not measured"),
-        ],
-        figures=["residual_offsets.png"],
-        notes="Residual drone-to-Planet offset remaining in the training chips after the "
-              "single per-scene AROSICS shift. It compares the 56 curated 2020\u201323 chips "
-              "(blue, STRI locally aligned mosaics) with the 70 Good 2024\u201326 chips (red, "
-              "globus globally aligned mosaics). Each chip was divided into 128 \u00d7 128 "
-              "pixel windows (96 m at 0.75 m). The Planet chip was phase-correlated "
-              "against the shifted drone sidecar downsampled to the chip grid, after a "
-              "1.5-pixel Gaussian blur. Windows were kept if they were at least 90% "
-              "clear and inside the drone footprint, had a post-shift normalized "
-              "cross-correlation of at least 0.3, and needed a shift under 20 m. Left: "
-              "distribution of window offset magnitudes, with medians and window counts "
-              "in the legend. Centre: per-chip non-rigid spread, the median distance of "
-              "the window offset vectors from the chip's median vector (boxes are "
-              "interquartile ranges, dots are chips). Right: the window offset vectors, "
-              "magnified 8\u00d7, on the chip with the largest spread.\n\n"
-              "Both sets have a real tail of badly misregistered windows. The worst ones "
-              "are shown next.",
+        notes="Agreement: the crowns both sensors call flowering include a flowering "
+              "Jacaranda copaia (646, 2024-03-18) and a red-leaved crown next to the "
+              "Astrocaryum palm that polygon 471 belongs to. The single "
+              "phantom-only crown is Luehea seemannii (1978).\n\n"
+              "On the deciduous disagreements: one is Astronium graveolens (2270), "
+              "which is dry-season deciduous. The other, crown 908, carries lilac "
+              "flowers on bare branches, which mavic shows more clearly; its polygon is "
+              "tagged Tabernaemontana arborea, so the visible crown may be a neighbour.",
     ),
     dict(
         kind="figrow",
-        title="Examples of Residual Misalignment: 2020\u201323 Chips",
+        title="Same-Day Whole-Plot Flowering Maps",
+        figures=["same_date_maps.png"],
+        notes="Phantom and mavic drone mosaics of the 50ha plot flown on the same day, "
+              "with the per-pixel flowering probability from the same SegFormer model. "
+              "The rows are 2024-03-06 and 2024-03-18, and for each date the columns "
+              "are the phantom C3KW2X locally aligned RGB mosaic, its P(flowering), the "
+              "mavic RGB mosaic (uint16 converted to uint8 with the fixed per-band "
+              "gain/offset used for classification), and its P(flowering). All panels "
+              "were read at 1/16 resolution (about 0.75 m pixels). Grey marks pixels "
+              "outside the classification windows, which the static 2022-09-29 crown "
+              "map places.",
+    ),
+    dict(
+        kind="figrow",
+        title="Crowns Flowering on Mavic Only",
+        figures=["same_date_mavic_only_flowering.png"],
+        notes="The eight crowns with the largest mavic minus phantom difference in "
+              "P(flowering), among crowns with mavic above 0.5 and phantom below 0.2, "
+              "on the two days both drones flew. Each crown takes four panels at native "
+              "mosaic resolution (about 4.5 cm phantom, 4.7 cm mavic): phantom C3KW2X "
+              "local RGB, phantom probability map, mavic RGB, and mavic probability "
+              "map. The probability maps are read at 1/4 resolution, and each panel "
+              "title gives the crown-mean probability computed at 1/16 resolution. The "
+              "cyan outline is the crown polygon in the static 2022-09-29 crown map, "
+              "and each row label gives the case, the date, the crown ID and that "
+              "polygon's species as Latin name with BCI six-letter code. Species comes "
+              "from the crown map's latin field, or where that is blank from the map's "
+              "own code-to-name pairs, the dated crown time series by tag, or AVUELO "
+              "(2026) by code.",
+    ),
+    dict(
+        kind="figrow",
+        title="Same-Day Disagreements: Other Cases",
+        figures=["same_date_other_cases.png"],
+        notes="Crowns where the phantom and mavic classifications of the same day "
+              "disagree in the other directions, one crown per row: the two crowns most "
+              "confidently flowering on both sensors, the single crown flowering on "
+              "phantom only (above 0.5 against below 0.3), and the two crowns deciduous "
+              "on phantom only (P(deciduous) above 0.5 against below 0.3). Each crown "
+              "takes four panels at native mosaic resolution (about 4.5 cm phantom, "
+              "4.7 cm mavic): phantom C3KW2X local RGB, phantom probability map, mavic "
+              "RGB, and mavic probability map. The probability maps are read at 1/4 "
+              "resolution, and each panel title gives the crown-mean probability "
+              "computed at 1/16 resolution. The cyan outline is the crown polygon in "
+              "the static 2022-09-29 crown map, and each row label gives the case, the "
+              "date, the crown ID and that polygon's species.",
+    ),
+    dict(
+        kind="content",
+        title="Drone Labels \u2192 Planet Chips for 2023\u201324",
+        layout="below",
+        bullets=[
+            (0, "**Pairing:** each of the 16 C3KW2X flights was paired with Planet "
+                "scenes within \u00b12 days, giving 91 pairs on 91 distinct scenes; "
+                "2023-12-05 has none"),
+            (0, "**Coregistration:** one AROSICS shift per scene; 46 coregistered "
+                "(50.5%, against 40.6% for phantom 2020\u201323 and 41.6% for mavic). "
+                "Median shift 7.4 m, close to the 8.4 m for phantom 2020\u201323"),
+            (0, "**Ratings:** 21 Good, 11 Fair, 14 Poor on image quality. Claude "
+                "pre-rated the chips after calibrating on a sample of the mavic "
+                "ratings, and the review moved two partly shadowed chips Good "
+                "\u2192 Fair"),
+            (0, "**Two curated sets:** 77 chips (56 + 21, a same-sensor extension, "
+                "3,258 training instances) and 142 (126 + 16, all sources, 7,908). "
+                "Five scene-name collisions keep their mavic copy"),
+        ],
+        figures=["coreg_stats.png"],
+        notes="Yield and shift magnitude of the drone-label to Planet-chip transfer for "
+              "three builds: phantom 2020\u201323 (blue, 24782016 locally aligned "
+              "mosaics, vetted in Labelbox), phantom 2023\u201324 (green, C3KW2X locally "
+              "aligned mosaics, pre-rated by Claude and reviewed with "
+              "vet_planet_chips.py), and mavic 2024\u201326 (red, globally aligned "
+              "mosaics, vetted with vet_planet_chips.py). The left panel shows, for "
+              "each build, the number of drone\u2013Planet pairs within \u00b12 days, the "
+              "number successfully coregistered by AROSICS, and the number rated Good, "
+              "with the percentage of pairs at each stage. The right panel shows the "
+              "distribution of the magnitude of the single rigid AROSICS shift applied "
+              "per coregistered scene (density, 1.5 m bins), and the dotted line marks "
+              "one 3 m Planet pixel.\n\n"
+              "Five chips have the same scene name as Good mavic chips (the "
+              "2024-03-06/18 flights). copy_good_planet_vetting.py --no-overwrite now "
+              "keeps the existing copy and lists them, so the mavic half of the "
+              "142-chip set is identical to September's 126-chip set. Both sets pass "
+              "the Mask R-CNN loader on both halves with no empty chips.",
+    ),
+    dict(
+        kind="content",
+        title="Result: No Training Set Beats the Base Peak",
+        bullets=[
+            (0, "Four runs scored on the same 56 phantom 2020\u201323 test chips (right "
+                "halves). Base and +mavic reproduce September exactly"),
+            (0, "**Peak mask mAP@50:** base (56 chips) **0.168** at epoch 12; all three "
+                "(142) 0.164 at 8; +phantom 2023\u201324 (77) 0.156 at 5; +mavic (126) "
+                "0.151 at 5"),
+            (0, "**The same-sensor extension does not rescue mAP** \u2014 ahead of base "
+                "for epochs 1\u20135 (by up to +0.045), behind at 8, 12 and 25 "
+                "(\u22120.041 at 12)"),
+            (0, "**Binary IoU splits on whether mavic chips are included:** 0.308 and "
+                "0.299 without, 0.269 and 0.273 with"),
+            (0, "**Noise caveat:** single-seed runs, 12 epochs scored. The base peak is "
+                "a one-epoch spike (0.148 at 8, 0.168 at 12, 0.136 at 17), and "
+                "epoch-to-epoch swings of 0.02\u20130.04 are larger than most gaps "
+                "between runs"),
+            (0, "Late collapse is unchanged: every run trades recall for precision and "
+                "ends at 0.04\u20130.06 mAP@50"),
+        ],
+        figures=["maskrcnn_summary.png"],
+        notes="Mask R-CNN mask mAP@50 on the test (right-half) crops of the 56 phantom "
+              "2020\u201323 training chips, against training epoch (log scale). The four "
+              "curves are models trained on the 56 phantom 2020\u201323 chips (blue), "
+              "those plus the 70 mavic 2024\u201326 chips (red, 126 chips), those plus "
+              "the 21 phantom 2023\u201324 C3KW2X chips (green, 77 chips), and all three "
+              "sources (purple, 142 chips: 126 plus the 16 C3KW2X chips whose scenes "
+              "are not already mavic chips). Twelve epochs between 1 and 200 were "
+              "scored per run with OCM cloud masks and a 64-pixel minimum instance "
+              "size, and stars mark each run's peak, labelled with its value and "
+              "epoch.\n\n"
+              "Last month's prediction was that clean, same-sensor extra chips would "
+              "help where mavic chips hurt. On mAP they do not: every extension helps "
+              "early and loses the peak. The IoU split is the one place where mavic "
+              "chips look specifically harmful. With single seeds and a spiky base "
+              "curve, I would not rank 0.164 against 0.168.",
+    ),
+    dict(
+        kind="content",
+        title="Registration of the New Chips",
+        layout="below",
+        bullets=[
+            (0, "**Same test as September:** phase-correlate each chip's Planet image "
+                "against its shifted drone sidecar in 96 m windows, keeping clear, "
+                "well-matched windows (NCC \u2265 0.3)"),
+            (0, "**The C3KW2X chips are the best registered of the three sets:** median "
+                "window offset 0.57 m, against 0.92 m for phantom 2020\u201323 and "
+                "0.71 m for mavic; windows off by more than 3 m 1.2%, against 7.9% and "
+                "1.9%; within-chip spread 0.44 m, against 0.79 m and 0.53 m"),
+            (0, "The ordering holds with 48 m windows: 0.38 / 0.62 / 0.54 m median and "
+                "2.5% / 8.8% / 4.1% of windows above 3 m"),
+            (0, "**Large global shifts are real.** Several adjacent Planet frames got "
+                "AROSICS shifts more than 10 m apart, yet each is aligned to within "
+                "about 0.5 m after its own shift"),
+        ],
+        figures=["residual_offsets.png"],
+        notes="Residual drone-to-Planet offset remaining in the training chips after "
+              "the single per-scene AROSICS shift. The three sets are the 56 curated "
+              "phantom 2020\u201323 chips (blue, 24782016 locally aligned mosaics), the "
+              "21 Good phantom 2023\u201324 chips (green, C3KW2X locally aligned "
+              "mosaics) and the 70 Good mavic 2024\u201326 chips (red, globally aligned "
+              "mosaics). Each chip was divided into 128 \u00d7 128 pixel windows (96 m "
+              "at 0.75 m), and the Planet chip was phase-correlated against the shifted "
+              "drone sidecar, downsampled to the chip grid, after a 1.5-pixel Gaussian "
+              "blur. Windows were kept if they were at least 90% clear and inside the "
+              "drone footprint, had a post-shift normalized cross-correlation of at "
+              "least 0.3, and needed a shift under 20 m. The left panel shows the "
+              "distribution of window offset magnitudes, with medians and window counts "
+              "in the legend; the centre panel the per-chip non-rigid spread, the "
+              "median distance of the window offset vectors from the chip's median "
+              "vector (boxes are interquartile ranges, dots are chips); the right panel "
+              "the window offset vectors, magnified 8\u00d7, on the chip with the "
+              "largest spread.\n\n"
+              "Planet's per-scene georeferencing varies by more than 10 m between "
+              "adjacent frames, which is why the applied shifts are large while the "
+              "residuals are small.",
+    ),
+    dict(
+        kind="content",
+        title="Does Global vs Local Alignment Matter? Phantom Both Ways",
+        layout="below",
+        bullets=[
+            (0, "Rebuilt the phantom chips from the globally aligned mosaics (both "
+                "releases, 414 pairs), so phantom is one set per alignment against "
+                "globally aligned mavic"),
+            (0, "**Yield is similar:** 171 coregistered global, against 177 local and "
+                "154 of 370 for mavic"),
+            (0, "**AROSICS applies the same shift either way** (151 scenes both ways, "
+                "median difference +0.01 m), so the larger phantom shifts are an offset "
+                "between phantom mosaics and Planet, not the local warp"),
+            (0, "**Residuals on the same 74 Good scenes** (median offset / windows "
+                "> 3 m / spread): phantom local 0.75 m / 5.8% / 0.64 m; phantom global "
+                "0.86 / 7.6% / 0.78; mavic global 0.71 / 1.9% / 0.53"),
+            (0, "**Per chip, local and global are a wash. Alignment is not what limits "
+                "label registration**"),
+        ],
+        figures=["coreg_stats_by_alignment.png"],
+        notes="Yield and shift magnitude of the drone-label to Planet-chip transfer, "
+              "grouped by drone and alignment. The three groups are phantom locally "
+              "aligned (blue, 24782016 and C3KW2X releases pooled, 2020-01 to 2024-03), "
+              "the same phantom flights globally aligned (cyan) and mavic globally "
+              "aligned (red, 2024-03 to 2026-01). The left panel shows the number of "
+              "drone\u2013Planet pairs within \u00b12 days, the number coregistered by "
+              "AROSICS, and the number rated Good, with the percentage of pairs at each "
+              "stage; phantom global Good counts use the local-build ratings of the "
+              "same Planet scenes, and twenty global chips whose scene failed "
+              "coregistration in the local build are unrated and not counted. The "
+              "centre panel shows the distribution of the single rigid AROSICS shift "
+              "applied per coregistered scene (density, 1.5 m bins), with the dotted "
+              "line at one 3 m Planet pixel. The right panel shows the shift magnitude "
+              "applied to each of the 151 scenes coregistered under both phantom "
+              "alignments, local (x) against global (y), with the 1:1 line.\n\n"
+              "Seventy-four of the 77 Good phantom scenes also coregistered under "
+              "global alignment, which is the set the residuals are measured on. "
+              "Paired on the same scene, the median global minus local difference is "
+              "+0.01 m in spread (worse in 39 of 74 chips, Wilcoxon p = 0.16) and "
+              "0.00 m in rigid residual (p = 0.46).\n\n"
+              "With 48 m windows the residuals are 0.53 / 0.60 / 0.54 m median and "
+              "6.9% / 9.4% / 4.1% above 3 m. The global set's worse summary comes from "
+              "a heavier tail of badly offset windows, not a consistent per-chip "
+              "penalty. The mavic chips, globally aligned, are better registered than "
+              "phantom in either alignment, which rules out last month's alignment "
+              "hypothesis.",
+    ),
+    dict(
+        kind="figrow",
+        title="Residual Offsets by Drone and Alignment",
+        figures=["residual_offsets_by_alignment.png"],
+        notes="Residual drone-to-Planet offset remaining in the training chips after "
+              "the single per-scene AROSICS shift, grouped by drone and alignment. The "
+              "sets are phantom locally aligned (blue) and phantom globally aligned "
+              "(cyan), both restricted to the same 74 Planet scenes (2020\u20132024) "
+              "rated Good and coregistered under both alignments, and the 70 Good mavic "
+              "globally aligned chips (red, 2024\u20132026). Each chip was divided into "
+              "128 \u00d7 128 pixel windows (96 m at 0.75 m), and the Planet chip was "
+              "phase-correlated against the shifted drone sidecar, downsampled to the "
+              "chip grid, after a 1.5-pixel Gaussian blur. Windows were kept if they "
+              "were at least 90% clear and inside the drone footprint, had a post-shift "
+              "normalized cross-correlation of at least 0.3, and needed a shift under "
+              "20 m. The left panel shows the distribution of window offset magnitudes, "
+              "with medians and window counts in the legend; the centre panel the "
+              "per-chip non-rigid spread, the median distance of the window offset "
+              "vectors from the chip's median vector (boxes are interquartile ranges, "
+              "dots are chips); the right panel the window offset vectors, magnified "
+              "8\u00d7, on the chip with the largest spread.",
+    ),
+    # Blink GIFs: the worst well-matched window in the two worst chips of each set.
+    dict(
+        kind="figrow",
+        title="Examples of Residual Misalignment: Phantom 2020\u201323 Chips",
         figures=[
             "gifs/blink_1_20230326_145322_83_24bc_zoom.gif",
             "gifs/blink_2_20230410_144554_03_2460_zoom.gif",
-            "gifs/blink_4_20230404_154320_37_2413_zoom.gif",
         ],
         captions=[
             "Planet 2023-03-26 / drone 2023-03-28\n12.4 m offset",
             "Planet 2023-04-10 / drone 2023-04-11\n10.3 m offset",
-            "Planet 2023-04-04 / drone 2023-04-04\n7.5 m offset",
         ],
         notes="Blink comparison of a Planet training chip (Planet frame) and the drone "
               "orthomosaic after the single AROSICS shift (drone frame). The crown-label "
               "outlines (yellow) are drawn at the same position in both frames. The "
               "labels come from per-pixel drone classification, so they fit the drone "
               "crowns, and any displacement of the matching crowns in the Planet frame "
-              "is label misregistration. Each zoom covers 192 \u00d7 192 m around the window "
-              "with the largest measured residual offset in that chip. The scale bar is "
-              "50 m.\n\n"
-              "These are the worst well-matched window in the worst chips of the "
-              "2020\u201323 set. Bright (flowering or leafless) crowns appear several metres "
+              "is label misregistration. Each zoom covers 192 \u00d7 192 m around the "
+              "window with the largest measured residual offset in that chip, and the "
+              "scale bar is 50 m.\n\n"
+              "These are the worst chips of the phantom 2020\u201323 set, the worst of "
+              "the three. Bright (flowering or leafless) crowns appear several metres "
               "away from their outlines in the Planet frame.",
     ),
     dict(
         kind="figrow",
-        title="Examples of Residual Misalignment: 2024\u201326 Chips",
+        title="Examples of Residual Misalignment: Phantom 2023\u201324 Chips",
+        figures=[
+            "gifs/blink_5_20240209_155640_21_24ad_zoom.gif",
+            "gifs/blink_6_20240307_150321_14_24a8_zoom.gif",
+        ],
+        captions=[
+            "Planet 2024-02-09 / drone 2024-02-08\n5.0 m offset",
+            "Planet 2024-03-07 / drone 2024-03-06\n4.1 m offset",
+        ],
+        notes="Same construction as the previous slide, for the worst chips of the new "
+              "phantom 2023\u201324 C3KW2X set. The worst C3KW2X windows, at 4\u20135 m, "
+              "are milder than the worst of either other set.",
+    ),
+    dict(
+        kind="figrow",
+        title="Examples of Residual Misalignment: Mavic 2024\u201326 Chips",
         figures=[
             "gifs/blink_3_20250315_161618_73_24fe_zoom.gif",
-            "gifs/blink_5_20240304_155459_24_24f6_zoom.gif",
-            "gifs/blink_6_20250909_161501_12_253d_zoom.gif",
+            "gifs/blink_4_20240304_155459_24_24f6_zoom.gif",
         ],
         captions=[
             "Planet 2025-03-15 / drone 2025-03-17\n8.6 m offset (Planet frame partly hazy)",
             "Planet 2024-03-04 / drone 2024-03-06\n5.6 m offset",
-            "Planet 2025-09-09 / drone 2025-09-11\n4.1 m offset",
         ],
-        notes="Same construction as the previous slide, for the worst chips of the "
-              "2024\u201326 globus set. Both sets have badly misregistered windows, and the "
-              "2020\u201323 set has more.",
+        notes="Same construction as the previous two slides, for the worst chips of the "
+              "mavic 2024\u201326 set. All three sets have a real tail of badly "
+              "misregistered windows, and the phantom 2020\u201323 set has the most.",
     ),
     dict(
         kind="two_content",
         title="Interpretation",
         bullets=[
-            (0, "**What we know**"),
-            (1, "The extra 70 chips help only in the first 3 epochs and hurt after"),
-            (1, "Label geometry in the new chips is not worse than in the old ones"),
-            (1, "Class balance (crown fraction) is unchanged"),
+            (0, "**What we know now**"),
+            (1, "The 50ha record is continuous from 2018 to 2026, and the deciduous "
+                "signal carries across both the release boundary and the change of "
+                "sensor"),
+            (1, "Mavic flowering labels are inflated by the sensor: three to five times "
+                "the phantom rate on the same day, while deciduous labels agree"),
+            (1, "The C3KW2X chips are the best registered and best yielding chip set, "
+                "and their flowering labels look mostly genuine"),
+            (1, "Even so, adding them does not raise peak mAP@50, so mavic label "
+                "semantics cannot be the whole story behind September's flat result"),
+            (1, "Mavic chips do cost about 0.03 of binary IoU, a gap phantom-only extra "
+                "chips do not show"),
+            (1, "Alignment is not the problem, and the mavic-only flowering crowns "
+                "mostly show no flowers on either sensor"),
         ],
         bullets2=[
-            (0, "**Candidate explanations (untested)**"),
-            (1, "**Label semantics, not geometry \u2014 the leading candidate.** Globus labels "
-                "come from SegFormer models trained on 8-bit STRI mosaics, applied to a "
-                "different sensor. Flowering rate runs about 3.5\u00d7 the STRI baseline, and "
-                "the spot-check shows yellow-green flush and plain green crowns among the "
-                "positives"),
-            (1, "**Train/test shift.** The only test set is 2020\u201323 chips"),
-            (1, "**Coverage from stale polygons.** New or much-changed crowns far from any "
-                "2022 polygon are never classified and read as background"),
+            (0, "**Remaining explanations**"),
+            (1, "**Evaluation noise.** One seed and a 56-chip test set. The base peak "
+                "is a single-epoch spike, and the differences between runs are about "
+                "the size of the epoch-to-epoch swings"),
+            (1, "**Train/test shift.** The only test set is 2020\u201323. Every "
+                "extension adds a different period or season, which this test cannot "
+                "reward"),
+            (1, "**Data volume is not the bottleneck.** All extensions win early and "
+                "lose the peak, which looks like overfitting dynamics rather than a "
+                "shortage of labels"),
         ],
-        notes="The early-epoch benefit followed by later harm fits noisy labels. The "
-              "false-positive rate has not been measured yet.",
+        notes="Two of last month's three hypotheses are now ruled out: registration "
+              "(slide on phantom both ways) and label semantics alone (the C3KW2X "
+              "extension). What is left is mostly about how the comparison is scored, "
+              "not about the chips.",
     ),
     dict(
         kind="content",
         title="Next Steps",
         bullets=[
-            (0, "Spot-check globus labels against the imagery (the vetting tool and the blink "
-                "viewer support this)"),
-            (0, "Score both models on the right halves of the new chips too"),
-            (0, "Try filtering chips by residual offset or classifier confidence"),
-            (0, "Use best-checkpoint selection for all future comparisons"),
-            (0, "Start on the whole-island data"),
+            (0, "Repeat base and +phantom 2023\u201324 with 3 seeds each, so the gap can "
+                "be put beside run-to-run variance"),
+            (0, "Score all four runs on the right halves of the C3KW2X and mavic chips "
+                "as well, by passing `compare_maskrcnn_runs.py --chip-dir` once per set"),
+            (0, "Use best-checkpoint selection and the cosine schedule from now on, "
+                "since peaks come at epochs 5\u201317 and every run collapses after"),
+            (0, "For mavic flowering, try per-date histogram matching to the phantom "
+                "radiometry instead of the fixed gain/offset, or fine-tune the "
+                "flowering model on mavic imagery"),
+            (1, "use the 2024-03-06/18 phantom rates as the acceptance test"),
         ],
     ),
     # ---------------- backup ----------------
     dict(kind="section", title="Backup", backup=True),
     dict(
         kind="figrow",
-        title="Mask R-CNN Head-to-Head: All Metrics",
+        title="Mask R-CNN Four-Run Sweep: All Metrics",
         figures=["maskrcnn_headtohead.png"],
-        notes="Full metric sweep behind the summary curve: mask mAP@50, binary IoU, "
-              "precision and recall against training epoch for the base (56-chip) and "
-              "extended (126-chip) runs.",
+        notes="Mask R-CNN training-set comparison over training epochs on the test "
+              "(right-half) crops of the 56 phantom 2020\u201323 chips. The runs are "
+              "trained on the 56 phantom 2020\u201323 chips (blue), plus the mavic chips "
+              "(red, 126), plus the C3KW2X chips (green, 77), and all three sources "
+              "(purple, 142). The top-left panel shows mask mAP@50 per epoch, with "
+              "stars marking each run's peak; the top-right panel binary IoU per epoch, "
+              "with stars marking each run's peak; the bottom-left panel crown-level "
+              "precision (solid circles) and recall (dashed squares) per epoch; and the "
+              "bottom-right panel the precision\u2013recall trajectory of each run, with "
+              "marker fill giving the epoch (log scale, 1\u2013200). All values are from "
+              "the same 12 epochs per run, scored with OCM cloud masks and a 64-pixel "
+              "minimum instance size.",
         backup=True,
     ),
     dict(
         kind="figrow",
         title="Residual Offsets with 48 m Windows",
         figures=["residual_offsets_w64.png"],
-        notes="As the residual-offset figure, but with 64 \u00d7 64 pixel (48 m) windows: "
-              "0.54 vs 0.62 m median, and 4.1% vs 8.8% of windows above 3 m. The "
-              "comparison between the two sets is unchanged.",
+        notes="As the three-set residual-offset figure, but with 64 \u00d7 64 pixel "
+              "(48 m) windows: 0.38 m median for phantom 2023\u201324, against 0.62 m "
+              "for phantom 2020\u201323 and 0.54 m for mavic, and 2.5% / 8.8% / 4.1% of "
+              "windows above 3 m. The ordering between the sets is unchanged.",
+        backup=True,
+    ),
+    dict(
+        kind="figrow",
+        title="Residual Offsets by Alignment, 48 m Windows",
+        figures=["residual_offsets_by_alignment_w64.png"],
+        notes="As the by-alignment residual-offset figure, but with 64 \u00d7 64 pixel "
+              "(48 m) windows, on the same 74 Good phantom scenes coregistered under "
+              "both alignments: 0.53 m median for phantom local, 0.60 m for phantom "
+              "global and 0.54 m for mavic global, and 6.9% / 9.4% / 4.1% of windows "
+              "above 3 m. Local and global remain a wash.",
         backup=True,
     ),
     # Static equivalents of the blink GIFs, one per slide so the triptych panels
-    # stay legible in a PDF export. Dates and offsets go in the title.
+    # stay legible in a PDF export. Dates and offsets go in the title, and come
+    # from gifs/blink_examples.csv.
     *[
         dict(
             kind="figrow",
@@ -496,33 +750,44 @@ SLIDES = [
             backup=True,
         )
         for tag, stem, pdate, ddate, off in [
-            ("2020\u201323", "blink_1_20230326_145322_83_24bc", "2023-03-26", "2023-03-28", "12.4 m"),
-            ("2020\u201323", "blink_2_20230410_144554_03_2460", "2023-04-10", "2023-04-11", "10.3 m"),
-            ("2020\u201323", "blink_4_20230404_154320_37_2413", "2023-04-04", "2023-04-04", "7.5 m"),
-            ("2024\u201326", "blink_3_20250315_161618_73_24fe", "2025-03-15", "2025-03-17", "8.6 m"),
-            ("2024\u201326", "blink_5_20240304_155459_24_24f6", "2024-03-04", "2024-03-06", "5.6 m"),
-            ("2024\u201326", "blink_6_20250909_161501_12_253d", "2025-09-09", "2025-09-11", "4.1 m"),
+            ("phantom 2020\u201323", "blink_1_20230326_145322_83_24bc", "2023-03-26", "2023-03-28", "12.4 m"),
+            ("phantom 2020\u201323", "blink_2_20230410_144554_03_2460", "2023-04-10", "2023-04-11", "10.3 m"),
+            ("phantom 2023\u201324", "blink_5_20240209_155640_21_24ad", "2024-02-09", "2024-02-08", "5.0 m"),
+            ("phantom 2023\u201324", "blink_6_20240307_150321_14_24a8", "2024-03-07", "2024-03-06", "4.1 m"),
+            ("mavic 2024\u201326", "blink_3_20250315_161618_73_24fe", "2025-03-15", "2025-03-17", "8.6 m"),
+            ("mavic 2024\u201326", "blink_4_20240304_155459_24_24f6", "2024-03-04", "2024-03-06", "5.6 m"),
         ]
     ],
     dict(
         kind="figrow",
-        title="Flowering Spot-Check Contact Sheets: Globus",
-        figures=[
-            "spotcheck_flowering/globus_flowering_1.png",
-            "spotcheck_flowering/globus_flowering_2.png",
-        ],
-        captions=["Globus positives, sheet 1", "Globus positives, sheet 2"],
-        notes="Contact sheets of the 32 sampled globus crown-dates with mean "
-              "P(flowering) > 0.5, at reduced resolution.",
+        title="Flowering Spot-Check Contact Sheet: Phantom C3KW2X",
+        figures=["spotcheck_flowering/phantom_c3kw2x_flowering.png"],
+        notes="Contact sheet of the 16 sampled phantom C3KW2X crown-dates with mean "
+              "P(flowering) > 0.5, at reduced resolution. About 9 of 16 show visible "
+              "flowers.",
         backup=True,
     ),
     dict(
         kind="figrow",
-        title="Flowering Spot-Check Contact Sheet: STRI Reference",
-        figures=["spotcheck_flowering/stri_flowering_reference.png"],
-        notes="Contact sheet of the 16 STRI crown-dates sampled as a reference. These "
-              "positives are more often visibly flowering, though several are ambiguous "
-              "at that resolution.",
+        title="Flowering Spot-Check Contact Sheets: Mavic",
+        figures=[
+            "spotcheck_flowering/mavic_flowering_1.png",
+            "spotcheck_flowering/mavic_flowering_2.png",
+        ],
+        captions=["Mavic positives, sheet 1", "Mavic positives, sheet 2"],
+        notes="Contact sheets of the 32 sampled mavic crown-dates with mean "
+              "P(flowering) > 0.5, at reduced resolution. These are September's sample, "
+              "unchanged.",
+        backup=True,
+    ),
+    dict(
+        kind="figrow",
+        title="Flowering Spot-Check Contact Sheet: Phantom 24782016 Reference",
+        figures=["spotcheck_flowering/phantom_flowering_reference.png"],
+        notes="Contact sheet of the 16 phantom 24782016 crown-dates sampled as a "
+              "reference, unchanged from September. These positives are more often "
+              "visibly flowering than the mavic ones, though several are ambiguous at "
+              "that resolution.",
         backup=True,
     ),
 ]
