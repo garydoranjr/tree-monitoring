@@ -39,8 +39,14 @@ Typical usage:
 A set can span several chip directories (repeat ``--set`` with the same NAME),
 and ``--only-stems NAME=FILE`` restricts it to the chip stems listed in FILE,
 one per line, e.g. to compare two alignments of the same Planet scenes.
+
+``--drone-meta NAME=metadata_all.csv`` (the mavic mission metadata in
+``stri/globus/``) looks up each chip's drone flight in the ``antenna`` column
+(``PPK_Emlid``, ``RTK``, or blank for onboard GNSS only), writes it to the
+chips CSV, and highlights chips from uncorrected flights in the spread panel.
 """
 import os
+import re
 
 os.environ.setdefault('MPLBACKEND', 'Agg')
 
@@ -61,6 +67,24 @@ Image.MAX_IMAGE_PIXELS = None
 CHIP_RES_M = 0.75
 QUALITY_RANK = {'Poor': 0, 'Fair': 1, 'Good': 2}
 SET_COLORS = ['#1f77b4', '#d62728', '#2ca02c', '#ff7f0e']
+UNCORRECTED_COLOR = '#ff7f0e'
+MISSION_RE = re.compile(r'BCI_50ha_\d{4}_\d\d_\d\d_M3M')
+
+
+def chip_antennas(chipdirs, meta_csv):
+    """Map chip stem -> GNSS correction ('' if none) of the drone flight it used."""
+    meta = pd.read_csv(meta_csv, keep_default_na=False)
+    antenna = meta.groupby('mission')['antenna'].first()
+    out = {}
+    for d in chipdirs:
+        for rec in json.loads((Path(d) / 'coreg_log.json').read_text()):
+            m = MISSION_RE.search(Path(rec['drone_file']).name)
+            if m is None:
+                raise click.ClickException(f'no M3M mission in {rec["drone_file"]}')
+            if m.group(0) not in antenna:
+                raise click.ClickException(f'{m.group(0)} not in {meta_csv}')
+            out[rec['scene']] = antenna[m.group(0)]
+    return out
 
 
 def load_chip(chip_png):
@@ -178,12 +202,17 @@ def parse_multi(values, what):
 @click.option('--prefix', default='residual_offsets', show_default=True)
 @click.option('--color', 'set_colors', multiple=True,
               help='NAME=COLOR; overrides the order-based colour of a set.')
+@click.option('--drone-meta', 'drone_metas', multiple=True,
+              help='NAME=metadata_all.csv; mark that set\'s chips by the GNSS '
+                   'correction (antenna column) of their mavic flight.')
 def main(outdir, sets, vettings, only_stems, min_quality, window, min_valid,
-         min_ncc, max_shift_m, sigma, min_windows, prefix, set_colors):
+         min_ncc, max_shift_m, sigma, min_windows, prefix, set_colors,
+         drone_metas):
     outdir.mkdir(parents=True, exist_ok=True)
     sets = parse_multi(sets, '--set')
     vettings = parse_multi(vettings, '--vetting')
     only_stems = parse_pairs(only_stems, '--only-stems')
+    drone_metas = parse_pairs(drone_metas, '--drone-meta')
     colors = dict(zip(sets, SET_COLORS))
     colors.update({k: str(v) for k, v in parse_pairs(set_colors, '--color').items()})
 
@@ -204,6 +233,8 @@ def main(outdir, sets, vettings, only_stems, min_quality, window, min_valid,
             chips = [p for p in chips if p.name[:-len('.png')] in listed]
         click.echo(f'{name}: {len(chips)} chips from '
                    + ', '.join(str(d) for d in chipdirs))
+        antennas = (chip_antennas(chipdirs, drone_metas[name])
+                    if name in drone_metas else None)
 
         for chip in chips:
             chipdir = chip.parent
@@ -215,9 +246,10 @@ def main(outdir, sets, vettings, only_stems, min_quality, window, min_valid,
             for r in recs:
                 wrows.append({'set': name, 'stem': stem, **r})
             if len(recs) >= min_windows:
+                extra = {} if antennas is None else {'antenna': antennas[stem]}
                 crows.append({'set': name, 'stem': stem, 'chipdir': str(chipdir),
                               'width': planet.shape[1], 'height': planet.shape[0],
-                              **chip_summary(pd.DataFrame(recs))})
+                              **chip_summary(pd.DataFrame(recs)), **extra})
 
     wdf, cdf = pd.DataFrame(wrows), pd.DataFrame(crows)
     wdf.to_csv(outdir / f'{prefix}_windows.csv', index=False)
@@ -232,6 +264,12 @@ def main(outdir, sets, vettings, only_stems, min_quality, window, min_valid,
                    f'{(w["offset_m"] > 3).mean():.1%} | chip spread median '
                    f'{g["spread_m"].median():.2f} m | chip rigid residual '
                    f'median {g["median_offset_m"].median():.2f} m')
+        if name in drone_metas:
+            for label, sub in g.groupby(g['antenna'].fillna('') == ''):
+                click.echo(f'    {"onboard GNSS only" if label else "PPK/RTK"}: '
+                           f'{len(sub)} chips, spread median '
+                           f'{sub["spread_m"].median():.2f} m, rigid residual '
+                           f'median {sub["median_offset_m"].median():.2f} m')
 
     plot(wdf, cdf, list(sets), colors, outdir / prefix, window, max_shift_m)
 
@@ -254,14 +292,35 @@ def plot(wdf, cdf, names, colors, outbase, window, max_shift_m):
 
     ax = axes[1]
     data = [cdf.loc[cdf['set'] == n, 'spread_m'] for n in names]
-    parts = ax.boxplot(data, patch_artist=True, widths=0.5, showfliers=True)
+    # Fliers off: the jittered points below already show every chip.
+    parts = ax.boxplot(data, patch_artist=True, widths=0.5, showfliers=False)
     for patch, n in zip(parts['boxes'], names):
         patch.set_facecolor(colors[n])
         patch.set_alpha(0.5)
-    for i, d in enumerate(data, 1):
+    has_meta = 'antenna' in cdf
+    n_uncorrected = 0
+    for i, (n, d) in enumerate(zip(names, data), 1):
         jitter = np.random.default_rng(0).uniform(-0.12, 0.12, len(d))
-        ax.scatter(np.full(len(d), i) + jitter, d, s=10, color='k', alpha=0.5,
-                   zorder=3)
+        x = np.full(len(d), i) + jitter
+        if has_meta:
+            ant = cdf.loc[cdf['set'] == n, 'antenna']
+            bad = (ant.notna() & (ant.fillna('') == '')).to_numpy()
+        else:
+            bad = np.zeros(len(d), bool)
+        n_uncorrected += int(bad.sum())
+        ax.scatter(x[~bad], d[~bad], s=10, color='k', alpha=0.5, zorder=3)
+        ax.scatter(x[bad], d[bad], s=18, color=UNCORRECTED_COLOR,
+                   edgecolor='k', linewidth=0.5, zorder=4)
+    if has_meta:
+        lo, hi = ax.get_ylim()
+        ax.set_ylim(lo, hi + 0.15 * (hi - lo))  # headroom for the legend
+        ax.legend(handles=[
+            plt.Line2D([], [], ls='', marker='o', ms=3.5, color='k', alpha=0.5,
+                       label='chip'),
+            plt.Line2D([], [], ls='', marker='o', ms=4.5, mfc=UNCORRECTED_COLOR,
+                       mec='k', mew=0.5,
+                       label=f'flight had no PPK/RTK (n={n_uncorrected})')],
+            fontsize=8, loc='upper right')
     ax.set_xticks(range(1, len(names) + 1),
                   [f'{n}\n({len(d)} chips)' for n, d in zip(names, data)])
     ax.set_ylabel('within-chip offset spread (m)')
