@@ -45,3 +45,6 @@ dependencies:
       - pycocotools
       - python-ffmpeg
       - albumentations==2.0.8
+      # The drone SegFormer checkpoints (drone_{flower,decid}_geo_models/epoch_020.pth)
+      # are pickled whole models; 5.x removed SegformerEncoder, so they fail to load.
+      - transformers<5

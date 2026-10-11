@@ -26,7 +26,7 @@ Subcommands write into OUTDIR (default
 Typical usage:
     python scripts/compare_drone_radiometry.py distributions
     python scripts/compare_drone_radiometry.py fit-renorm
-    python scripts/compare_drone_radiometry.py reclassify --models /Volumes/Earth03/flower/models
+    python scripts/compare_drone_radiometry.py reclassify
 """
 import os
 
@@ -653,10 +653,10 @@ def run_models(models, imgs, device):
 @cli.command('reclassify')
 @out_option
 @click.option('--flower-model', type=click.Path(exists=True, dir_okay=False),
-              default=str(pu.FLOWER / 'models/drone_flower_geo_out/epoch_020.pth'),
+              default=str(pu.FLOWER / 'results/models/drone_flower_geo_models/epoch_020.pth'),
               show_default=True)
 @click.option('--decid-model', type=click.Path(exists=True, dir_okay=False),
-              default=str(pu.FLOWER / 'models/drone_decid_geo_out/epoch_020.pth'),
+              default=str(pu.FLOWER / 'results/models/drone_decid_geo_models/epoch_020.pth'),
               show_default=True)
 @click.option('--n-controls', default=60, show_default=True,
               help='Crown-dates where both cameras agree on not flowering.')
@@ -785,7 +785,8 @@ def plot_reclassify_examples(ex_data, crowns, species, example_kind, outdir):
     keys = sorted({(d, c) for d, c, _ in ex_data})
     if not keys:
         return
-    fig, axes = plt.subplots(len(keys), 6, figsize=(17, 2.9 * len(keys)), squeeze=False)
+    fig, axes = plt.subplots(len(keys), 6, figsize=(17, 2.9 * len(keys)), squeeze=False,
+                             layout='constrained')
     for row, (d, c) in zip(axes, keys):
         panels = [('phantom', ex_data[(d, c, 'phantom')]['imgs'][0], ex_data[(d, c, 'phantom')]),
                   ('mavic', ex_data[(d, c, 'mavic')]['imgs'][0], ex_data[(d, c, 'mavic')]),
@@ -812,7 +813,6 @@ def plot_reclassify_examples(ex_data, crowns, species, example_kind, outdir):
         row[0].set_ylabel(f'{d} crown {c}\n{species[c]}', fontsize=8)
     fig.suptitle(f'Mavic-only flowering crowns re-classified after colour transfer to the '
                  f'same-day phantom ({example_kind}, fitted on the other date)', fontsize=11)
-    fig.tight_layout()
     pu.save(fig, outdir, 'reclassify_examples')
 
 
