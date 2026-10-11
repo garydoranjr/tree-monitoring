@@ -181,7 +181,12 @@ To re-run the whole mavic series on the HPC:
 ./run_crown_pipeline.sh config/pipeline_mavic_mkl.sh
 ```
 This writes to `/scratch/tree-monitoring/results/globus_mkl`, so the per-band
-results in `results/globus` stay in place. The file names match the old run's
+results in `results/globus` stay in place. The per-band classifications on
+Earth03 have been moved to
+`/Volumes/Earth03/flower/results/older/classifications_mavic_perband/`. While
+the re-run is in progress,
+[`docs/handoff_mavic_mkl_rerun.md`](handoff_mavic_mkl_rerun.md) gives the
+gattaca2 steps. The file names match the old run's
 (`<stem>_classifications.tif`), so keep the two runs in separate directories
 when copying them back to Earth03.
 
