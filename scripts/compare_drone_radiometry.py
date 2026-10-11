@@ -549,8 +549,10 @@ def fit_renorm(outdir):
 
     Reads OUTDIR/samples_<date>.npz (from `distributions`). Writes
     transforms.json, mavic_linear_<date>.yml (a drop-in --scaling-config for
-    crown_classification.py) and renorm_cdf_distances.csv, which scores each
-    transform in-sample and on the other date.
+    crown_classification.py), renorm_cdf_distances.csv, which scores each
+    transform in-sample and on the other date, and
+    crown_classification_mavic_mkl.yml, the production colour transfer fitted
+    on both dates pooled (copied to config/).
     """
     import yaml
     base = baseline_transform()
@@ -567,6 +569,11 @@ def fit_renorm(outdir):
             f'# (C3KW2X global) uint8 mosaic on {d}, from compare_drone_radiometry.py.\n'
             + yaml.safe_dump({'uint16_to_uint8': [dict(gain=float(g), offset=float(o))
                                                   for g, o in zip(lin['gain'], lin['offset'])]}))
+    # Production transform: one fixed colour transfer fitted on both dates.
+    pooled = fit_transform('mkl', np.concatenate([m for _, m in samples.values()]),
+                           np.concatenate([p for p, _ in samples.values()]))
+    tfs['forward:mkl:pooled'] = pooled
+    (outdir / 'crown_classification_mavic_mkl.yml').write_text(mkl_config_yaml(pooled))
     (outdir / 'transforms.json').write_text(json.dumps(tfs))
 
     rows = []
@@ -583,6 +590,9 @@ def fit_renorm(outdir):
                 out = apply_transform(tfs[f'reverse:{kind}:{fd}'], pha.T).T
                 rows.append(dict(direction='reverse', kind=kind, fit=fit, date=d,
                                  **dict(zip(BANDS, cdf_distance(mav_a, out)))))
+        out = apply_transform(pooled, mav16.T).T
+        rows.append(dict(direction='forward', kind='mkl', fit='pooled', date=d,
+                         **dict(zip(BANDS, cdf_distance(pha, out)))))
     df = pd.DataFrame(rows)
     df['mean'] = df[list(BANDS)].mean(axis=1)
     df.to_csv(outdir / 'renorm_cdf_distances.csv', index=False)
@@ -594,6 +604,47 @@ def fit_renorm(outdir):
             tf = tfs[f'forward:{k}:{d}']
             click.echo(f'  {k}: ' + json.dumps({a: np.round(b, 5).tolist()
                                                for a, b in tf.items() if a != 'kind'}))
+
+
+def mkl_config_yaml(tf):
+    """crown_classification.py --scaling-config text for a pooled mkl transform."""
+    import yaml
+    M = np.array(tf['matrix'])
+    body = yaml.safe_dump({'color_transfer': {
+        'matrix': [[float(f'{v:.6g}') for v in row] for row in M],
+        'src_mean': [round(v, 2) for v in tf['src_mean']],
+        'dst_mean': [round(v, 3) for v in tf['dst_mean']],
+    }}, default_flow_style=None, sort_keys=False)
+    dates = ' and '.join(d.replace('_', '-') for d in pu.SAME_DATES)
+    return f"""\
+# Colour transfer for the mavic 50ha RGB mosaics
+# (/scratch/tree-monitoring/stri/globus/RGB): uint16 DN -> uint8 model input.
+#
+# Written by `python scripts/compare_drone_radiometry.py fit-renorm`; see
+# docs/drone_radiometry.md for the analysis.
+#
+# The per-band gains/offsets in crown_classification_mavic.yml match each
+# band's p2/p98 to the phantom training mosaics, but on the days both drones
+# flew ({dates}) mavic still reaches the model greener, with a darker
+# blue band, more contrast and more saturated colour than phantom. That made
+# the flowering model call ~5x more crowns flowering on mavic.
+#
+# This file replaces the per-band map with a linear Monge-Kantorovich colour
+# transfer (Pitie & Kokaram 2007). The transfer maps the mean and full 3x3
+# covariance of mavic RGB onto those of the same-day phantom (C3KW2X global)
+# mosaics. It is fitted on native-resolution pixels sampled over the two
+# drones' joint footprint inside the 50ha crown map, pooled over both dates.
+# Fitted on one date and applied to the other, the transfer removed 33 of the
+# 42 mavic-only flowering crown-dates and kept 13 of the 16 that flower on both
+# cameras, without creating positives among 60 control crowns.
+#
+# Like the per-band map, the transform is FIXED rather than refitted per image,
+# so the mavic time series stays mutually comparable.
+#
+# Applied as: uint8 = clip(round(matrix @ (DN - src_mean) + dst_mean), 0, 255)
+# per pixel, with DN the (R, G, B) uint16 vector. Rows of `matrix` give the
+# R, G, B outputs. Band 4 (alpha) is ignored, as before.
+{body}"""
 
 
 # --------------------------------------------------------------------------

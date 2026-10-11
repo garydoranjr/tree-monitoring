@@ -19,7 +19,15 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 def load_scaling(config_file):
     """
-    Read the per-band uint16 -> uint8 gains/offsets from a YAML config.
+    Read the uint16 -> uint8 conversion from a YAML config.
+
+    Two forms are supported:
+
+    * `uint16_to_uint8`: per-band gains/offsets, returned as a
+      (gains, offsets) tuple (config/crown_classification_mavic.yml).
+    * `color_transfer`: a 3x3 colour matrix with source and target means,
+      returned as a dict with 'matrix', 'src_mean' and 'dst_mean' arrays
+      (config/crown_classification_mavic_mkl.yml).
 
     Returns None when no config is given, in which case the imagery is assumed
     to be uint8 already and is passed through untouched.
@@ -29,6 +37,21 @@ def load_scaling(config_file):
 
     with open(config_file) as f:
         cfg = yaml.safe_load(f)
+
+    if 'color_transfer' in cfg:
+        ct = cfg['color_transfer']
+        scaling = {
+            'matrix': np.array(ct['matrix'], dtype=np.float64),
+            'src_mean': np.array(ct['src_mean'], dtype=np.float64),
+            'dst_mean': np.array(ct['dst_mean'], dtype=np.float64),
+        }
+        if (scaling['matrix'].shape != (3, 3) or scaling['src_mean'].shape != (3,)
+                or scaling['dst_mean'].shape != (3,)):
+            raise ValueError(
+                "'color_transfer' needs a 3x3 'matrix' and 3-element "
+                "'src_mean' and 'dst_mean'"
+            )
+        return scaling
 
     bands = cfg['uint16_to_uint8']
     if len(bands) != 3:
@@ -46,10 +69,12 @@ def to_uint8(data, scaling):
     """
     Convert a (3, H, W) window to uint8 for the SegFormer processor.
 
-    The models were trained on 8-bit imagery. When `scaling` is provided, each
-    band is mapped with its own gain/offset so the histograms line up with that
-    training domain; see config/crown_classification_mavic.yml for how the
-    coefficients were fitted and why they are fixed rather than per-image.
+    The models were trained on 8-bit imagery. When `scaling` is provided, the
+    window is mapped into that training domain either band by band with a
+    gain/offset, or with a 3x3 colour transfer that also corrects cross-band
+    (hue and saturation) differences. See config/crown_classification_mavic.yml
+    and config/crown_classification_mavic_mkl.yml for how each was fitted and
+    why both are fixed rather than per-image.
     """
     if data.dtype == np.uint8:
         return data
@@ -57,14 +82,20 @@ def to_uint8(data, scaling):
     if scaling is None:
         raise ValueError(
             f"Image is {data.dtype}, not uint8, and no --scaling-config was "
-            "given. Pass a config with per-band uint16_to_uint8 coefficients "
+            "given. Pass a config with uint16 -> uint8 coefficients "
             "(e.g. config/crown_classification_mavic.yml)."
         )
 
-    gains, offsets = scaling
+    if isinstance(scaling, dict):
+        # y = M (x - src_mean) + dst_mean, applied to every pixel's RGB vector.
+        flat = data.reshape(3, -1).astype(np.float64)
+        flat = scaling['matrix'] @ (flat - scaling['src_mean'][:, None])
+        scaled = (flat + scaling['dst_mean'][:, None]).reshape(data.shape)
+    else:
+        gains, offsets = scaling
 
-    # Apply per-band gain/offset; reshape so each band gets its own coefficient.
-    scaled = data.astype(np.float64) * gains[:, None, None] + offsets[:, None, None]
+        # Apply per-band gain/offset; reshape so each band gets its own coefficient.
+        scaled = data.astype(np.float64) * gains[:, None, None] + offsets[:, None, None]
 
     return np.clip(np.rint(scaled), 0, 255).astype(np.uint8)
 
@@ -361,8 +392,9 @@ def select_polygons(shp, image_file):
 @click.argument('output_dir')
 @click.option('--scaling-config', default=None,
               type=click.Path(exists=True, dir_okay=False),
-              help='YAML with per-band uint16 -> uint8 gains/offsets. Required '
-                   'for uint16 imagery such as the mavic 50ha mosaics.')
+              help='YAML with the uint16 -> uint8 conversion (per-band '
+                   'gains/offsets or a 3x3 colour transfer). Required for uint16 '
+                   'imagery such as the mavic 50ha mosaics.')
 def main(modelfile, image_file, shapefile_path, output_dir, scaling_config):
 
     model = torch.load(modelfile, weights_only=False, map_location=torch.device('cpu'))

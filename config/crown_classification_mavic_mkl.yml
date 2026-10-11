@@ -1,0 +1,34 @@
+# Colour transfer for the mavic 50ha RGB mosaics
+# (/scratch/tree-monitoring/stri/globus/RGB): uint16 DN -> uint8 model input.
+#
+# Written by `python scripts/compare_drone_radiometry.py fit-renorm`; see
+# docs/drone_radiometry.md for the analysis.
+#
+# The per-band gains/offsets in crown_classification_mavic.yml match each
+# band's p2/p98 to the phantom training mosaics, but on the days both drones
+# flew (2024-03-06 and 2024-03-18) mavic still reaches the model greener, with a darker
+# blue band, more contrast and more saturated colour than phantom. That made
+# the flowering model call ~5x more crowns flowering on mavic.
+#
+# This file replaces the per-band map with a linear Monge-Kantorovich colour
+# transfer (Pitie & Kokaram 2007). The transfer maps the mean and full 3x3
+# covariance of mavic RGB onto those of the same-day phantom (C3KW2X global)
+# mosaics. It is fitted on native-resolution pixels sampled over the two
+# drones' joint footprint inside the 50ha crown map, pooled over both dates.
+# Fitted on one date and applied to the other, the transfer removed 33 of the
+# 42 mavic-only flowering crown-dates and kept 13 of the 16 that flower on both
+# cameras, without creating positives among 60 control crowns.
+#
+# Like the per-band map, the transform is FIXED rather than refitted per image,
+# so the mavic time series stays mutually comparable.
+#
+# Applied as: uint8 = clip(round(matrix @ (DN - src_mean) + dst_mean), 0, 255)
+# per pixel, with DN the (R, G, B) uint16 vector. Rows of `matrix` give the
+# R, G, B outputs. Band 4 (alpha) is ignored, as before.
+color_transfer:
+  matrix:
+  - [0.00318624, 0.000260437, 4.52323e-05]
+  - [0.000260437, 0.00266679, 0.00044152]
+  - [4.52323e-05, 0.00044152, 0.00281351]
+  src_mean: [22869.34, 28281.85, 14744.79]
+  dst_mean: [129.967, 143.632, 105.144]

@@ -156,6 +156,35 @@ phantom's positives among the 42 mavic-only crowns from 0 to 5–9 (`mkl` and
 explain why phantom stays quiet. The hazier, lower-contrast phantom texture
 likely also suppresses some flowering signal.
 
+## Production config
+
+[`config/crown_classification_mavic_mkl.yml`](../config/crown_classification_mavic_mkl.yml)
+holds a single fixed `mkl` colour transfer for every mavic date. It is fitted
+on the two shared dates pooled, and written by `fit-renorm`.
+[`scripts/crown_classification.py`](../scripts/crown_classification.py) reads
+it through the existing `--scaling-config` option: a `color_transfer` key
+selects the 3×3 transform, and the per-band `uint16_to_uint8` form still works.
+
+Over both dates, the pooled transform brings the CDF distance to phantom from
+0.052 to 0.018 and from 0.062 to 0.025. Run through the unchanged production
+code path (`extract_centered_window` → `preprocess` → `apply_model`) on the same
+121 crown-dates, it calls flowering on:
+- 6 of 42 mavic-only crowns;
+- 14 of 16 crowns flowering on both cameras;
+- 0 of 60 controls.
+
+With the old config, the same path reproduces the `reclassify` baseline to
+within 3e-8.
+
+To re-run the whole mavic series on the HPC:
+```bash
+./run_crown_pipeline.sh config/pipeline_mavic_mkl.sh
+```
+This writes to `/scratch/tree-monitoring/results/globus_mkl`, so the per-band
+results in `results/globus` stay in place. The file names match the old run's
+(`<stem>_classifications.tif`), so keep the two runs in separate directories
+when copying them back to Earth03.
+
 ## Caveats and next steps
 
 - **The target is phantom C3KW2X on two dates, not the training domain.** The
