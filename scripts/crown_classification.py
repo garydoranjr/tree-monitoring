@@ -72,7 +72,39 @@ def to_uint8(data, scaling):
 def extract_centered_window(src, polygon, min_size=512, pixel_buffer=100,
                             scaling=None):
     """
-    Extract a raster window fully containing the polygon, with:
+    Read the RGB bands of `centered_window` as a uint8 PIL image.
+
+    Parameters
+    ----------
+    src : rasterio.io.DatasetReader
+        Open rasterio dataset.
+    polygon : shapely.geometry.Polygon
+        Polygon in the same CRS as the raster.
+    min_size, pixel_buffer : int
+        Passed to `centered_window`.
+    scaling : tuple or None
+        Per-band (gains, offsets) used to convert uint16 imagery to uint8.
+
+    Returns
+    -------
+    window : rasterio.windows.Window
+        The computed window.
+    img : PIL.Image.Image
+        The window's R, G, B bands, converted to uint8.
+    """
+    window = centered_window(src, polygon, min_size, pixel_buffer)
+
+    # Only the first three bands (R, G, B) are used: the fourth band is an alpha
+    # mask in the mavic mosaics and photogrammetric height in the uint8 ones.
+    data = src.read(indexes=[1, 2, 3], window=window)
+    data = to_uint8(data, scaling)
+
+    return window, Image.fromarray(np.transpose(data, (1, 2, 0)))
+
+
+def centered_window(src, polygon, min_size=512, pixel_buffer=100):
+    """
+    Compute a raster window fully containing the polygon, with:
       • at least min_size x min_size pixels
       • at least pixel_buffer pixels around the polygon
       • centered on the polygon when expanding to min_size
@@ -87,15 +119,11 @@ def extract_centered_window(src, polygon, min_size=512, pixel_buffer=100,
         Minimum window size (pixels) on each side.
     pixel_buffer : int
         Extra pixels to include around the polygon.
-    scaling : tuple or None
-        Per-band (gains, offsets) used to convert uint16 imagery to uint8.
 
     Returns
     -------
     window : rasterio.windows.Window
         The computed window.
-    data : np.ndarray
-        The extracted array `src.read(window=window)`.
     """
 
     # --- 1. Get polygon bounds in world coordinates ---
@@ -144,15 +172,7 @@ def extract_centered_window(src, polygon, min_size=512, pixel_buffer=100,
     h = row_max - row_min + 1
     w = col_max - col_min + 1
 
-    window = Window(col_off=col_min, row_off=row_min, width=w, height=h)
-
-    # --- 6. Read and return ---
-    # Only the first three bands (R, G, B) are used: the fourth band is an alpha
-    # mask in the mavic mosaics and photogrammetric height in the uint8 ones.
-    data = src.read(indexes=[1, 2, 3], window=window)
-    data = to_uint8(data, scaling)
-
-    return window, Image.fromarray(np.transpose(data, (1, 2, 0)))
+    return Window(col_off=col_min, row_off=row_min, width=w, height=h)
 
 
 def polygon_mask(src, window, polygon):
