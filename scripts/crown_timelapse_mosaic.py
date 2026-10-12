@@ -31,7 +31,13 @@ def get_date(path):
     return m.group(1)
 
 
-def extract_centered_window(src, polygon, min_size=512, pixel_buffer=100):
+def extract_centered_window(src, polygon, min_size=512, pixel_buffer=100,
+                            scaling=None):
+    """Read an RGB window around `polygon` as a PIL image.
+
+    uint16 imagery (mavic) is converted with crown_classification.to_uint8
+    and `scaling` (from crown_classification.load_scaling).
+    """
     minx, miny, maxx, maxy = polygon.bounds
 
     top_row, left_col = src.index(minx, maxy)
@@ -68,6 +74,9 @@ def extract_centered_window(src, polygon, min_size=512, pixel_buffer=100):
     )
 
     data = src.read(window=window)
+    if data.dtype != np.uint8:
+        from crown_classification import to_uint8
+        data = to_uint8(data[:3], scaling)
     img = Image.fromarray(np.transpose(data, (1, 2, 0))[..., :3])
 
     return window, img

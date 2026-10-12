@@ -25,6 +25,7 @@ dependencies:
   - requests
   - pandas
   - rioxarray
+  - rasterstats
   - rasterio
   - tqdm
   - scikit-learn

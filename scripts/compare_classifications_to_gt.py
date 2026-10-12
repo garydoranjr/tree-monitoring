@@ -5,6 +5,20 @@ Joins per-(crown, date) ground-truth labels from
 `vicente_20260618_labels.csv` to the ML output netCDF
 (`crown_classifications.nc4`) via the UUID->tag mapping in
 `flowering_dataset.gpkg`, and reports flowering / deciduous metrics.
+
+With --labels-gpkg, the labels instead come from a labelling-tool export
+that carries the crown-map `tag` on every crown-date polygon (e.g.
+vicente_202610/latest_paulino_label.gpkg), so no uuid bridge is needed and
+any nc4 built by extract_crown_stats_from_masks.py can be scored, including
+crown_classifications_mavic.nc4. Example:
+
+    python scripts/compare_classifications_to_gt.py \
+        --labels-gpkg /Volumes/Earth03/flower/vicente_202610/latest_paulino_label.gpkg \
+        --nc4 /Volumes/Earth03/flower/results/crown_classifications_mavic.nc4 \
+        --drone-dir /Volumes/Earth03/flower/stri/globus/RGB \
+        --drone-glob '*_M3M_aligned_global_RGB.tif' \
+        --drone-scaling config/crown_classification_mavic_mkl.yml \
+        --output-dir /Volumes/Earth03/flower/figs/20261013_updates/paulino_eval/mavic
 """
 import base64
 import html
@@ -20,6 +34,7 @@ import pandas as pd
 import rasterio
 import xarray as xr
 from scipy.stats import pearsonr, spearmanr
+from shapely.geometry import box
 from sklearn.metrics import (
     auc,
     average_precision_score,
@@ -50,6 +65,15 @@ NC4_DEFAULT = "/Volumes/Earth03/flower/results/crown_classifications.nc4"
 GEO_FOLDS_DEFAULT = (
     "/Volumes/Earth03/flower/vicente_202509/geo_folds.csv"
 )
+TRAIN_CHIPS_DEFAULT = "/Volumes/Earth03/flower/vicente_202509/images"
+
+# Labelling-tool gpkg exports mix English and Spanish answers.
+FLOWERING_MAP = {"no": "no", "yes": "yes", "sí": "yes", "si": "yes",
+                 "maybe": "maybe", "quizás": "maybe", "quizas": "maybe"}
+# Rows the annotator never opened keep the tool defaults (flowering "No",
+# leafing 0) under these quality values, so they are not labels.
+UNCHECKED_QUALITY = {"Not Checked", "Sin Revisar"}
+GOOD_QUALITY = {"Excelente", "Excellent"}
 
 
 def load_gt(path):
@@ -145,6 +169,75 @@ def load_uuid_tag_map(gpkg_path):
     return gdf[["uuid", "tag"]].drop_duplicates()
 
 
+def load_labels_gpkg(path):
+    """Crown-date labels from a labelling-tool gpkg that carries `tag`.
+
+    Drops rows flagged `ignore` and rows whose `quality` shows they were
+    never checked (UNCHECKED_QUALITY), whose flowering/leafing values are
+    tool defaults. Maps flowering to isFlowering {yes, no, maybe} and
+    quality to segmentation ("good" for GOOD_QUALITY, else "other") so the
+    rest of the pipeline is unchanged. The crown `tag` (as a string) is the
+    uuid used for aggregation.
+
+    Returns (gt, labels, geoms, counts): gt in the load_gt column layout,
+    labels the kept rows as a GeoDataFrame (same index as gt), geoms the
+    per-crown polygons for the galleries, and counts the row bookkeeping.
+    """
+    gdf = gpd.read_file(path)
+    if gdf.crs is not None and gdf.crs.to_epsg() != 32617:
+        gdf = gdf.to_crs(epsg=32617)
+    ignore = gdf["ignore"].astype(str).str.lower() == "true"
+    unchecked = gdf["quality"].isin(UNCHECKED_QUALITY) & ~ignore
+    counts = {"rows": len(gdf), "ignored": int(ignore.sum()),
+              "unchecked": int(unchecked.sum())}
+    gdf = gdf[~ignore & ~unchecked].copy()
+    fl = gdf["flowering"].astype(str).str.strip().str.lower()
+    unknown = sorted(set(fl) - set(FLOWERING_MAP))
+    if unknown:
+        raise ValueError(f"unrecognised flowering values in {path}: {unknown}")
+    gdf["dt"] = pd.to_datetime(gdf["time"]).dt.normalize()
+    gdf["date"] = gdf["dt"].dt.strftime("%Y_%m_%d")
+    gdf["tag"] = gdf["tag"].astype(int)
+    gt = pd.DataFrame({
+        "uuid": gdf["tag"].astype(str),
+        "dt": gdf["dt"],
+        "date": gdf["date"],
+        "isFlowering": fl.map(FLOWERING_MAP),
+        "leafing": gdf["leafing"].astype(float),
+        "floweringIntensity": np.nan,
+        "segmentation": np.where(gdf["quality"].isin(GOOD_QUALITY), "good", "other"),
+        "polygon_id": gdf["tag"].astype(str) + "_" + gdf["date"],
+        "globalId": gdf["GlobalID"],
+        "latin": gdf["latin"],
+    }, index=gdf.index)
+    counts["kept"] = len(gt)
+    geoms = {uuid: {"by_date": dict(zip(sub["date"], sub.geometry)),
+                    "any": sub.geometry.iloc[0]}
+             for uuid, sub in gdf.groupby(gt["uuid"])}
+    return gt, gdf, geoms, counts
+
+
+def train_chip_overlap(labels, chips_dir):
+    """True where a label polygon falls in a training chip of the same date.
+
+    The drone models were trained on the chips in chips_dir (named
+    <uuid>_<YYYY-MM-DD>.tif), and every labelled crown inside a chip is
+    rasterized into its mask, so any crown overlapping a chip on that date
+    was seen in training. Both train and test chips count, because the test
+    fold was logged during training.
+    """
+    rows = []
+    for path in sorted(Path(chips_dir).glob("*.tif")):
+        with rasterio.open(path) as src:
+            rows.append({"chip_date": path.stem.rsplit("_", 1)[1].replace("-", "_"),
+                         "geometry": box(*src.bounds), "crs": src.crs})
+    chips = gpd.GeoDataFrame(rows, geometry="geometry", crs=rows[0]["crs"])
+    j = gpd.sjoin(labels[["date", "geometry"]], chips.drop(columns="crs"),
+                  predicate="intersects")
+    seen = j.index[j["date"] == j["chip_date"]].unique()
+    return labels.index.isin(seen)
+
+
 def load_predictions(nc4_path):
     ds = xr.open_dataset(nc4_path)
     species_pred = (
@@ -188,6 +281,48 @@ def binary_metrics(y_true, y_score, threshold):
         **prf_from_confusion(cm),
         "confusion": cm,
     }
+
+
+def bootstrap_ci(y_true, y_score, groups, threshold, n_boot=1000, seed=0):
+    """95% percentile intervals for AUROC, AUPRC, precision and recall.
+
+    Resamples whole crowns (groups) with replacement, since crown-dates of
+    one crown are not independent. Resamples with a single class are
+    skipped.
+    """
+    rng = np.random.default_rng(seed)
+    _, inv = np.unique(groups, return_inverse=True)
+    members = [np.flatnonzero(inv == k) for k in range(inv.max() + 1)]
+    draws = []
+    for _ in range(n_boot):
+        idx = np.concatenate([members[k] for k in rng.integers(0, len(members), len(members))])
+        yb, sb = y_true[idx], y_score[idx]
+        if yb.min() == yb.max():
+            continue
+        pred = sb >= threshold
+        tp = int((pred & (yb == 1)).sum())
+        draws.append((roc_auc_score(yb, sb), average_precision_score(yb, sb),
+                      tp / pred.sum() if pred.sum() else np.nan, tp / (yb == 1).sum()))
+    lo, hi = np.nanpercentile(np.array(draws), [2.5, 97.5], axis=0)
+    names = ("auroc", "auprc", "precision", "recall")
+    return ({f"{k}_lo": v for k, v in zip(names, lo)}
+            | {f"{k}_hi": v for k, v in zip(names, hi)})
+
+
+def metrics_rows(target, metrics, strata, ycol, score_col, threshold, n_boot):
+    """One row per stratum: point metrics plus crown-bootstrap intervals."""
+    rows = []
+    for name, m in metrics.items():
+        if m is None:
+            continue
+        sub = strata[name]
+        ci = bootstrap_ci(sub[ycol].to_numpy(), sub[score_col].to_numpy(),
+                          sub["tag"].to_numpy(), threshold, n_boot)
+        rows.append({"target": target, "stratum": name, "n": m["n"],
+                     "n_pos": m["n_pos"], "n_crowns": int(sub["tag"].nunique()),
+                     **{k: m[k] for k in ("auroc", "auprc", "precision", "recall",
+                                          "accuracy")}, **ci})
+    return rows
 
 
 def fmt_metrics(label, m):
@@ -313,10 +448,10 @@ def get_geometry(geoms, uuid, date):
     return entry["any"], "fallback-uuid"
 
 
-def index_drone_images(drone_dir):
+def index_drone_images(drone_dir, pattern="*_local.tif"):
     """Map YYYY_MM_DD -> drone GeoTIFF path."""
     index = {}
-    for path in sorted(Path(drone_dir).glob("*_local.tif")):
+    for path in sorted(Path(drone_dir).glob(pattern)):
         try:
             index[get_date(str(path))] = path
         except ValueError:
@@ -324,10 +459,14 @@ def index_drone_images(drone_dir):
     return index
 
 
-def _chip_data_uri(tif_path, polygon, chip_size):
-    """Crop the crown, outline it, resize, return a base64 PNG data URI."""
+def _chip_data_uri(tif_path, polygon, chip_size, scaling=None):
+    """Crop the crown, outline it, resize, return a base64 PNG data URI.
+
+    scaling (crown_classification.load_scaling) converts uint16 imagery,
+    e.g. mavic, to the uint8 the model saw.
+    """
     with rasterio.open(tif_path) as src:
-        window, img = extract_centered_window(src, polygon)
+        window, img = extract_centered_window(src, polygon, scaling=scaling)
         img = draw_polygon_on_image(
             img, src, window, polygon, outline=(255, 0, 0), width=3
         )
@@ -421,8 +560,10 @@ def render_summary_report(out_path, stats, plot_uris, link_targets,
         f"GT rows: {f['gt_rows']:,} (uuids {f['gt_uuids']:,}; aggregated from "
         f"{f['gt_rows_raw']:,} labels, {f['dropped_conflicts']} yes/no ties "
         f"dropped) &middot; "
-        f"uuid&rarr;tag mappings: {f['bridge']:,} &middot; "
-        f"prediction rows: {f['pred_rows']:,} (tags {f['pred_tags']:,}) "
+        + (f"uuid&rarr;tag mappings: {f['bridge']:,} &middot; "
+           if f["bridge"] is not None else
+           f"tags from label gpkg ({_esc(f['label_counts'])}) &middot; ")
+        + f"prediction rows: {f['pred_rows']:,} (tags {f['pred_tags']:,}) "
         f"&middot; after uuid&rarr;tag merge: {f['after_uuid']:,} &middot; "
         f"after (tag,date) join: {f['after_join']:,}"
     )
@@ -514,7 +655,7 @@ n_pos&ge;10)</h3>
 
 
 def render_discrepancy_report(merged, geoms, drone_index, out_path,
-                              target, n, chip_size):
+                              target, n, chip_size, scaling=None):
     """Write an HTML report of the worst GT-vs-prediction discrepancies.
 
     target is "flowering" or "deciduous". Ranks every joined row by how
@@ -593,7 +734,7 @@ def render_discrepancy_report(merged, geoms, drone_index, out_path,
         polygon, geom_src = get_geometry(geoms, row["uuid"], row["date_str"])
         tif_path = drone_index[row["date_str"]]
         try:
-            uri = _chip_data_uri(tif_path, polygon, chip_size)
+            uri = _chip_data_uri(tif_path, polygon, chip_size, scaling)
         except Exception as exc:  # noqa: BLE001 - one bad chip must not abort
             n_failed += 1
             print(f"  chip failed for {row['polygon_id']}: {exc}",
@@ -685,7 +826,7 @@ def render_discrepancy_report(merged, geoms, drone_index, out_path,
 
 
 def render_conflict_report(flower_conflicts, geoms, drone_index, out_path,
-                           chip_size):
+                           chip_size, scaling=None):
     """Write an HTML page of crown-dates dropped for a yes/no flowering tie.
 
     flower_conflicts holds the raw GT label rows (multiple per crown-date) for
@@ -705,7 +846,8 @@ def render_conflict_report(flower_conflicts, geoms, drone_index, out_path,
         else:
             polygon, geom_src = get_geometry(geoms, uuid, date_str)
             try:
-                uri = _chip_data_uri(drone_index[date_str], polygon, chip_size)
+                uri = _chip_data_uri(drone_index[date_str], polygon, chip_size,
+                                     scaling)
                 chip = (f'<img src="{uri}" width="{chip_size}" '
                         f'height="{chip_size}"/>')
             except Exception as exc:  # noqa: BLE001 - one bad chip mustn't abort
@@ -796,6 +938,18 @@ def render_conflict_report(flower_conflicts, geoms, drone_index, out_path,
 @click.option("--exclude-train", is_flag=True,
               help="Drop GT labels for any crown (uuid) in the train split "
                    "of --geo-folds, so metrics use held-out crowns only.")
+@click.option("--labels-gpkg", default=None,
+              type=click.Path(exists=True, dir_okay=False),
+              help="Score a labelling-tool gpkg with a `tag` per crown-date "
+                   "(see load_labels_gpkg) instead of --gt-csv + --gpkg.")
+@click.option("--exclude-train-chips", is_flag=True,
+              help="With --labels-gpkg: drop crown-dates whose polygon lies in "
+                   "a training chip of the same date (--train-chips).")
+@click.option("--train-chips", default=TRAIN_CHIPS_DEFAULT, show_default=True,
+              type=click.Path(file_okay=False),
+              help="Directory of the drone models' training chips.")
+@click.option("--n-boot", default=1000, show_default=True, type=int,
+              help="Crown bootstrap resamples for the metric intervals.")
 @click.option(
     "--output-dir",
     default="reports",
@@ -818,24 +972,45 @@ def render_conflict_report(flower_conflicts, geoms, drone_index, out_path,
     type=click.Path(file_okay=False),
     help="Directory of BCI_50ha_*_local.tif drone images for chips.",
 )
+@click.option("--drone-glob", default="*_local.tif", show_default=True,
+              help="Filename pattern of the drone images in --drone-dir.")
+@click.option("--drone-scaling", default=None,
+              type=click.Path(exists=True, dir_okay=False),
+              help="crown_classification scaling config for uint16 drone "
+                   "images (e.g. config/crown_classification_mavic_mkl.yml).")
 @click.option("--n-examples", default=40, show_default=True, type=int,
               help="Number of worst discrepancy examples per target.")
 @click.option("--chip-size", default=300, show_default=True, type=int,
               help="Pixel size of each crown chip in the HTML report.")
 @click.option("--no-visualize", is_flag=True,
               help="Skip the discrepancy HTML reports (metrics only).")
-def main(gt_csv, gpkg, nc4, geo_folds, exclude_train, output_dir,
+def main(gt_csv, gpkg, nc4, geo_folds, exclude_train, labels_gpkg,
+         exclude_train_chips, train_chips, n_boot, output_dir,
          flower_threshold, decid_threshold, leafing_threshold, drone_dir,
-         n_examples, chip_size, no_visualize):
+         drone_glob, drone_scaling, n_examples, chip_size, no_visualize):
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     plot_uris = {}
 
-    print(f"Loading GT  : {gt_csv}")
-    gt = load_gt(gt_csv)
-    print(f"  rows: {len(gt):,}  unique uuids: {gt['uuid'].nunique():,}")
+    label_counts = None
+    if labels_gpkg:
+        print(f"Loading labels gpkg: {labels_gpkg}")
+        gt, label_gdf, label_geoms, label_counts = load_labels_gpkg(labels_gpkg)
+        print(f"  rows: {label_counts['rows']:,}; ignored {label_counts['ignored']:,}; "
+              f"unchecked (tool defaults) {label_counts['unchecked']:,}; "
+              f"kept {label_counts['kept']:,}")
+        if exclude_train_chips:
+            seen = train_chip_overlap(label_gdf, train_chips)
+            gt = gt[~seen].copy()
+            label_counts["in_train_chips"] = int(seen.sum())
+            print(f"  excluded {int(seen.sum()):,} crown-dates inside same-date "
+                  f"training chips; GT rows -> {len(gt):,}")
+    else:
+        print(f"Loading GT  : {gt_csv}")
+        gt = load_gt(gt_csv)
+        print(f"  rows: {len(gt):,}  unique uuids: {gt['uuid'].nunique():,}")
 
-    if exclude_train:
+    if exclude_train and not labels_gpkg:
         train_uuids = load_train_uuids(geo_folds)
         before = len(gt)
         gt = gt[~gt["uuid"].isin(train_uuids)].copy()
@@ -848,19 +1023,27 @@ def main(gt_csv, gpkg, nc4, geo_folds, exclude_train, output_dir,
     print(f"  aggregated to one row per (crown,date): {gt_rows_raw:,} -> "
           f"{len(gt):,} rows; dropped {n_conf} flowering yes/no ties")
 
-    print(f"Loading bridge: {gpkg}")
-    bridge = load_uuid_tag_map(gpkg)
-    print(f"  uuid->tag mappings: {len(bridge):,}")
+    if labels_gpkg:
+        bridge = None
+        merged_uuid = gt.assign(tag=gt["uuid"].astype(int))
+    else:
+        print(f"Loading bridge: {gpkg}")
+        bridge = load_uuid_tag_map(gpkg)
+        print(f"  uuid->tag mappings: {len(bridge):,}")
+        merged_uuid = gt.merge(bridge, on="uuid", how="inner")
+        print(f"After UUID->tag merge: {len(merged_uuid):,} rows")
 
     print(f"Loading nc4 : {nc4}")
     preds = load_predictions(nc4)
     print(f"  prediction rows: {len(preds):,}  tags: {preds['tag'].nunique():,}")
 
-    merged_uuid = gt.merge(bridge, on="uuid", how="inner")
-    print(f"After UUID->tag merge: {len(merged_uuid):,} rows")
-
     merged = merged_uuid.merge(preds, on=["tag", "dt"], how="inner")
     print(f"After (tag, date) join: {len(merged):,} rows")
+    no_pred = merged[["flowering_probability", "deciduous_probability"]].isna().any(axis=1)
+    if no_pred.any():
+        # Crowns outside the classifier's windows have no prediction.
+        merged = merged[~no_pred].copy()
+        print(f"  dropped {int(no_pred.sum()):,} rows with no prediction -> {len(merged):,}")
     if len(merged) == 0:
         print("No overlapping rows; aborting.", file=sys.stderr)
         sys.exit(1)
@@ -1026,17 +1209,34 @@ def main(gt_csv, gpkg, nc4, geo_folds, exclude_train, output_dir,
     plot_uris["decid_continuous"] = _fig_to_uri(fig)
     plt.close(fig)
 
+    metrics_df = pd.DataFrame(
+        metrics_rows("flowering", flower_metrics, strata, "y",
+                     "flowering_probability", flower_threshold, n_boot)
+        + metrics_rows(f"deciduous (leafing<{leafing_threshold})", decid_metrics,
+                       strata_d, "y_leaf", "deciduous_probability",
+                       decid_threshold, n_boot))
+    metrics_df.to_csv(out_dir / "gt_vs_ml_metrics.csv", index=False)
+    print(f"\nMetrics with 95% crown-bootstrap intervals ({n_boot} resamples):")
+    print(metrics_df.round(3).to_string(index=False))
+
     print(f"\nPlots written to: {out_dir}/")
 
     # ----- Discrepancy visualization -----
     if not no_visualize:
         print("\n=== Discrepancy reports ===")
-        print(f"Loading crown geometries: {gpkg}")
-        geoms = load_crown_geometries(gpkg)
+        if labels_gpkg:
+            geoms = label_geoms
+        else:
+            print(f"Loading crown geometries: {gpkg}")
+            geoms = load_crown_geometries(gpkg)
         print(f"  crowns with geometry: {len(geoms):,}")
-        print(f"Indexing drone images: {drone_dir}")
-        drone_index = index_drone_images(drone_dir)
+        print(f"Indexing drone images: {drone_dir} ({drone_glob})")
+        drone_index = index_drone_images(drone_dir, drone_glob)
         print(f"  drone dates: {len(drone_index):,}")
+        scaling = None
+        if drone_scaling:
+            from crown_classification import load_scaling
+            scaling = load_scaling(drone_scaling)
 
         for target in ("flowering", "deciduous"):
             render_discrepancy_report(
@@ -1047,6 +1247,7 @@ def main(gt_csv, gpkg, nc4, geo_folds, exclude_train, output_dir,
                 target,
                 n_examples,
                 chip_size,
+                scaling,
             )
 
         render_conflict_report(
@@ -1055,6 +1256,7 @@ def main(gt_csv, gpkg, nc4, geo_folds, exclude_train, output_dir,
             drone_index,
             out_dir / "gt_vs_ml_flowering_conflicts.html",
             chip_size,
+            scaling,
         )
 
     # ----- Single summary report -----
@@ -1065,7 +1267,8 @@ def main(gt_csv, gpkg, nc4, geo_folds, exclude_train, output_dir,
             "gt_rows_raw": gt_rows_raw,
             "dropped_conflicts": int(n_conf),
             "gt_uuids": int(gt["uuid"].nunique()),
-            "bridge": len(bridge),
+            "bridge": len(bridge) if bridge is not None else None,
+            "label_counts": label_counts,
             "pred_rows": len(preds),
             "pred_tags": int(preds["tag"].nunique()),
             "after_uuid": len(merged_uuid),
@@ -1084,6 +1287,7 @@ def main(gt_csv, gpkg, nc4, geo_folds, exclude_train, output_dir,
     }
     link_targets = {
         "Joined GT/prediction table (CSV)": "gt_vs_ml_joined.csv",
+        "Metrics with crown-bootstrap intervals (CSV)": "gt_vs_ml_metrics.csv",
         "Flowering discrepancy gallery (HTML)":
             "gt_vs_ml_flowering_discrepancies.html",
         "Deciduous discrepancy gallery (HTML)":

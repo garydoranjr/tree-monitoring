@@ -61,7 +61,19 @@ python scripts/apply_drone_labels.py <model_path> <crownmap_shp> <image_dir> <ou
 python scripts/extract_crown_stats_from_masks.py <crownmap_timeseries> <mask_tifs...> <output_nc>
 ```
 
-`extract_crown_stats_from_masks.py` needs a timeseries crown map with `tag`, `latin`, and `date` columns, where `date` is a `YYYY_MM_DD` string matching the `_YYYY_MM_DD_` date in each mask filename; crowns whose date matches no mask are silently skipped, so a date-format mismatch yields all-NaN output. The crown map used in the original run was not recorded, but was most likely `/Volumes/Earth03/flower/crowns_20240803/BCI_50ha_crownmap_timeseries.shp` (106 dates, 2018-04-04 to 2024-03-18, 2,345 crowns per date). `BCI_ava_crownmap_timeseries.gpkg` will not work as-is because its dates are hyphenated (`YYYY-MM-DD`).
+`extract_crown_stats_from_masks.py` needs a timeseries crown map with `tag`, `latin`, and `date` columns, where `date` is a `YYYY_MM_DD` string matching the `_YYYY_MM_DD_` date in each mask filename; crowns whose date matches no mask are silently skipped, so a date-format mismatch yields all-NaN output. `BCI_ava_crownmap_timeseries.gpkg` will not work as-is because its dates are hyphenated (`YYYY-MM-DD`). It needs `rasterstats` (in `environment.yml`).
+
+The per-crown tables in `/Volumes/Earth03/flower/results/` (rebuilt October 2026) are:
+
+| file | crown map | rasters |
+|---|---|---|
+| `crown_classifications.nc4` | `crowns_20240803/BCI_50ha_crownmap_timeseries.shp` (106 dated maps, 2,345 crowns each) | all 106 phantom `classifications/*_local_classifications.tif`, 2018-04-04 to 2024-03-18 (24782016 and C3KW2X) |
+| `crown_classifications_mavic.nc4` | `results/crowns_mavic_dates.gpkg`: the 2024-03-18 dated polygons copied onto each mavic date by `scripts/make_mavic_crown_dates.py` (the dated map ends at the last phantom flight) | all 96 `classifications/*_M3M_aligned_global_RGB_classifications.tif` (3x3 colour transfer), 2024-03-06 to 2026-01-20 |
+| `older/crown_classifications_mavic_perband.nc4` | as for mavic | the archived per-band mavic run in `older/classifications_mavic_perband/` |
+
+The January 2026 table (24782016 only, 90 dates) is archived as `older/crown_classifications_24782016_20260118.nc4`; it is the one behind the untracked `reports/` and `reports_w_train/` evaluations. The rebuilt phantom table reproduces it to within 3e-7 on all 90 of its dates, which confirms it was built from the same dated crown map.
+
+`compare_classifications_to_gt.py --labels-gpkg <gpkg> --nc4 <nc4>` scores a labelling-tool export that carries the crown `tag` on each crown-date polygon (e.g. `vicente_202610/latest_paulino_label.gpkg`) against any of these tables; `summarize_label_evals.py` puts several such runs side by side.
 
 Batch shell scripts: `run_classification_flower.sh`, `run_classification_decid.sh`, `run_merge_flower.sh`, `run_merge_decid.sh`.
 
