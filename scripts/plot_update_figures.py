@@ -12,8 +12,9 @@ Each subcommand writes <name>.png and <name>.pdf into OUTDIR (default
                              deciduous probability maps
   classification-timeseries  per-crown flowering / deciduous fraction across
                              the phantom 2018-2024 and mavic 2024-2026 mosaics
-  mavic-extension            mavic flowering rate after colour transfer vs the
-                             per-band run, continuing the phantom record
+  mavic-extension            mavic flowering (or deciduous) rate after colour
+                             transfer vs the per-band run, continuing the
+                             phantom record
   same-date                  per-crown classifier output on the dates flown by
                              both drones (2024-03-06, 2024-03-18)
   coreg-stats                drone -> Planet label transfer yield and AROSICS
@@ -681,13 +682,18 @@ def classification_timeseries(outdir, decimate, threshold, min_pixels):
               default=DEFAULT_OUT / 'classification_timeseries.csv', show_default=True,
               help='classification-timeseries CSV whose mavic rows are the '
                    'per-band (pre-colour-transfer) run.')
-def mavic_extension(outdir, before_csv):
-    """Mavic flowering rate after colour transfer, continuing the phantom record.
+@click.option('--quantity', type=click.Choice(['flowering', 'deciduous']),
+              default='flowering', show_default=True,
+              help='Plot the share of crowns flowering or deciduous.')
+def mavic_extension(outdir, before_csv, quantity):
+    """Mavic flowering/deciduous rate after colour transfer, continuing the phantom record.
 
     Reads OUTDIR/classification_timeseries.csv (run classification-timeseries
     first) and overlays the old per-band mavic rows from --before-csv. The
     right panel folds every year onto day of year to compare like seasons.
+    Writes mavic_extension.png (flowering) or mavic_extension_deciduous.png.
     """
+    col = f'{quantity}_frac'
     df = pd.read_csv(outdir / 'classification_timeseries.csv', parse_dates=['date'])
     old = pd.read_csv(before_csv, parse_dates=['date'])
     old = old[old['source'] == 'mavic'].sort_values('date')
@@ -696,7 +702,7 @@ def mavic_extension(outdir, before_csv):
     fig, (ax, axd) = plt.subplots(1, 2, figsize=(15, 4.8), sharey=True,
                                   gridspec_kw={'width_ratios': [3, 1.2]})
     old_label = 'mavic, per-band scaling (before)'
-    vals = 100 * old['flowering_frac']
+    vals = 100 * old[col]
     ax.plot(old['date'], vals, marker='s', ms=2.5, color=C_GREY, lw=0.8, alpha=0.5,
             label=f'{old_label}, {len(old)} dates, median {vals.median():.1f}%')
     ax.hlines(vals.median(), old['date'].min(), old['date'].max(),
@@ -707,7 +713,7 @@ def mavic_extension(outdir, before_csv):
         g = df[df['source'] == series]
         if series == 'mavic':
             label = 'mavic, 3x3 colour transfer (after)'
-        vals = 100 * g['flowering_frac']
+        vals = 100 * g[col]
         ax.plot(g['date'], vals, marker=mk, ms=3.5, color=color, lw=1,
                 label=f'{label}, {len(g)} dates, median {vals.median():.1f}%')
         ax.hlines(vals.median(), g['date'].min(), g['date'].max(),
@@ -719,12 +725,12 @@ def mavic_extension(outdir, before_csv):
     ax.set_ylim(0, None)
     ax.text(rb, ax.get_ylim()[1], ' 24782016 | C3KW2X ', ha='center', va='bottom',
             fontsize=7.5)
-    ax.set_ylabel('% crowns flowering')
+    ax.set_ylabel(f'% crowns {quantity}')
     ax.xaxis.set_major_locator(mdates.YearLocator())
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
     ax.legend(fontsize=8, loc='upper left')
-    ax.set_title('Drone flowering detection rate: share of crowns (2022-09-29 map) '
-                 'with mean P(flowering) > 0.5', pad=14)
+    ax.set_title(f'Drone {quantity} detection rate: share of crowns (2022-09-29 map) '
+                 f'with mean P({quantity}) > 0.5', pad=14)
     month_starts = pd.date_range('2001-01-01', periods=12, freq='MS')
     axd.set_xticks(month_starts.dayofyear)
     axd.set_xticklabels([m.strftime('%b')[0] for m in month_starts])
@@ -734,14 +740,14 @@ def mavic_extension(outdir, before_csv):
     for a in (ax, axd):
         a.grid(alpha=0.3)
     fig.tight_layout()
-    save(fig, outdir, 'mavic_extension')
+    save(fig, outdir, 'mavic_extension' + ('' if quantity == 'flowering' else f'_{quantity}'))
 
-    med = {s: df.loc[df['source'] == s, 'flowering_frac'].median() for s in SERIES}
+    med = {s: df.loc[df['source'] == s, col].median() for s in SERIES}
     for series in SERIES:
         g = df[df['source'] == series]
-        click.echo(f'{series}: {len(g)} dates, flowering median '
-                   f'{100 * med[series]:.2f}%, mean {100 * g["flowering_frac"].mean():.2f}%')
-    for name, m in (('before', old['flowering_frac'].median()), ('after', med['mavic'])):
+        click.echo(f'{series}: {len(g)} dates, {quantity} median '
+                   f'{100 * med[series]:.2f}%, mean {100 * g[col].mean():.2f}%')
+    for name, m in (('before', old[col].median()), ('after', med['mavic'])):
         ratios = ', '.join(f'{m / med[s]:.1f}x {s}' for s in SERIES if s != 'mavic')
         click.echo(f'mavic {name}: median {100 * m:.2f}% ({ratios})')
 
