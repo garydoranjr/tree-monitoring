@@ -22,6 +22,9 @@ Subcommands write into OUTDIR (default
   reclassify     re-runs the flowering/deciduous models on the crowns where
                  the cameras disagree (plus controls) under each transform,
                  and phantom made to look like mavic (the reverse test)
+  transfer-figures
+                 illustrations of the production 3x3 colour transfer:
+                 same-day RGB before/after, distributions, covariance
 
 Typical usage:
     python scripts/compare_drone_radiometry.py distributions
@@ -645,6 +648,213 @@ def mkl_config_yaml(tf):
 # per pixel, with DN the (R, G, B) uint16 vector. Rows of `matrix` give the
 # R, G, B outputs. Band 4 (alpha) is ignored, as before.
 {body}"""
+
+
+# --------------------------------------------------------------------------
+# transfer-figures
+# --------------------------------------------------------------------------
+MKL_CONFIG = Path(__file__).resolve().parent.parent / 'config/crown_classification_mavic_mkl.yml'
+# Encodings shared by the transfer figures: phantom is the target, grey the
+# old per-band mavic input, red the colour-transferred mavic input.
+TRANSFER_STYLES = (('phantom (C3KW2X global, target)', pu.C_PHANTOM_EXT, '-'),
+                   ('mavic, per-band scaling (before)', pu.C_GREY, '--'),
+                   ('mavic, 3x3 colour transfer (after)', pu.C_MAVIC, '-'))
+
+
+@cli.command('transfer-figures')
+@click.option('--outdir', type=click.Path(file_okay=False, path_type=Path), required=True)
+@click.option('--samples-dir', type=click.Path(file_okay=False, path_type=Path),
+              default=DEFAULT_OUT, show_default=True,
+              help='Directory holding samples_<date>.npz from `distributions`.')
+@click.option('--pad-m', default=6.0, show_default=True,
+              help='Margin around each zoomed crown (m).')
+def transfer_figures(outdir, samples_dir, pad_m):
+    """Illustrate the production mavic colour transfer on the same-day flights.
+
+    Writes colour_transfer_rgb.png (phantom vs mavic before/after, whole plot
+    and three crowns), colour_transfer_distributions.png (per-band histograms
+    and chromaticity) and colour_transfer_covariance.png (2-sigma RGB
+    ellipses and the per-band vs 3x3 coefficients). Crowns for the RGB figure
+    come from OUTDIR/same_date_crowns.csv (run `plot_update_figures.py
+    same-date` there first). Distribution figures use
+    the native-pixel samples the production transform was fitted on, so they
+    are in-sample; renorm_cdf_distances.csv has the cross-date scores.
+    """
+    import crown_classification as cc
+    perband = cc.load_scaling(pu.MAVIC_SCALING)
+    mkl = cc.load_scaling(MKL_CONFIG)
+    samples = [load_samples(samples_dir, d) for d in pu.SAME_DATES]
+    pha = np.concatenate([p for p, _ in samples])
+    mav16 = np.concatenate([m for _, m in samples])
+    pixels = (pha, to_uint8(mav16, perband), to_uint8(mav16, mkl))
+    plot_transfer_rgb(perband, mkl, pad_m, outdir)
+    plot_transfer_distributions(pixels, outdir)
+    plot_transfer_covariance(pixels, perband, mkl, outdir)
+
+
+def pick_transfer_crowns(outdir, crowns, min_sep_m=40.0):
+    """(date, crown, label, p_flower) for two removed mavic-only calls and one kept call.
+
+    Compares the per-band run (pu.DEFAULT_OUT) with OUTDIR/same_date_crowns.csv,
+    which `plot_update_figures.py same-date` writes from the current rasters.
+    Picks are at least min_sep_m apart so the zooms show different scenes.
+    """
+    old = pd.read_csv(pu.DEFAULT_OUT / 'same_date_crowns.csv')
+    new = pd.read_csv(outdir / 'same_date_crowns.csv')
+    old = old[old.mosaic == 'mavic'].set_index(['date', 'crown'])['p_flower']
+    w = new.pivot_table(index=['date', 'crown'], columns='mosaic', values='p_flower').dropna()
+    w['before'] = old.reindex(w.index)
+    removed = w[(w.before > 0.5) & (w['phantom local'] < 0.2) & (w.mavic < 0.5)]
+    kept = w[(w.before > 0.5) & (w['phantom local'] > 0.5) & (w.mavic > 0.5)]
+    xy = np.column_stack([crowns.centroid.x, crowns.centroid.y])
+    picks = []
+    for cands, label, n in (
+            (removed.sort_values('before', ascending=False).index, 'mavic-only call removed', 2),
+            (kept[['phantom local', 'mavic']].min(axis=1).sort_values(ascending=False).index,
+             'flowering on both, kept', 1)):
+        for d, c in cands:
+            if n and all(np.hypot(*(xy[c] - xy[p[1]])) >= min_sep_m for p in picks):
+                picks.append((d, c, label))
+                n -= 1
+    return [(d, c, lab, w.loc[(d, c)]) for d, c, lab in picks]
+
+
+def transfer_panels(d, bounds, factor, perband, mkl):
+    """(RGB 0-1 float image, extent) for phantom, mavic per-band and mavic colour transfer.
+
+    The cameras have different pixel sizes, so each image keeps its own extent.
+    """
+    import crown_classification as cc
+    pha, t_p = pu.read_bounds(phantom_path(d), bounds, [1, 2, 3], factor)
+    mav, t_m = pu.read_bounds(mavic_path(d), bounds, [1, 2, 3], factor)
+    out = [(pha, t_p)] + [(np.where(mav.sum(axis=0) > 0, cc.to_uint8(mav, scaling), 0), t_m)
+                          for scaling in (perband, mkl)]
+    panels = []
+    for a, t in out:
+        rgb = np.moveaxis(a, 0, -1) / 255.0
+        rgb[a.sum(axis=0) == 0] = 1
+        panels.append((rgb, pu.extent(a, t)))
+    return panels
+
+
+def plot_transfer_rgb(perband, mkl, pad_m, outdir):
+    import geopandas as gpd
+    crowns = gpd.read_file(pu.CROWNMAP)
+    species = pu.crown_species()
+    picks = pick_transfer_crowns(outdir, crowns)
+    cb = crowns.total_bounds
+    rows = [(pu.SAME_DATES[0].replace('_', '-'), (cb[0] - 10, cb[1] - 10, cb[2] + 10, cb[3] + 10),
+             16, None, 'whole 50ha plot\n(1/16 resolution)')]
+    for d, c, label, p in picks:
+        b = crowns.geometry.iloc[c].bounds
+        rows.append((d, (b[0] - pad_m, b[1] - pad_m, b[2] + pad_m, b[3] + pad_m), 1, c,
+                     f'crown {c}, {species[c]}\n{label}\n'
+                     f'P(flowering) phantom {p["phantom local"]:.2f}, '
+                     f'mavic {p.before:.2f} -> {p.mavic:.2f}'))
+    fig, axes = plt.subplots(len(rows), 3, figsize=(13, 4.1 * len(rows)), squeeze=False)
+    for r, (d, bounds, factor, c, label) in enumerate(rows):
+        panels = transfer_panels(d.replace('-', '_'), bounds, factor, perband, mkl)
+        for k, ((rgb, ext), (name, color, _)) in enumerate(zip(panels, TRANSFER_STYLES)):
+            ax = axes[r, k]
+            ax.imshow(rgb, extent=ext, interpolation='nearest')
+            if c is not None:
+                crowns.iloc[[c]].boundary.plot(ax=ax, color='yellow', lw=1.2)
+            ax.set_xlim(bounds[0], bounds[2])
+            ax.set_ylim(bounds[1], bounds[3])
+            ax.set_xticks([])
+            ax.set_yticks([])
+            for s in ax.spines.values():
+                s.set_edgecolor(color)
+                s.set_linewidth(2.5)
+            ax.set_title(f'{d} {name}', fontsize=9)
+        axes[r, 0].set_ylabel(label, fontsize=8.5)
+    fig.suptitle('Mavic RGB as the flowering model sees it, before and after the 3x3 colour '
+                 'transfer, next to the same-day phantom flight', fontsize=11)
+    fig.tight_layout()
+    pu.save(fig, outdir, 'colour_transfer_rgb')
+
+
+def plot_transfer_distributions(pixels, outdir):
+    fig, axes = plt.subplots(1, 4, figsize=(19, 4.2))
+    x = np.arange(256)
+    for k, b in enumerate(BANDS):
+        ax = axes[k]
+        for px, (name, color, ls) in zip(pixels, TRANSFER_STYLES):
+            h = np.bincount(px[:, k], minlength=256)[:256] / len(px)
+            ax.plot(x, h, color=color, ls=ls, lw=1.3, label=name)
+        before, after = (np.abs(cdf(pixels[0][:, k]) - cdf(p[:, k])).mean() for p in pixels[1:])
+        ax.set_title(f'{b} band: mean |CDF difference| to phantom {before:.3f} -> {after:.3f}',
+                     fontsize=9.5)
+        ax.set_xlim(0, 255)
+        ax.set_ylim(0, None)
+        ax.set_xlabel(f'{b} (uint8 model input)')
+        ax.set_ylabel('fraction of pixels')
+    axes[0].legend(fontsize=8, loc='upper right')
+    ax = axes[3]
+    for px, (name, color, ls) in zip(pixels, TRANSFER_STYLES):
+        # Chromaticity of near-black pixels is quantization noise.
+        c = chroma(px[px.astype(np.int32).sum(axis=1) >= 75])
+        h, xe, ye = np.histogram2d(c[:, 0], c[:, 1], bins=80,
+                                   range=((0.15, 0.55), (0.25, 0.55)))
+        p = h / h.sum()
+        ax.contour((xe[:-1] + xe[1:]) / 2, (ye[:-1] + ye[1:]) / 2, p.T,
+                   levels=np.quantile(p[p > 0], [0.5, 0.9]), colors=color,
+                   linestyles=ls, linewidths=(0.8, 1.5))
+        m = c.mean(axis=0)
+        ax.plot(m[0], m[1], marker='+', ms=10, mew=2, color=color)
+    ax.set_xlabel('r = R / (R+G+B)')
+    ax.set_ylabel('g = G / (R+G+B)')
+    ax.set_title('Chromaticity, R+G+B >= 75 (50%/90% density contours, + = mean)',
+                 fontsize=9.5)
+    fig.suptitle('Same-day pixel distributions, 2024-03-06 and 2024-03-18 pooled '
+                 '(native-resolution samples over the joint 50ha footprint)', fontsize=11)
+    fig.tight_layout()
+    pu.save(fig, outdir, 'colour_transfer_distributions')
+
+
+def plot_transfer_covariance(pixels, perband, mkl, outdir):
+    from matplotlib.patches import Ellipse
+    fig, axes = plt.subplots(1, 5, figsize=(22, 4.4),
+                             gridspec_kw={'width_ratios': [1, 1, 1, 0.8, 0.8]})
+    stats = [(px.astype(np.float64).mean(axis=0), np.cov(px.T.astype(np.float64)))
+             for px in pixels]
+    for ax, (i, j) in zip(axes, ((0, 1), (1, 2), (0, 2))):
+        for (mu, C), (name, color, ls) in zip(stats, TRANSFER_STYLES):
+            sub = C[np.ix_((i, j), (i, j))]
+            w, V = np.linalg.eigh(sub)
+            ang = np.degrees(np.arctan2(V[1, 1], V[0, 1]))
+            rho = sub[0, 1] / np.sqrt(sub[0, 0] * sub[1, 1])
+            # The fit matches phantom's covariance, so draw phantom wide underneath.
+            target = name.startswith('phantom')
+            ax.add_patch(Ellipse((mu[i], mu[j]), 4 * np.sqrt(w[1]), 4 * np.sqrt(w[0]),
+                                 angle=ang, fill=False, color=color, ls=ls,
+                                 lw=5 if target else 1.6, alpha=0.45 if target else 1,
+                                 label=f'{name.split(" (")[0]}, r={rho:.2f}'))
+            ax.plot(mu[i], mu[j], marker='o' if target else '+', ms=9,
+                    mew=2, color=color, alpha=0.45 if target else 1)
+        ax.set_xlim(0, 255)
+        ax.set_ylim(0, 255)
+        ax.set_aspect('equal')
+        ax.plot([0, 255], [0, 255], color='#dddddd', lw=0.6, zorder=0)
+        ax.set_xlabel(f'{BANDS[i]} (uint8)')
+        ax.set_ylabel(f'{BANDS[j]} (uint8)')
+        ax.set_title(f'{BANDS[i]}-{BANDS[j]}: 2-sigma ellipses', fontsize=9.5)
+        ax.legend(fontsize=7, loc='upper left')
+    g, _ = perband
+    for ax, M, title in ((axes[3], np.diag(g), 'per-band map (before)'),
+                         (axes[4], mkl['matrix'], '3x3 colour transfer (after)')):
+        M = 1000 * np.asarray(M)
+        ax.imshow(M, cmap='Greys', vmin=0, vmax=4)
+        for (r, c), v in np.ndenumerate(M):
+            ax.text(c, r, f'{v:.2f}', ha='center', va='center', fontsize=9,
+                    color='white' if v > 2 else 'k')
+        ax.set_xticks(range(3), [f'{b} in' for b in BANDS])
+        ax.set_yticks(range(3), [f'{b} out' for b in BANDS])
+        ax.set_title(f'{title}\nuint8 per 1000 DN', fontsize=9.5)
+    fig.suptitle('Same-day RGB covariance in the model\'s uint8 space (both dates pooled) '
+                 'and the coefficients mapping mavic uint16 DN to it', fontsize=11)
+    fig.tight_layout()
+    pu.save(fig, outdir, 'colour_transfer_covariance')
 
 
 # --------------------------------------------------------------------------
