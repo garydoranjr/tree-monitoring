@@ -264,6 +264,50 @@ under both alignments, and AROSICS gave each almost the same shift either
 way (median difference in magnitude +0.01 m). See `plot_update_figures.py
 coreg-stats-alignment`.
 
+### 2d. Mavic masks after the colour transfer (`20261012` set)
+
+The mavic orthos were re-classified with the 3x3 colour transfer
+(`config/crown_classification_mavic_mkl.yml`, see
+[drone_radiometry.md](drone_radiometry.md)). AROSICS coregisters the drone
+*ortho*, not the classification, so the shifts, Planet chips, cloud masks,
+QA PNGs and quality ratings of the `20260915` set all still hold. Only the
+`*.mask.png` crown masks change. `scripts/reapply_drone_labels.py` copies a
+set and regenerates its masks from new classifications, using the logged
+shifts and the masking code from `apply_drone_labels_coreg.py`:
+
+```bash
+F=/Volumes/Earth03/flower
+KMP_DUPLICATE_LIB_OK=TRUE python scripts/reapply_drone_labels.py \
+  $F/20260915_globus_label_application_x4_coreg_4band_stretch_stats_rerun \
+  $F/results/classifications \
+  $F/20261012_globus_mkl_label_application_x4_coreg_4band_stretch_stats
+```
+
+It replays the log in order, so where one scene pairs with two label dates
+the later date's mask wins, as in the original build. Each label date runs
+in a fresh worker process. Run in a single process, memory crept up across
+dates until the job was killed on the 16 GB laptop.
+
+**Check.** Rerunning it on the archived per-band classifications
+(`results/older/classifications_mavic_perband/`) reproduced all 154
+`20260915` masks pixel for pixel. Each run takes about 25 min on the
+laptop, against about 10 h with swapping for a full AROSICS rebuild.
+
+**Result.** The colour transfer halves the mavic crown masks:
+
+| | old (per-band) masks | new (colour transfer) masks |
+|---|---|---|
+| Crown pixels, all 154 chips | 7.59 M | 3.70 M |
+| Median crown fraction, 70 Good chips | 5.59 % | 2.65 % |
+
+The phantom chips in the curated set have a median crown fraction of 4.03 %.
+The masks are the union of flowering and deciduous calls (`mode both`), so
+the drop is mostly the false mavic flowering calls the transfer removes.
+Mavic is now below phantom rather than above it.
+
+`vetting.json` (70 Good, 35 Fair, 49 Poor) was copied unchanged, with
+`imagedir` updated.
+
 ### 3. Review the coregistration
 
 Before rating anything, check that the drone ortho, the Planet chip and the
@@ -385,6 +429,31 @@ Result (2026-10-02):
 In the all-sources set the five colliding chips are byte-identical to
 their mavic copies. Every chip in both sets crops to 512 × 512 on both
 halves, and none has zero instances.
+
+**All-sources set with colour-transfer mavic masks (`20261012`).** This is the
+same assembly with the `20261012` mavic set (section 2d) in place of
+`20260915`. It still adds the vetted mavic chips before the C3KW2X ones with
+`--no-overwrite`:
+
+```bash
+F=/Volumes/Earth03/flower
+NEW=$F/20261012_globus_mkl_label_application_x4_coreg_4band_stretch_stats
+PE=$F/20261002_phantomext_label_application_x4_coreg_4band_stretch_stats
+DST=$F/20261012_full_label_extended2_mkl_x4_coreg_4band_stretch_stats_curated
+rsync -a $F/20260706_full_label_application_x4_coreg_4band_stretch_stats_curated/ "$DST"/
+python copy_good_planet_vetting.py --vetting $NEW/vetting.json --src $NEW --dst "$DST"
+python copy_good_planet_vetting.py --vetting $PE/vetting.json --src $PE --dst "$DST" --no-overwrite
+```
+
+Comparison with `20261002_full_label_extended2_..._curated`:
+- It has the same 142 chips and the same 711 file names.
+- 641 files are byte-identical. These are every phantom and C3KW2X file, every
+  mavic image, and `coreg_log.json`.
+- Only the 70 mavic `*.mask.png` differ.
+- Left-split crown instances (`--min-instance-size 64`) are **5,173**,
+  against 7,908 before. The mavic chips went from 4,897 to 2,162 and the
+  rest stayed at 3,011.
+- No chip has zero instances.
 
 ### Alternative: the programmatic filter
 
