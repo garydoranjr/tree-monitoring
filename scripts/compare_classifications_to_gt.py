@@ -28,7 +28,12 @@ crown_classifications_mavic.nc4. Example:
         --drone-dir /Volumes/Earth03/flower/stri/globus/RGB \
         --drone-glob '*_M3M_aligned_global_RGB.tif' \
         --drone-scaling config/crown_classification_mavic_mkl.yml \
+        --crownmap /Volumes/Earth03/flower/crowns_20240803/BCI_50ha_crownmap_timeseries.shp,/Volumes/Earth03/flower/results/crowns_mavic_dates.gpkg \
         --output-dir /Volumes/Earth03/flower/figs/20261013_updates/paulino_eval/mavic
+
+The label outlines in latest_paulino_label.gpkg are offset by about 2.9 m
+from their crowns, so by default they are replaced by the scored outline of
+the same tag and date (snap_labels_to_crownmap); `--crownmap ''` keeps them.
 """
 import base64
 import html
@@ -185,24 +190,57 @@ def load_uuid_tag_map(gpkg_path):
     return gdf[["uuid", "tag"]].drop_duplicates()
 
 
-def load_crownmap(path):
-    """Dated crown map: one polygon per (crown, date) with the scored outline.
+def load_crownmap(paths):
+    """Dated crown map(s): one polygon per (crown, date), the scored outline.
 
-    Returns (crowns, n_shared): crowns has uuid (GlobalID), date
-    (YYYY_MM_DD), tag (int), crown_area (m^2) and geometry, without the
-    crowns whose tag is shared with another crown (the nc4 is keyed by tag
-    and keeps only one of them); n_shared counts those dropped crowns.
+    paths is one path or a comma-separated list (e.g. the phantom dated map
+    and results/crowns_mavic_dates.gpkg); on a (crown, date) in more than
+    one, the first wins. Returns (crowns, shared): crowns has uuid
+    (GlobalID), date (YYYY_MM_DD), tag (int), crown_area (m^2) and geometry,
+    without the crowns whose tag is shared with another crown (the nc4 is
+    keyed by tag and keeps only one of them); shared lists those crowns'
+    uuid and tag.
     """
-    gdf = gpd.read_file(path)
-    if gdf.crs is not None and gdf.crs.to_epsg() != 32617:
-        gdf = gdf.to_crs(epsg=32617)
-    gdf = gdf.rename(columns={"GlobalID": "uuid"})
+    parts = []
+    for path in paths.split(","):
+        gdf = gpd.read_file(path)
+        if gdf.crs is not None and gdf.crs.to_epsg() != 32617:
+            gdf = gdf.to_crs(epsg=32617)
+        parts.append(gdf[["GlobalID", "date", "tag", "geometry"]])
+    gdf = pd.concat(parts, ignore_index=True).rename(columns={"GlobalID": "uuid"})
+    gdf = gdf.drop_duplicates(["uuid", "date"])
     gdf["tag"] = gdf["tag"].astype(int)
     pairs = gdf[["uuid", "tag"]].drop_duplicates()
-    shared = pairs["tag"].duplicated(keep=False)
-    gdf = gdf[~gdf["uuid"].isin(pairs.loc[shared, "uuid"])].copy()
+    shared = pairs[pairs["tag"].duplicated(keep=False)]
+    gdf = gdf[~gdf["uuid"].isin(shared["uuid"])].copy()
     gdf["crown_area"] = gdf.geometry.area
-    return gdf[["uuid", "date", "tag", "crown_area", "geometry"]], int(shared.sum())
+    return gdf[["uuid", "date", "tag", "crown_area", "geometry"]], shared
+
+
+def snap_labels_to_crownmap(labels, crowns):
+    """Replace label polygons with the scored outline of the same tag and date.
+
+    Labelling-tool exports (latest_paulino_label.gpkg) sit about 2.9 m north
+    and 0.7 m west of where their crowns are in every mosaic, while the dated
+    crown map fits at about zero shift. Labels with no crown-map polygon on
+    their date are translated by the median label-minus-map centroid offset
+    of the matched ones. Returns (labels, stats).
+    """
+    labels = labels.copy()
+    ref = crowns.drop_duplicates(["tag", "date"]).set_index(["tag", "date"]).geometry
+    key = pd.MultiIndex.from_arrays([labels["tag"], labels["date"]])
+    hit = key.isin(ref.index)
+    matched = ref.reindex(key[hit])
+    off = (labels.geometry[hit].centroid.get_coordinates().to_numpy()
+           - gpd.GeoSeries(matched.values).centroid.get_coordinates().to_numpy())
+    dx, dy = np.median(off, axis=0) if hit.any() else (0.0, 0.0)
+    geom = labels.geometry.copy()
+    geom[hit] = matched.values
+    geom[~hit] = labels.geometry[~hit].translate(-dx, -dy)
+    labels = labels.set_geometry(geom.values, crs=labels.crs)
+    stats = {"snapped": int(hit.sum()), "translated": int((~hit).sum()),
+             "median_dx": float(dx), "median_dy": float(dy)}
+    return labels, stats
 
 
 def geoms_by_crown(gdf, key="uuid"):
@@ -1082,8 +1120,10 @@ def render_conflict_report(flower_conflicts, geoms, drone_index, out_path,
                    "--crownmap) lies in a training chip of the same date "
                    "(--train-chips).")
 @click.option("--crownmap", default=CROWNMAP_DEFAULT, show_default=True,
-              help="Dated crown map giving the uuid->tag bridge, crown areas "
-                   "and gallery outlines for --gt-csv; '' uses --gpkg instead.")
+              help="Dated crown map(s), comma-separated, of the scored outlines. "
+                   "With --gt-csv: the uuid->tag bridge, crown areas and gallery "
+                   "outlines ('' uses --gpkg instead). With --labels-gpkg: label "
+                   "outlines are snapped to them (see snap_labels_to_crownmap).")
 @click.option("--size-bins", default=SIZE_BINS_DEFAULT, show_default=True,
               help="Comma-separated crown-area bin edges (m^2).")
 @click.option("--train-chips", default=TRAIN_CHIPS_DEFAULT, show_default=True,
@@ -1144,6 +1184,20 @@ def main(gt_csv, gpkg, nc4, geo_folds, exclude_train, labels_gpkg,
         print(f"  rows: {label_counts['rows']:,}; ignored {label_counts['ignored']:,}; "
               f"unchecked (tool defaults) {label_counts['unchecked']:,}; "
               f"kept {label_counts['kept']:,}")
+        if crownmap:
+            print(f"Loading dated crown map(s): {crownmap}")
+            crowns, shared = load_crownmap(crownmap)
+            n_shared = len(shared)
+            drop = label_gdf["tag"].isin(shared["tag"])
+            gt, label_gdf = gt[~drop].copy(), label_gdf[~drop].copy()
+            label_gdf, snap = snap_labels_to_crownmap(label_gdf, crowns)
+            label_geoms = geoms_by_crown(label_gdf.assign(uuid=gt["uuid"]))
+            label_counts |= {"shared_tag": int(drop.sum()), **snap}
+            print(f"  dropped {int(drop.sum()):,} labels on crowns sharing a tag; "
+                  f"snapped {snap['snapped']:,} outlines to the crown map; "
+                  f"translated {snap['translated']:,} by the median offset "
+                  f"(label - map: dx {snap['median_dx']:+.2f} m, "
+                  f"dy {snap['median_dy']:+.2f} m)")
         if exclude_train_chips:
             seen = train_chip_overlap(label_gdf, train_chips)
             gt = gt[~seen].copy()
@@ -1156,7 +1210,8 @@ def main(gt_csv, gpkg, nc4, geo_folds, exclude_train, labels_gpkg,
         print(f"  rows: {len(gt):,}  unique uuids: {gt['uuid'].nunique():,}")
         if crownmap:
             print(f"Loading dated crown map: {crownmap}")
-            crowns, n_shared = load_crownmap(crownmap)
+            crowns, shared = load_crownmap(crownmap)
+            n_shared = len(shared)
             print(f"  crown-dates: {len(crowns):,}; crowns: {crowns['uuid'].nunique():,} "
                   f"({n_shared} crowns sharing a tag dropped)")
             if exclude_train_chips:

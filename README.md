@@ -79,7 +79,7 @@ The January 2026 table (24782016 only, 90 dates) is archived as `older/crown_cla
 - The script reports metrics overall, per species, and per crown-area bin (`--size-bins`, m² of that date's outline), alone and crossed with species.
 - `--exclude-train-chips` drops crown-dates inside a same-date training chip.
 
-`compare_classifications_to_gt.py --labels-gpkg <gpkg> --nc4 <nc4>` scores a labelling-tool export that carries the crown `tag` on each crown-date polygon (e.g. `vicente_202610/latest_paulino_label.gpkg`) against any of these tables; `summarize_label_evals.py` puts several such runs side by side.
+`compare_classifications_to_gt.py --labels-gpkg <gpkg> --nc4 <nc4>` scores a labelling-tool export that carries the crown `tag` on each crown-date polygon (e.g. `vicente_202610/latest_paulino_label.gpkg`) against any of these tables; `summarize_label_evals.py` puts several such runs side by side. The outlines in `latest_paulino_label.gpkg` sit about 2.9 m north and 0.7 m west of their crowns in every mosaic (phantom local, phantom global and mavic), while the dated crown map fits at about zero shift. The script therefore replaces each label outline with the scored outline of the same tag and date, taken from `--crownmap`; for mavic runs, pass the dated map and `results/crowns_mavic_dates.gpkg` together, comma-separated.
 
 Batch shell scripts: `run_classification_flower.sh`, `run_classification_decid.sh`, `run_merge_flower.sh`, `run_merge_decid.sh`.
 
