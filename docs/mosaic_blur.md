@@ -170,8 +170,7 @@ C3KW2X (green triangles, 2023-10-31 – 2024-03-18) and mavic (red squares,
 The isotropic width comes from the tile power spectrum's ratio to the median
 spectrum of all 202 mosaics, put in absolute terms by a power-law ×
 Gaussian-MTF fit to that median (σ = 3.09 cm). The major/minor split comes
-from the part of each mosaic's own spectral anisotropy that grows as f².
-Dashed lines show twice the mosaic GSD (the Nyquist-limited resolution). The
+from the part of each mosaic's own spectral anisotropy that grows as f². The
 dotted vertical line marks the 24782016 → C3KW2X release boundary.
 
 **`blur_anisotropy`** — Directional (motion) blur of each global-alignment

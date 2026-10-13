@@ -769,8 +769,6 @@ def plot_timeseries(df, outdir):
                    label=f'{label} major axis')
         ax.scatter(s.date, s.fwhm_minor_cm, marker=marker, s=16, facecolor='none',
                    edgecolor=color, lw=0.8, label=f'{label} minor axis')
-        ax.plot(s.date, 2 * s.gsd_cm, color=color, lw=0.8, ls='--', alpha=0.7)
-    ax.plot([], [], color=pu.C_GREY, ls='--', lw=0.8, label='2 × GSD (Nyquist limit)')
     ax.set_ylabel('PSF FWHM (cm)', fontsize=9)
     ax.set_ylim(bottom=0)
     date_axis(ax)
