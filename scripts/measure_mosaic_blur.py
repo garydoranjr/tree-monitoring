@@ -73,6 +73,7 @@ import matplotlib.pyplot as plt
 import plot_update_figures as pu
 
 CACHE = pu.FLOWER / 'results' / 'mosaic_blur'
+OUT = pu.FLOWER / 'figs' / '20261013_updates' / 'blur'
 EXIF_CSV = pu.PHANTOM_RELEASES['24782016'] / 'raw_images_metadata.csv'
 MAVIC_META = pu.MAVIC_RGB.parent / 'metadata_all.csv'
 
@@ -374,7 +375,7 @@ def cli():
 cache_option = click.option('--cache', type=click.Path(file_okay=False, path_type=Path),
                             default=CACHE, show_default=True)
 out_option = click.option('--outdir', type=click.Path(file_okay=False, path_type=Path),
-                          default=pu.DEFAULT_OUT, show_default=True)
+                          default=OUT, show_default=True)
 
 
 @cli.command()

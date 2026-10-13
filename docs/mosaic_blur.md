@@ -1,7 +1,7 @@
 # Effective resolution and motion blur of the 50ha drone mosaics
 
 Script: [`scripts/measure_mosaic_blur.py`](../scripts/measure_mosaic_blur.py).
-Outputs (October 2026 run): `/Volumes/Earth03/flower/figs/202610_updates/`
+Outputs (October 2026 run): `/Volumes/Earth03/flower/figs/20261013_updates/blur/`
 (`mosaic_blur.csv`, `blur_exif.csv`, `blur_validation.csv`, `blur_*.png/.pdf`);
 spectra cache in `/Volumes/Earth03/flower/results/mosaic_blur/`.
 
