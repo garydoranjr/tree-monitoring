@@ -73,6 +73,12 @@ The per-crown tables in `/Volumes/Earth03/flower/results/` (rebuilt October 2026
 
 The January 2026 table (24782016 only, 90 dates) is archived as `older/crown_classifications_24782016_20260118.nc4`; it is the one behind the untracked `reports/` and `reports_w_train/` evaluations. The rebuilt phantom table reproduces it to within 3e-7 on all 90 of its dates, which confirms it was built from the same dated crown map.
 
+`compare_classifications_to_gt.py` scores Vicente's phantom labels (`vicente_20260618/vicente_20260618_labels.csv`) against `crown_classifications.nc4`.
+- It joins them through the dated crown map (`--crownmap`), which covers all 2,342 labelled crowns. It drops the 98 crowns whose tag another crown shares, because the nc4 keeps only one of them.
+- The June 2026 reports joined through `flowering_dataset.gpkg` and so covered only its 251 crowns; `--crownmap ''` reproduces that join.
+- The script reports metrics overall, per species, and per crown-area bin (`--size-bins`, m² of that date's outline), alone and crossed with species.
+- `--exclude-train-chips` drops crown-dates inside a same-date training chip.
+
 `compare_classifications_to_gt.py --labels-gpkg <gpkg> --nc4 <nc4>` scores a labelling-tool export that carries the crown `tag` on each crown-date polygon (e.g. `vicente_202610/latest_paulino_label.gpkg`) against any of these tables; `summarize_label_evals.py` puts several such runs side by side.
 
 Batch shell scripts: `run_classification_flower.sh`, `run_classification_decid.sh`, `run_merge_flower.sh`, `run_merge_decid.sh`.

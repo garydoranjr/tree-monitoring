@@ -3,8 +3,18 @@
 
 Joins per-(crown, date) ground-truth labels from
 `vicente_20260618_labels.csv` to the ML output netCDF
-(`crown_classifications.nc4`) via the UUID->tag mapping in
-`flowering_dataset.gpkg`, and reports flowering / deciduous metrics.
+(`crown_classifications.nc4`) and reports flowering / deciduous metrics,
+overall, per species and per crown-size bin. The uuid->tag bridge, the
+crown area and the gallery outlines come from the dated crown map
+(--crownmap), whose per-date polygons are the ones the nc4 averages over.
+Crowns that share a tag with another crown are dropped, since the nc4 keeps
+only one of them. `--crownmap ''` falls back to the June 2026 bridge through
+`flowering_dataset.gpkg`, which covers only its 251 crowns.
+
+Phantom example (held-out: crown-dates in a same-date training chip dropped):
+
+    python scripts/compare_classifications_to_gt.py --exclude-train-chips \
+        --output-dir /Volumes/Earth03/flower/figs/20261013_updates/vicente_phantom_eval/heldout
 
 With --labels-gpkg, the labels instead come from a labelling-tool export
 that carries the crown-map `tag` on every crown-date polygon (e.g.
@@ -66,6 +76,12 @@ GEO_FOLDS_DEFAULT = (
     "/Volumes/Earth03/flower/vicente_202509/geo_folds.csv"
 )
 TRAIN_CHIPS_DEFAULT = "/Volumes/Earth03/flower/vicente_202509/images"
+CROWNMAP_DEFAULT = (
+    "/Volumes/Earth03/flower/crowns_20240803/BCI_50ha_crownmap_timeseries.shp"
+)
+# Crown-area bin edges (m^2), about the quartiles of the good-segmentation
+# phantom labels.
+SIZE_BINS_DEFAULT = "60,110,200"
 
 # Labelling-tool gpkg exports mix English and Spanish answers.
 FLOWERING_MAP = {"no": "no", "yes": "yes", "sí": "yes", "si": "yes",
@@ -167,6 +183,47 @@ def load_uuid_tag_map(gpkg_path):
     gdf["uuid"] = gdf["polygon_id"].str.rsplit("_", n=1).str[0]
     gdf["tag"] = gdf["tag"].astype(int)
     return gdf[["uuid", "tag"]].drop_duplicates()
+
+
+def load_crownmap(path):
+    """Dated crown map: one polygon per (crown, date) with the scored outline.
+
+    Returns (crowns, n_shared): crowns has uuid (GlobalID), date
+    (YYYY_MM_DD), tag (int), crown_area (m^2) and geometry, without the
+    crowns whose tag is shared with another crown (the nc4 is keyed by tag
+    and keeps only one of them); n_shared counts those dropped crowns.
+    """
+    gdf = gpd.read_file(path)
+    if gdf.crs is not None and gdf.crs.to_epsg() != 32617:
+        gdf = gdf.to_crs(epsg=32617)
+    gdf = gdf.rename(columns={"GlobalID": "uuid"})
+    gdf["tag"] = gdf["tag"].astype(int)
+    pairs = gdf[["uuid", "tag"]].drop_duplicates()
+    shared = pairs["tag"].duplicated(keep=False)
+    gdf = gdf[~gdf["uuid"].isin(pairs.loc[shared, "uuid"])].copy()
+    gdf["crown_area"] = gdf.geometry.area
+    return gdf[["uuid", "date", "tag", "crown_area", "geometry"]], int(shared.sum())
+
+
+def geoms_by_crown(gdf, key="uuid"):
+    """{key: {"by_date": {YYYY_MM_DD: geom}, "any": geom}} for the galleries."""
+    return {k: {"by_date": dict(zip(sub["date"], sub.geometry)),
+                "any": sub.geometry.iloc[0]}
+            for k, sub in gdf.groupby(key)}
+
+
+def parse_size_bins(spec):
+    """Bin edges (m^2) and labels with the matching effective diameter."""
+    edges = [float(v) for v in spec.split(",")]
+
+    def diam(a):
+        return 2 * np.sqrt(a / np.pi)
+
+    labels = [f"<{edges[0]:g} m² (d<{diam(edges[0]):.1f} m)"]
+    labels += [f"{lo:g}–{hi:g} m² (d {diam(lo):.1f}–{diam(hi):.1f} m)"
+               for lo, hi in zip(edges[:-1], edges[1:])]
+    labels.append(f"≥{edges[-1]:g} m² (d≥{diam(edges[-1]):.1f} m)")
+    return [0.0] + edges + [np.inf], labels
 
 
 def load_labels_gpkg(path):
@@ -342,29 +399,78 @@ def fmt_metrics(label, m):
     )
 
 
-def per_species_table(df, score_col, target, threshold, min_pos=10):
+def per_group_table(df, group_cols, score_col, ycol, threshold, n_boot=0,
+                    min_pos=10):
+    """Metrics per group (e.g. species, or species x size bin).
+
+    Groups with fewer than min_pos positives or negatives are skipped. With
+    n_boot > 0, adds crown-bootstrap 95% intervals on AUROC; when the table
+    has crown_area, adds the median crown area of the group's crown-dates.
+    """
     rows = []
-    for sp, sub in df.groupby("latin"):
-        y = target.loc[sub.index]
-        s = sub[score_col]
+    for key, sub in df.groupby(group_cols, observed=True, sort=False):
+        y = sub[ycol].to_numpy()
+        s = sub[score_col].to_numpy()
         npos = int(y.sum())
         nneg = int(len(y) - npos)
         if npos < min_pos or nneg < min_pos:
             continue
-        y_pred = (s >= threshold).astype(int)
-        cm = confusion_matrix(y, y_pred, labels=[0, 1])
-        prf = prf_from_confusion(cm)
-        rows.append({
-            "latin": sp,
-            "n": len(y),
-            "n_pos": npos,
-            "auroc": roc_auc_score(y, s),
-            "precision": prf["precision"],
-            "recall": prf["recall"],
-            "accuracy": prf["accuracy"],
-        })
-    out = pd.DataFrame(rows).sort_values("n", ascending=False)
+        prf = prf_from_confusion(
+            confusion_matrix(y, (s >= threshold).astype(int), labels=[0, 1]))
+        key = key if isinstance(key, tuple) else (key,)
+        row = dict(zip(group_cols, key))
+        row |= {"n": len(y), "n_pos": npos, "n_crowns": int(sub["tag"].nunique())}
+        if "crown_area" in sub:
+            row["median_area_m2"] = float(sub["crown_area"].median())
+        row["auroc"] = roc_auc_score(y, s)
+        if n_boot:
+            ci = bootstrap_ci(y, s, sub["tag"].to_numpy(), threshold, n_boot)
+            row |= {"auroc_lo": ci["auroc_lo"], "auroc_hi": ci["auroc_hi"]}
+        row |= {k: prf[k] for k in ("precision", "recall", "accuracy")}
+        rows.append(row)
+    out = pd.DataFrame(rows)
+    if len(out):
+        out = out.sort_values(["n"] if len(group_cols) == 1 else group_cols,
+                              ascending=len(group_cols) > 1)
     return out
+
+
+def size_metrics(df, ycol, score_col, threshold):
+    """binary_metrics() per size bin, keyed by bin label, plus the strata."""
+    strata = {str(b): sub for b, sub in df.groupby("size_bin", observed=True)}
+    metrics = {name: binary_metrics(sub[ycol].to_numpy(), sub[score_col].to_numpy(),
+                                    threshold)
+               for name, sub in strata.items()}
+    return metrics, strata
+
+
+def plot_metric_by_size(size_df, bin_labels, out_path, title):
+    """AUROC and AUPRC with crown-bootstrap intervals per crown-size bin."""
+    targets = list(dict.fromkeys(size_df["target"]))
+    fig, axes = plt.subplots(1, len(targets), figsize=(5.5 * len(targets), 4.6),
+                             squeeze=False)
+    for ax, target in zip(axes[0], targets):
+        d = size_df[size_df["target"] == target].set_index("stratum").reindex(bin_labels)
+        x = np.arange(len(bin_labels))
+        for k, color, dx in (("auroc", "black", -0.06), ("auprc", "tab:red", 0.06)):
+            ax.errorbar(x + dx, d[k], yerr=[d[k] - d[f"{k}_lo"], d[f"{k}_hi"] - d[k]],
+                        fmt="o-", color=color, capsize=3, label=k.upper())
+        ax.plot(x, d["n_pos"] / d["n"], ls="--", color="0.6",
+                label="prevalence (AUPRC of chance)")
+        for xi, (n, p) in enumerate(zip(d["n"], d["n_pos"])):
+            if not np.isnan(n):
+                ax.annotate(f"{int(p)}/{int(n)}", (xi, 0.02), ha="center", fontsize=8,
+                            color="0.3")
+        ax.set_xticks(x, [b.replace(" (", "\n(") for b in bin_labels], fontsize=8)
+        ax.set_ylim(0, 1.02)
+        ax.set_xlabel("crown area of the dated outline")
+        ax.set_title(target)
+        ax.grid(alpha=0.3)
+        ax.legend(loc="center right", fontsize=8)
+    fig.suptitle(title, fontsize=10)
+    fig.tight_layout()
+    fig.savefig(out_path)
+    return fig
 
 
 def plot_roc_pr(curves, title, out_path, kind):
@@ -544,6 +650,18 @@ def _df_table_html(df, empty_msg="(none qualify)"):
                       lambda v: f"{v:.3f}")
 
 
+def _size_section_html(stats, prefix):
+    """By-size metrics and species x size table, if the run has crown areas."""
+    if f"{prefix}_size" not in stats:
+        return ""
+    return (
+        "<h3>By crown area of the dated outline (segmentation==good)</h3>"
+        + _metrics_table_html(stats[f"{prefix}_size"])
+        + "<h3>Per species and crown-size bin (segmentation==good, n_pos&ge;10)</h3>"
+        + _df_table_html(stats[f"{prefix}_species_size"])
+    )
+
+
 def render_summary_report(out_path, stats, plot_uris, link_targets,
                           flower_threshold, decid_threshold,
                           leafing_threshold, no_visualize):
@@ -560,7 +678,12 @@ def render_summary_report(out_path, stats, plot_uris, link_targets,
         f"GT rows: {f['gt_rows']:,} (uuids {f['gt_uuids']:,}; aggregated from "
         f"{f['gt_rows_raw']:,} labels, {f['dropped_conflicts']} yes/no ties "
         f"dropped) &middot; "
-        + (f"uuid&rarr;tag mappings: {f['bridge']:,} &middot; "
+        + (f"uuid&rarr;tag mappings: {f['bridge']:,} "
+           + (f"from the dated crown map ({f['shared_tag']} crowns sharing a "
+              "tag dropped) " if f.get("shared_tag") is not None else "")
+           + (f"({f['in_train_chips']:,} crown-dates in same-date training "
+              "chips excluded) " if f.get("in_train_chips") is not None else "")
+           + "&middot; "
            if f["bridge"] is not None else
            f"tags from label gpkg ({_esc(f['label_counts'])}) &middot; ")
         + f"prediction rows: {f['pred_rows']:,} (tags {f['pred_tags']:,}) "
@@ -584,6 +707,15 @@ def render_summary_report(out_path, stats, plot_uris, link_targets,
         f"n={cont['n']:,} &middot; Pearson r={cont['r']:.3f} &middot; "
         f"Spearman &rho;={cont['rho']:.3f}"
     )
+
+    size_fig = ""
+    if "by_size" in plot_uris:
+        size_fig = (
+            "<h2>By crown size</h2>"
+            f'<div class="plots"><img src="{plot_uris["by_size"]}" '
+            'alt="Metrics by crown size" style="max-width:100%"/></div>'
+            f"<p>{_esc(stats['size_caption'])}</p>"
+        )
 
     doc = f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"/>
@@ -623,6 +755,7 @@ leafing&lt;{leafing_threshold}.</p>
 {_metrics_table_html(stats['flower_metrics'])}
 <h3>Per-species AUROC (segmentation==good, n_pos&ge;10)</h3>
 {_df_table_html(stats['flower_species'])}
+{_size_section_html(stats, 'flower')}
 <div class="plots">
   <img src="{plot_uris['flower_roc']}" alt="Flowering ROC"/>
   <img src="{plot_uris['flower_pr']}" alt="Flowering PR"/>
@@ -640,12 +773,14 @@ threshold={decid_threshold})</h3>
 <h3>Per-species AUROC (segmentation==good, leafing&lt;{leafing_threshold},
 n_pos&ge;10)</h3>
 {_df_table_html(stats['decid_species'])}
+{_size_section_html(stats, 'decid')}
 <div class="plots">
   <img src="{plot_uris['decid_roc']}" alt="Deciduous ROC"/>
   <img src="{plot_uris['decid_pr']}" alt="Deciduous PR"/>
   <img src="{plot_uris['decid_continuous']}" alt="Deciduous continuous"/>
 </div>
 
+{size_fig}
 <h2>Detailed reports</h2>
 {novis_note}
 <ul class="links">{links_html}</ul>
@@ -943,8 +1078,14 @@ def render_conflict_report(flower_conflicts, geoms, drone_index, out_path,
               help="Score a labelling-tool gpkg with a `tag` per crown-date "
                    "(see load_labels_gpkg) instead of --gt-csv + --gpkg.")
 @click.option("--exclude-train-chips", is_flag=True,
-              help="With --labels-gpkg: drop crown-dates whose polygon lies in "
-                   "a training chip of the same date (--train-chips).")
+              help="Drop crown-dates whose polygon (from --labels-gpkg or "
+                   "--crownmap) lies in a training chip of the same date "
+                   "(--train-chips).")
+@click.option("--crownmap", default=CROWNMAP_DEFAULT, show_default=True,
+              help="Dated crown map giving the uuid->tag bridge, crown areas "
+                   "and gallery outlines for --gt-csv; '' uses --gpkg instead.")
+@click.option("--size-bins", default=SIZE_BINS_DEFAULT, show_default=True,
+              help="Comma-separated crown-area bin edges (m^2).")
 @click.option("--train-chips", default=TRAIN_CHIPS_DEFAULT, show_default=True,
               type=click.Path(file_okay=False),
               help="Directory of the drone models' training chips.")
@@ -985,14 +1126,18 @@ def render_conflict_report(flower_conflicts, geoms, drone_index, out_path,
 @click.option("--no-visualize", is_flag=True,
               help="Skip the discrepancy HTML reports (metrics only).")
 def main(gt_csv, gpkg, nc4, geo_folds, exclude_train, labels_gpkg,
-         exclude_train_chips, train_chips, n_boot, output_dir,
-         flower_threshold, decid_threshold, leafing_threshold, drone_dir,
-         drone_glob, drone_scaling, n_examples, chip_size, no_visualize):
+         exclude_train_chips, crownmap, size_bins, train_chips, n_boot,
+         output_dir, flower_threshold, decid_threshold, leafing_threshold,
+         drone_dir, drone_glob, drone_scaling, n_examples, chip_size,
+         no_visualize):
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     plot_uris = {}
 
     label_counts = None
+    crowns = None
+    n_shared = None
+    in_train_chips = None
     if labels_gpkg:
         print(f"Loading labels gpkg: {labels_gpkg}")
         gt, label_gdf, label_geoms, label_counts = load_labels_gpkg(labels_gpkg)
@@ -1009,6 +1154,26 @@ def main(gt_csv, gpkg, nc4, geo_folds, exclude_train, labels_gpkg,
         print(f"Loading GT  : {gt_csv}")
         gt = load_gt(gt_csv)
         print(f"  rows: {len(gt):,}  unique uuids: {gt['uuid'].nunique():,}")
+        if crownmap:
+            print(f"Loading dated crown map: {crownmap}")
+            crowns, n_shared = load_crownmap(crownmap)
+            print(f"  crown-dates: {len(crowns):,}; crowns: {crowns['uuid'].nunique():,} "
+                  f"({n_shared} crowns sharing a tag dropped)")
+            if exclude_train_chips:
+                label_geo = crowns.merge(gt[["uuid", "date"]].drop_duplicates(),
+                                         on=["uuid", "date"])
+                seen = label_geo.loc[train_chip_overlap(label_geo, train_chips),
+                                     ["uuid", "date"]]
+                key = pd.MultiIndex.from_frame(gt[["uuid", "date"]])
+                drop = key.isin(pd.MultiIndex.from_frame(seen))
+                gt = gt[~drop].copy()
+                in_train_chips = len(seen)
+                print(f"  excluded {len(seen):,} crown-dates inside same-date "
+                      f"training chips ({int(drop.sum()):,} labels); "
+                      f"GT rows -> {len(gt):,}")
+        elif exclude_train_chips:
+            raise click.UsageError("--exclude-train-chips needs --labels-gpkg "
+                                   "or --crownmap")
 
     if exclude_train and not labels_gpkg:
         train_uuids = load_train_uuids(geo_folds)
@@ -1023,15 +1188,34 @@ def main(gt_csv, gpkg, nc4, geo_folds, exclude_train, labels_gpkg,
     print(f"  aggregated to one row per (crown,date): {gt_rows_raw:,} -> "
           f"{len(gt):,} rows; dropped {n_conf} flowering yes/no ties")
 
+    areas = None
     if labels_gpkg:
         bridge = None
         merged_uuid = gt.assign(tag=gt["uuid"].astype(int))
+        areas = pd.DataFrame({"uuid": label_gdf["tag"].astype(str),
+                              "date": label_gdf["date"],
+                              "crown_area": label_gdf.geometry.area})
+    elif crowns is not None:
+        bridge = crowns[["uuid", "tag"]].drop_duplicates()
+        print(f"  uuid->tag mappings from the dated crown map: {len(bridge):,}")
+        merged_uuid = gt.merge(bridge, on="uuid", how="inner")
+        print(f"After UUID->tag merge: {len(merged_uuid):,} rows")
+        areas = crowns[["uuid", "date", "crown_area"]]
     else:
         print(f"Loading bridge: {gpkg}")
         bridge = load_uuid_tag_map(gpkg)
         print(f"  uuid->tag mappings: {len(bridge):,}")
         merged_uuid = gt.merge(bridge, on="uuid", how="inner")
         print(f"After UUID->tag merge: {len(merged_uuid):,} rows")
+
+    bin_edges, bin_labels = parse_size_bins(size_bins)
+    if areas is not None:
+        areas = areas.drop_duplicates(["uuid", "date"])
+        merged_uuid = merged_uuid.merge(areas, on=["uuid", "date"], how="left")
+        merged_uuid["size_bin"] = pd.cut(merged_uuid["crown_area"], bin_edges,
+                                         right=False, labels=bin_labels)
+        print(f"  crown area found for {merged_uuid['crown_area'].notna().mean():.1%} "
+              "of crown-dates")
 
     print(f"Loading nc4 : {nc4}")
     preds = load_predictions(nc4)
@@ -1089,11 +1273,9 @@ def main(gt_csv, gpkg, nc4, geo_folds, exclude_train, labels_gpkg,
         flower_curves_pr[name] = flower_curves_roc[name]
 
     print("\nPer-species flowering AUROC (segmentation==good, n_pos>=10):")
-    sp_tbl = per_species_table(
-        strata["segmentation==good"],
-        "flowering_probability",
-        strata["segmentation==good"]["y"],
-        flower_threshold,
+    sp_tbl = per_group_table(
+        strata["segmentation==good"], ["latin"], "flowering_probability", "y",
+        flower_threshold, n_boot,
     )
     print(sp_tbl.to_string(index=False) if len(sp_tbl) else "  (none qualify)")
 
@@ -1181,11 +1363,9 @@ def main(gt_csv, gpkg, nc4, geo_folds, exclude_train, labels_gpkg,
 
     print("\nPer-species deciduous AUROC (segmentation==good, leafing<"
           f"{leafing_threshold}, n_pos>=10):")
-    sp_tbl_d = per_species_table(
-        strata_d["segmentation==good"],
-        "deciduous_probability",
-        strata_d["segmentation==good"]["y_leaf"],
-        decid_threshold,
+    sp_tbl_d = per_group_table(
+        strata_d["segmentation==good"], ["latin"], "deciduous_probability",
+        "y_leaf", decid_threshold, n_boot,
     )
     print(sp_tbl_d.to_string(index=False) if len(sp_tbl_d) else "  (none qualify)")
 
@@ -1215,9 +1395,72 @@ def main(gt_csv, gpkg, nc4, geo_folds, exclude_train, labels_gpkg,
         + metrics_rows(f"deciduous (leafing<{leafing_threshold})", decid_metrics,
                        strata_d, "y_leaf", "deciduous_probability",
                        decid_threshold, n_boot))
-    metrics_df.to_csv(out_dir / "gt_vs_ml_metrics.csv", index=False)
     print(f"\nMetrics with 95% crown-bootstrap intervals ({n_boot} resamples):")
     print(metrics_df.round(3).to_string(index=False))
+
+    species_df = pd.concat([sp_tbl.assign(target="flowering"),
+                            sp_tbl_d.assign(target=f"deciduous (leafing<{leafing_threshold})")])
+    species_df.to_csv(out_dir / "gt_vs_ml_by_species.csv", index=False)
+
+    # ----- By crown size (segmentation==good) -----
+    size_stats = {}
+    if "size_bin" in merged:
+        print("\n=== By crown area of the dated outline (segmentation==good) ===")
+        decid_target = f"deciduous (leafing<{leafing_threshold})"
+        size_rows = []
+        for prefix, target, sub, ycol, col, thr in (
+                ("flower", "flowering", strata["segmentation==good"], "y",
+                 "flowering_probability", flower_threshold),
+                ("decid", decid_target, strata_d["segmentation==good"], "y_leaf",
+                 "deciduous_probability", decid_threshold)):
+            m, st = size_metrics(sub, ycol, col, thr)
+            size_stats[f"{prefix}_size"] = {b: m[b] for b in bin_labels if b in m}
+            for b in bin_labels:
+                if b in m:
+                    print(fmt_metrics(b, m[b]))
+            size_rows += metrics_rows(target, m, st, ycol, col, thr, n_boot)
+            sxs = per_group_table(sub, ["latin", "size_bin"], col, ycol, thr, n_boot)
+            size_stats[f"{prefix}_species_size"] = sxs
+            print(f"\n{target} per species x size bin (n_pos>=10):")
+            print(sxs.round(3).to_string(index=False) if len(sxs) else "  (none qualify)")
+        size_df = pd.DataFrame(size_rows)
+        edges = dict(zip(bin_labels, zip(bin_edges[:-1], bin_edges[1:])))
+        size_df["area_lo_m2"] = size_df["stratum"].map(lambda b: edges[b][0])
+        size_df["area_hi_m2"] = size_df["stratum"].map(lambda b: edges[b][1])
+        size_df.to_csv(out_dir / "gt_vs_ml_by_size.csv", index=False)
+        metrics_df = pd.concat([metrics_df, size_df.drop(
+            columns=["area_lo_m2", "area_hi_m2"]).assign(
+            stratum=lambda d: "segmentation==good, area " + d["stratum"])])
+        pd.concat([g.assign(target=t) for t, g in (
+            ("flowering", size_stats["flower_species_size"]),
+            (decid_target, size_stats["decid_species_size"]))]).to_csv(
+            out_dir / "gt_vs_ml_by_species_size.csv", index=False)
+
+        dates = merged["dt"]
+        size_stats["size_caption"] = (
+            "Agreement between the drone classifier and the ground-truth labels "
+            "as a function of crown size: AUROC (black) and AUPRC (red) of the "
+            "crown-mean predicted probability, with the label prevalence "
+            "(dashed grey, the AUPRC of a random classifier), for flowering "
+            "(label yes vs no; 'maybe' excluded) and deciduousness (leafing "
+            f"< {leafing_threshold}%). Crown size is the area of the crown's "
+            "outline on that date in the dated crown map, the same polygon "
+            "the probability is averaged over, binned in m² (effective "
+            "diameter d = 2√(area/π)). Only crown-dates with good segmentation "
+            "are included; numbers along the bottom are positives/total "
+            "crown-dates per bin, and error bars are 95% intervals from 1,000 "
+            "bootstrap resamples of whole crowns. Labels cover "
+            f"{dates.min():%Y-%m-%d} to {dates.max():%Y-%m-%d}."
+        ).replace("1,000", f"{n_boot:,}")
+        fig = plot_metric_by_size(
+            size_df, bin_labels, out_dir / "gt_vs_ml_by_size.pdf",
+            "Classifier vs labels by crown area (segmentation==good; "
+            "95% crown-bootstrap intervals)")
+        plot_uris["by_size"] = _fig_to_uri(fig)
+        fig.savefig(out_dir / "gt_vs_ml_by_size.png", dpi=130)
+        plt.close(fig)
+
+    metrics_df.to_csv(out_dir / "gt_vs_ml_metrics.csv", index=False)
 
     print(f"\nPlots written to: {out_dir}/")
 
@@ -1226,6 +1469,8 @@ def main(gt_csv, gpkg, nc4, geo_folds, exclude_train, labels_gpkg,
         print("\n=== Discrepancy reports ===")
         if labels_gpkg:
             geoms = label_geoms
+        elif crowns is not None:
+            geoms = geoms_by_crown(crowns[crowns["uuid"].isin(merged["uuid"])])
         else:
             print(f"Loading crown geometries: {gpkg}")
             geoms = load_crown_geometries(gpkg)
@@ -1268,6 +1513,8 @@ def main(gt_csv, gpkg, nc4, geo_folds, exclude_train, labels_gpkg,
             "dropped_conflicts": int(n_conf),
             "gt_uuids": int(gt["uuid"].nunique()),
             "bridge": len(bridge) if bridge is not None else None,
+            "shared_tag": n_shared,
+            "in_train_chips": in_train_chips,
             "label_counts": label_counts,
             "pred_rows": len(preds),
             "pred_tags": int(preds["tag"].nunique()),
@@ -1284,10 +1531,12 @@ def main(gt_csv, gpkg, nc4, geo_folds, exclude_train, labels_gpkg,
         "decid_sweep": sweep_df,
         "decid_continuous": {"n": len(cont), "r": float(r), "rho": float(rho)},
         "decid_species": sp_tbl_d,
+        **size_stats,
     }
     link_targets = {
         "Joined GT/prediction table (CSV)": "gt_vs_ml_joined.csv",
         "Metrics with crown-bootstrap intervals (CSV)": "gt_vs_ml_metrics.csv",
+        "Per-species metrics (CSV)": "gt_vs_ml_by_species.csv",
         "Flowering discrepancy gallery (HTML)":
             "gt_vs_ml_flowering_discrepancies.html",
         "Deciduous discrepancy gallery (HTML)":
@@ -1295,6 +1544,11 @@ def main(gt_csv, gpkg, nc4, geo_folds, exclude_train, labels_gpkg,
         "Dropped flowering label conflicts (HTML)":
             "gt_vs_ml_flowering_conflicts.html",
     }
+    if size_stats:
+        link_targets |= {
+            "Metrics by crown size (CSV)": "gt_vs_ml_by_size.csv",
+            "Metrics by species and crown size (CSV)": "gt_vs_ml_by_species_size.csv",
+        }
     render_summary_report(
         out_dir / "gt_vs_ml_report.html",
         stats,

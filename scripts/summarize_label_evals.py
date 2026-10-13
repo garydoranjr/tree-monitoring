@@ -5,8 +5,10 @@ Each RUN is a name=directory pair holding gt_vs_ml_joined.csv from one run
 (e.g. phantom, mavic, mavic before colour transfer). Metrics are recomputed
 from the joined tables so every run is scored the same way, with
 crown-bootstrap intervals, and runs whose name contains "mavic" are also
-scored on the mavic-only dates (after the last phantom flight). Writes
-OUTDIR/summary.md, metrics.csv and roc_pr.png/.pdf.
+scored on the mavic-only dates (after the last phantom flight). Runs whose
+joined table has a size_bin column are also scored per crown-size bin on
+the segmentation==good rows. Writes OUTDIR/summary.md, metrics.csv
+(by_size.csv when there are size bins) and roc_pr.png/.pdf.
 
 Typical usage:
     E=/Volumes/Earth03/flower/figs/20261013_updates/paulino_eval
@@ -68,7 +70,9 @@ def fmt(r, k):
 @click.argument('outdir', type=click.Path(file_okay=False, path_type=Path))
 @click.argument('runs', nargs=-1, required=True)
 @click.option('--n-boot', default=1000, show_default=True)
-def main(outdir, runs, n_boot):
+@click.option('--labels-name', default='Paulino', show_default=True,
+              help='Whose labels, for the titles.')
+def main(outdir, runs, n_boot, labels_name):
     runs = dict(r.split('=', 1) for r in runs)
     data = {name: load_run(path) for name, path in runs.items()}
     rows, curves = [], {}
@@ -89,6 +93,21 @@ def main(outdir, runs, n_boot):
     metrics = pd.DataFrame(rows)
     outdir.mkdir(parents=True, exist_ok=True)
     metrics.to_csv(outdir / 'metrics.csv', index=False)
+
+    size_rows = []
+    for name, df in data.items():
+        if 'size_bin' not in df:
+            continue
+        good = df[df['segmentation'] == 'good']
+        order = good.groupby('size_bin')['crown_area'].min().sort_values().index
+        for b in order:
+            for target in TARGETS:
+                r, _ = score(good[good['size_bin'] == b], target, n_boot)
+                if r is not None:
+                    size_rows.append({'run': name, 'target': target, 'size_bin': b, **r})
+    by_size = pd.DataFrame(size_rows)
+    if len(by_size):
+        by_size.to_csv(outdir / 'by_size.csv', index=False)
 
     # Same polygons on the two dates both drones flew.
     shared = []
@@ -124,12 +143,12 @@ def main(outdir, runs, n_boot):
         for a in axes[:, c]:
             a.legend(fontsize=8)
             a.grid(alpha=0.3)
-    fig.suptitle('Drone classifier vs Paulino crown labels (checked rows; crown-mean probability)')
+    fig.suptitle(f'Drone classifier vs {labels_name} crown labels (checked rows; crown-mean probability)')
     fig.tight_layout()
     for ext in ('png', 'pdf'):
         fig.savefig(outdir / f'roc_pr.{ext}', dpi=130)
 
-    lines = ['# Drone classifier vs Paulino labels', '',
+    lines = [f'# Drone classifier vs {labels_name} labels', '',
              'Crown-mean probability from the crown_classifications nc4s, joined on (tag, date). '
              'Metrics at threshold 0.5. Intervals are 95% crown-bootstrap '
              f'({n_boot} resamples). "maybe" flowering labels are excluded.', '']
@@ -142,6 +161,17 @@ def main(outdir, runs, n_boot):
                          f'{fmt(r, "auroc")} | {fmt(r, "auprc")} | {fmt(r, "precision")} | '
                          f'{fmt(r, "recall")} |')
         lines.append('')
+    if len(by_size):
+        lines += ['## By crown area of the dated outline (segmentation==good)', '']
+        for target in TARGETS:
+            lines += [f'### {target}', '',
+                      '| run | crown area | n | positives | crowns | AUROC | AUPRC | precision | recall |',
+                      '|---|---|---|---|---|---|---|---|---|']
+            for _, r in by_size[by_size.target == target].iterrows():
+                lines.append(f'| {r.run} | {r.size_bin} | {r.n} | {r.n_pos} | {r.n_crowns} | '
+                             f'{fmt(r, "auroc")} | {fmt(r, "auprc")} | {fmt(r, "precision")} | '
+                             f'{fmt(r, "recall")} |')
+            lines.append('')
     if len(shared):
         lines += ['## Shared dates (2024-03-06, 2024-03-18): median P(flowering) on the same crowns', '',
                   '| run | label | n | P(flower) phantom | P(flower) mavic |', '|---|---|---|---|---|']
