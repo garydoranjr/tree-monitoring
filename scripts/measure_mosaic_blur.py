@@ -774,7 +774,7 @@ def plot_timeseries(df, outdir):
     ax.set_ylabel('PSF FWHM (cm)', fontsize=9)
     ax.set_ylim(bottom=0)
     date_axis(ax)
-    ax.legend(fontsize=7, ncol=2, loc='upper left')
+    ax.legend(fontsize=7, ncol=2, loc='lower left')
     pu.save(fig, outdir, 'blur_resolution_timeseries')
 
 
