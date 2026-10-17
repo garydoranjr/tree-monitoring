@@ -613,3 +613,8 @@ Both loaders glob `*.mask.png` and pair it with the sibling `.tif`:
 `get_split(..., 'left'|'right')` takes a 512 × 512 window abutting the
 horizontal centre of the chip, which is how train and validation are kept
 geographically disjoint within a scene.
+
+For generalization to new dates rather than new ground,
+`train_planet_image_maskrcnn.py --folds config/temporal_folds_20261012.csv
+--fold K` splits the `20261012` chips by date instead and uses both windows
+of each chip; see [planet_temporal_generalization.md](planet_temporal_generalization.md).

@@ -93,8 +93,10 @@ def coreg_group(args):
 @click.option('--workers', default=1, show_default=True,
               help='Ortho groups processed in parallel. Each worker holds '
                    'one ortho in memory (up to ~4 GB for mavic).')
+@click.option('--dry-run', is_flag=True,
+              help='Report the scene selection by year and stop.')
 def main(planetdir, ocmdir, out_json, drone_dirs, exclude_within_days,
-         min_clear_fraction, start, end, workers):
+         min_clear_fraction, start, end, workers, dry_run):
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s %(levelname)s %(message)s')
     orthos = index_orthos(drone_dirs)
@@ -144,6 +146,18 @@ def main(planetdir, ocmdir, out_json, drone_dirs, exclude_within_days,
              '%d days of a flight, %d below clear fraction %.2f, %d without '
              'an OCM mask)', len(pending), len(done_scenes), n_near,
              exclude_within_days, n_cloudy, min_clear_fraction, n_no_ocm)
+
+    if dry_run:
+        df = pd.DataFrame(pending)
+        if not df.empty:
+            df['year'] = df['date'].str[:4]
+            print(f"{len(df)} scenes in {df['_ortho'].nunique()} ortho groups")
+            print(df.groupby('year').agg(
+                scenes=('scene', 'size'),
+                median_days_to_drone=('days_to_drone', 'median'),
+                max_days_to_drone=('days_to_drone', 'max'),
+            ).to_string())
+        return
 
     groups = {}
     for rec in pending:
