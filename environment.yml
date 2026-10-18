@@ -30,6 +30,7 @@ dependencies:
   - tqdm
   - scikit-learn
   - scikit-image
+  - imageio
   - geopandas
   - Pillow
   - click
@@ -46,6 +47,7 @@ dependencies:
       - pycocotools
       - python-ffmpeg
       - albumentations==2.0.8
+      - omnicloudmask>=1,<2
       # The drone SegFormer checkpoints (drone_{flower,decid}_geo_models/epoch_020.pth)
       # are pickled whole models; 5.x removed SegformerEncoder, so they fail to load.
       - transformers<5

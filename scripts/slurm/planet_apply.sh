@@ -3,6 +3,7 @@
 #SBATCH --output=logs/planet_apply_%A_%a.out
 #SBATCH --error=logs/planet_apply_%A_%a.err
 #SBATCH --array=0-3
+#SBATCH --partition=gpu
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=16G

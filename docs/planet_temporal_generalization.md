@@ -7,7 +7,8 @@ Scripts:
 - [`scripts/plot_temporal_cv.py`](../scripts/plot_temporal_cv.py)
 - [`scripts/coreg_planet_to_nearest_drone.py`](../scripts/coreg_planet_to_nearest_drone.py)
 - [`scripts/apply_planet_maskrcnn.py`](../scripts/apply_planet_maskrcnn.py)
-- the Slurm wrappers `scripts/slurm/planet_temporal_{cv,eval,final}.sh` and `scripts/slurm/planet_apply.sh`
+- the Slurm wrappers `scripts/slurm/planet_temporal_{cv,eval,final}.sh`,
+  `scripts/slurm/planet_coreg_nearest.sh` and `scripts/slurm/planet_apply.sh`
 
 Settings: [`config/temporal_cv_20261012.sh`](../config/temporal_cv_20261012.sh).
 Folds: [`config/temporal_folds_20261012.csv`](../config/temporal_folds_20261012.csv).
@@ -128,14 +129,18 @@ cluster trains on exactly these folds. It has these columns:
 - `block`, `block_start`, `block_end`
 - `fold`, `days_to_nearest_train`, `n_instances`
 
-### 2. Copy the inputs to gattaca2 (Mac)
+### 2. Copy the inputs to gattaca2 (Mac, done)
 
-The 20261012 chip set is not yet on the cluster:
+Steps 3–7 all run on gattaca2 and read from `/scratch/tree-monitoring`. The
+drone orthos (`stri/`) and the crown map are already there. Copy the chip set
+and the clipped Planet scenes with their OmniCloudMask masks:
 
 ```bash
 F=/Volumes/Earth03/flower
 rsync -a $F/20261012_full_label_extended2_mkl_x4_coreg_4band_stretch_stats_curated \
-  gattaca2:/scratch/ecopro-hpc/flower/
+  gattaca2:/scratch/tree-monitoring/
+rsync -a $F/planet_clipped/4band $F/planet_clipped/ocm \
+  gattaca2:/scratch/tree-monitoring/planet_clipped/   # 1.2 GB + 0.26 GB
 ```
 
 The jobs stage the chip set onto `/local/gdoran_flower` themselves
@@ -148,8 +153,8 @@ On gattaca2, from the repo root at the commit that adds this doc:
 ```bash
 mkdir -p logs
 source config/temporal_cv_20261012.sh
-CV=$(sbatch --parsable -p <gpu-partition> scripts/slurm/planet_temporal_cv.sh)
-sbatch -p <gpu-partition> --dependency=afterok:$CV scripts/slurm/planet_temporal_eval.sh
+CV=$(sbatch --parsable scripts/slurm/planet_temporal_cv.sh)
+sbatch --dependency=afterok:$CV scripts/slurm/planet_temporal_eval.sh
 ```
 
 Each array task trains one fold:
@@ -174,14 +179,12 @@ The eval job writes `$TEMPORAL_RUNS/temporal_cv.json` and the per-window
 accumulator across every held-out window. They are not averages of per-fold
 scores, because a fold holds only 22–25 chips.
 
-### 4. Plot (Mac)
+### 4. Plot (gattaca2)
 
 ```bash
-scp gattaca2:Documents/tree-flowering/202610_temporal/temporal_cv.json \
-  /Volumes/Earth03/flower/figs/202610_updates/temporal_cv.json
+source config/temporal_cv_20261012.sh
 python scripts/plot_temporal_cv.py \
-  /Volumes/Earth03/flower/figs/202610_updates/temporal_cv.json \
-  /Volumes/Earth03/flower/figs/202610_updates/temporal_cv.png
+  $TEMPORAL_RUNS/temporal_cv.json $TEMPORAL_RUNS/temporal_cv.png
 ```
 
 ### 5. Train the final model (gattaca2)
@@ -189,7 +192,7 @@ python scripts/plot_temporal_cv.py \
 ```bash
 source config/temporal_cv_20261012.sh
 export TEMPORAL_FINAL_EPOCHS=$(python -c "import json; print(json.load(open('$TEMPORAL_RUNS/temporal_cv.json'))['best_epoch'])")
-sbatch -p <gpu-partition> scripts/slurm/planet_temporal_final.sh
+sbatch scripts/slurm/planet_temporal_final.sh
 ```
 
 `--fold all` trains on all 142 chips, using both windows, with no test set.
@@ -197,21 +200,22 @@ The model is `$TEMPORAL_RUNS/final_e<E>/last_model.pth`. Its `params` record
 the training chips, and the apply step uses them to compute each scene's
 distance to training data.
 
-### 6. Coregister the scenes away from drone dates (Mac)
+### 6. Coregister the scenes away from drone dates (gattaca2)
 
-The drone orthos are on Earth03, so this step runs on the Mac:
+This step needs only the CPU, and it can run while the CV trains:
 
 ```bash
-F=/Volumes/Earth03/flower
-mkdir -p $F/202610_temporal_apply
-python scripts/coreg_planet_to_nearest_drone.py \
-  $F/planet_clipped/4band $F/planet_clipped/ocm \
-  $F/202610_temporal_apply/coreg_nearest_drone.json \
-  --drone-dir $F/stri/globus/RGB \
-  --drone-dir $F/stri/C3KW2X/BCI_50ha_timeseries_local_alignment \
-  --drone-dir $F/stri/24782016/BCI_50ha_timeseries_local_alignment \
-  --exclude-within-days 2 --min-clear-fraction 0.1
+source config/temporal_cv_20261012.sh
+sbatch scripts/slurm/planet_coreg_nearest.sh
 ```
+
+The job runs `coreg_planet_to_nearest_drone.py` on
+`$APPLY_PLANETDIR` and `$APPLY_OCMDIR`, with one `--drone-dir` per entry of
+`$TEMPORAL_DRONE_DIRS` (`stri/globus/RGB`, then
+`stri/C3KW2X/BCI_50ha_timeseries_local_alignment`, then
+`stri/24782016/BCI_50ha_timeseries_local_alignment`), and passes
+`--exclude-within-days 2 --min-clear-fraction 0.1 --workers 8`. It writes
+`$APPLY_COREG_JSON`.
 
 **Scene selection.** `--dry-run` reports the selection without
 coregistering. It found 798 scenes in 104 ortho groups. Of the 2,146 clipped
@@ -246,18 +250,12 @@ In a test on 2025-02-12 to 02-28, 1 of 2 scenes coregistered (shift 7.3 m E,
 fails is still predicted, but its crown rows use unshifted polygons and are
 flagged `coreg_ok = false`.
 
-```bash
-rsync -a $F/202610_temporal_apply gattaca2:/scratch/ecopro-hpc/flower/
-rsync -a $F/planet_clipped/4band $F/planet_clipped/ocm \
-  gattaca2:/scratch/ecopro-hpc/flower/planet_clipped/   # 1.2 GB + 0.26 GB
-```
-
 ### 7. Apply (gattaca2)
 
 ```bash
 source config/temporal_cv_20261012.sh
 export TEMPORAL_FINAL_EPOCHS=<E>
-sbatch -p <gpu-partition> scripts/slurm/planet_apply.sh
+sbatch scripts/slurm/planet_apply.sh
 # when the array has finished:
 python scripts/apply_planet_maskrcnn.py concat $APPLY_OUT
 ```
@@ -280,7 +278,7 @@ delivered on a 353 × 191 px grid onto the common 1468 × 820 grid.
 Then copy the results back to Earth03:
 
 ```bash
-rsync -a gattaca2:/scratch/ecopro-hpc/flower/202610_temporal_apply/ \
+rsync -a gattaca2:/scratch/tree-monitoring/202610_temporal_apply/ \
   /Volumes/Earth03/flower/202610_temporal_apply/
 ```
 

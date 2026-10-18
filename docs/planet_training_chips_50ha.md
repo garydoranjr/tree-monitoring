@@ -496,7 +496,7 @@ exists under `/scratch/ecopro-hpc/flower`. The October runs therefore
 drop that flag; their `epoch_001.pth` params match the two base runs
 exactly.
 
-Both `20261002` sets already live on `/scratch/ecopro-hpc/flower`. Stage
+Both `20261002` sets already live on `/scratch/tree-monitoring`. Stage
 them, and the 56-chip test set, onto node-local disk before training:
 reading a chip's 512 x 512 window off GPFS costs **540-675 ms**, against
 **14-17 ms** from `/local`, a ~40x gap that leaves the GPU at 0% and the
@@ -509,7 +509,7 @@ mkdir -p /local/gdoran_flower
 for d in 20261002_phantom_label_extended_x4_coreg_4band_stretch_stats_curated \
          20261002_full_label_extended2_x4_coreg_4band_stretch_stats_curated \
          20260706_full_label_application_x4_coreg_4band_stretch_stats_curated; do
-  cp -r /scratch/ecopro-hpc/flower/$d /local/gdoran_flower/
+  cp -r /scratch/tree-monitoring/$d /local/gdoran_flower/
 done
 ```
 
@@ -615,7 +615,7 @@ then train with the October settings:
 mkdir -p /local/gdoran_flower
 for d in 20261012_full_label_extended2_mkl_x4_coreg_4band_stretch_stats_curated \
          20260706_full_label_application_x4_coreg_4band_stretch_stats_curated; do
-  cp -r /scratch/ecopro-hpc/flower/$d /local/gdoran_flower/
+  cp -r /scratch/tree-monitoring/$d /local/gdoran_flower/
 done
 python scripts/train_planet_image_maskrcnn.py \
   $L/20261012_full_label_extended2_mkl_x4_coreg_4band_stretch_stats_curated \

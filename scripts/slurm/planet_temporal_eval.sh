@@ -2,6 +2,7 @@
 #SBATCH --job-name=temporal_eval
 #SBATCH --output=logs/temporal_eval_%j.out
 #SBATCH --error=logs/temporal_eval_%j.err
+#SBATCH --partition=gpu
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=32G

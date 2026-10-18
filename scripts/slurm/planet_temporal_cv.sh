@@ -3,6 +3,7 @@
 #SBATCH --output=logs/temporal_cv_%A_%a.out
 #SBATCH --error=logs/temporal_cv_%A_%a.err
 #SBATCH --array=0-5
+#SBATCH --partition=gpu
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=32G
@@ -11,7 +12,7 @@
 # One temporal CV fold per array task: train on the chips of every other fold
 # (both windows) and test on fold $SLURM_ARRAY_TASK_ID, saving checkpoints on
 # the epoch grid. Settings come from config/temporal_cv_20261012.sh. Pass the
-# partition/account on the sbatch command line.
+# account on the sbatch command line if needed.
 
 set -euo pipefail
 
