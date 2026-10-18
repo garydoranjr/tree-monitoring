@@ -2,6 +2,7 @@
 import os
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")  # must precede torch import
 import glob
+import json
 import warnings
 import wandb
 import click
@@ -94,6 +95,47 @@ def get_split(img, mask, split, size, *extra):
     return (img_crop, mask_crop, *extra_crops)
 
 
+def as_splits(split):
+    """Normalize a split spec to a tuple of window names: 'left' -> ('left',),
+    ('left', 'right') -> ('left', 'right')."""
+    return (split,) if isinstance(split, str) else tuple(split)
+
+
+def read_fold_chips(folds_csv, fold):
+    """Train/test chip basenames for one fold of a make_temporal_folds.py
+    CSV. fold='all' trains on every chip and returns an empty test list."""
+    import pandas as pd
+    df = pd.read_csv(folds_csv)
+    if fold == 'all':
+        return sorted(df['chip']), []
+    k = int(fold)
+    if k not in set(df['fold']):
+        raise ValueError(
+            f"fold {k} not in {folds_csv} (folds: {sorted(set(df['fold']))})"
+        )
+    return (sorted(df.loc[df['fold'] != k, 'chip']),
+            sorted(df.loc[df['fold'] == k, 'chip']))
+
+
+def list_chips(img_dir, chip_names=None):
+    """Sorted (mask_file, img_file) pairs in img_dir, optionally restricted
+    to the chips whose .tif basename is in `chip_names`."""
+    mask_files = sorted(glob.glob(os.path.join(img_dir, "*.mask.png")))
+    img_files = [mf.replace('.mask.png', '.tif') for mf in mask_files]
+    pairs = list(zip(mask_files, img_files))
+    if chip_names is None:
+        return pairs
+    wanted = set(chip_names)
+    pairs = [(m, i) for m, i in pairs if os.path.basename(i) in wanted]
+    missing = wanted - {os.path.basename(i) for _, i in pairs}
+    if missing:
+        raise ValueError(
+            f"{len(missing)} chip(s) not found in {img_dir}, "
+            f"e.g. {sorted(missing)[:3]}"
+        )
+    return pairs
+
+
 # Channel "kind" -> source band index in a 4-band tif read as (H, W, 4),
 # whose band order is (Blue, Green, Red, NIR) per apply_drone_labels_coreg.py.
 _KIND_SOURCE_IDX = {'blue': 0, 'green': 1, 'red': 2, 'ir': 3}
@@ -165,8 +207,9 @@ def build_input_channels(arr, channel_kinds):
 
 
 def compute_ndvi_stats(img_files, split, size):
-    """Mean/std of raw NDVI over the train-split crop of every chip, used to
-    normalize the NDVI channel. Single pass; returns (mean, std)."""
+    """Mean/std of raw NDVI over the train-split crop(s) of every chip, used
+    to normalize the NDVI channel. `split` is one window name or a tuple of
+    them. Single pass; returns (mean, std)."""
     total = 0.0
     total_sq = 0.0
     count = 0
@@ -176,11 +219,12 @@ def compute_ndvi_stats(img_files, split, size):
         arr = data.transpose(1, 2, 0).astype(np.float32)
         ndvi = _compute_ndvi(arr)
         h, w = ndvi.shape[:2]
-        r0, r1, c0, c1 = _split_window(h, w, split, size)
-        crop = ndvi[r0:r1, c0:c1]
-        total += float(crop.sum())
-        total_sq += float(np.square(crop).sum())
-        count += crop.size
+        for sp in as_splits(split):
+            r0, r1, c0, c1 = _split_window(h, w, sp, size)
+            crop = ndvi[r0:r1, c0:c1]
+            total += float(crop.sum())
+            total_sq += float(np.square(crop).sum())
+            count += crop.size
     if count == 0:
         raise ValueError("No chips found to compute NDVI statistics")
     mean = total / count
@@ -236,8 +280,10 @@ def build_instance_bank(dir_splits, size, channel_kinds, min_instance_size,
                         use_ocm_masks=False):
     """Extract every ground-truth crown into a tight-cropped donor patch for
     copy-paste augmentation. `dir_splits` is a sequence of (img_dir, split)
-    pairs; each is read with the same recipe the training dataset uses, so the
-    donor pixels match the model input exactly.
+    or (img_dir, split, chip_names) tuples, where split may be a tuple of
+    windows and chip_names restricts the chips used; each is read with the
+    same recipe the training dataset uses, so the donor pixels match the
+    model input exactly.
 
     Only ever pass the *training* split ('left', or 'whole' for whole-image
     chip dirs): donors taken from the 'right' crop would leak validation
@@ -246,10 +292,14 @@ def build_instance_bank(dir_splits, size, channel_kinds, min_instance_size,
     dicts, where 'bg' is the local background level just outside the crown --
     see `_paste_instances` for why it is needed."""
     bank = []
-    for img_dir, split in dir_splits:
-        mask_files = sorted(glob.glob(os.path.join(img_dir, "*.mask.png")))
-        for mask_file in mask_files:
-            img_file = mask_file.replace('.mask.png', '.tif')
+    for img_dir, split, *rest in dir_splits:
+        chip_names = rest[0] if rest else None
+        crops = [
+            (mask_file, img_file, sp)
+            for mask_file, img_file in list_chips(img_dir, chip_names)
+            for sp in as_splits(split)
+        ]
+        for mask_file, img_file, split in crops:
             with rasterio.open(img_file) as src:
                 data = src.read()
             arr = data.transpose(1, 2, 0).astype(np.float32)
@@ -515,16 +565,22 @@ class PlanetMaskRCNNDataset(Dataset):
     def __init__(self, img_dir, split, size=512, color_jitter=False,
                  min_instance_size=4, use_ocm_masks=False,
                  channel_kinds=('red', 'green', 'blue'), instance_bank=None,
-                 copy_paste_count=0, copy_paste_prob=0.0):
+                 copy_paste_count=0, copy_paste_prob=0.0, chip_names=None):
         self.channel_kinds = list(channel_kinds)
-        self.mask_files = sorted(glob.glob(os.path.join(img_dir, "*.mask.png")))
         # All chips are uint16 GeoTIFFs with band order (Blue, Green, Red, NIR)
         # produced by apply_drone_labels_coreg.py; the model input channels are
-        # assembled from them per `channel_kinds`.
-        self.img_files = [
-            mf.replace('.mask.png', '.tif') for mf in self.mask_files
-        ]
+        # assembled from them per `channel_kinds`. `chip_names` (tif
+        # basenames) restricts the chips, e.g. to one temporal fold.
+        pairs = list_chips(img_dir, chip_names)
+        self.mask_files = [m for m, _ in pairs]
+        self.img_files = [i for _, i in pairs]
         self.split = split
+        # One sample per (chip, window). With a single window, sample i is
+        # chip i, which compare_maskrcnn_runs.py relies on for its Subset.
+        self.items = [
+            (i, sp) for i in range(len(self.img_files))
+            for sp in as_splits(split)
+        ]
         self.size = size
         self.min_instance_size = min_instance_size
         self.use_ocm_masks = use_ocm_masks
@@ -539,7 +595,7 @@ class PlanetMaskRCNNDataset(Dataset):
         self.rng = np.random.default_rng()
 
     def __len__(self):
-        return len(self.img_files)
+        return len(self.items)
 
     def _empty_target(self, idx, clear_crop):
         target = {
@@ -593,20 +649,21 @@ class PlanetMaskRCNNDataset(Dataset):
         # input channels per self.channel_kinds. Color/IR channels get a
         # per-band 0-99.9 percentile stretch to [0, 1]; the NDVI channel is
         # left raw in [-1, 1] (it is normalized later with dataset stats).
-        with rasterio.open(self.img_files[idx]) as src:
+        file_idx, split = self.items[idx]
+        with rasterio.open(self.img_files[file_idx]) as src:
             data = src.read()  # (4, H, W) uint16
         arr = data.transpose(1, 2, 0).astype(np.float32)
         img = build_input_channels(arr, self.channel_kinds)  # (H, W, C)
-        mask = np.array(Image.open(self.mask_files[idx]))
+        mask = np.array(Image.open(self.mask_files[file_idx]))
         mask = (mask == 255).astype(np.uint8)
 
         if self.use_ocm_masks:
-            clear = _load_clear_mask(self.img_files[idx], mask.shape)
+            clear = _load_clear_mask(self.img_files[file_idx], mask.shape)
             img_crop, mask_crop, clear_crop = get_split(
-                img, mask, self.split, self.size, clear,
+                img, mask, split, self.size, clear,
             )
         else:
-            img_crop, mask_crop = get_split(img, mask, self.split, self.size)
+            img_crop, mask_crop = get_split(img, mask, split, self.size)
             clear_crop = None
 
         inst_masks = binary_mask_to_instances(
@@ -889,6 +946,51 @@ def build_model(num_classes=2, nms_thresh=0.3, score_thresh=0.05,
 
 
 @torch.no_grad()
+def filtered_predictions(model, imgs, targets, device, score_thresh=0.5,
+                         use_ocm_masks=False):
+    """Run the model on a batch and return one dict per image of binarized
+    masks (at `score_thresh`), scores, labels and boxes. When
+    `use_ocm_masks` is True, predictions whose box centers fall in cloudy
+    pixels (per each target's 'clear_mask') are dropped."""
+    outputs = model(imgs)
+
+    clear_masks = None
+    if use_ocm_masks:
+        clear_masks = [
+            tgt['clear_mask'].to(device).bool() for tgt in targets
+        ]
+
+    preds = []
+    for i, out in enumerate(outputs):
+        masks = out["masks"]  # (N, 1, H, W) float
+        scores = out["scores"]
+        labels = out["labels"]
+        boxes = out["boxes"]
+        if masks.numel() == 0:
+            bin_masks = torch.zeros(
+                (0, imgs[0].shape[-2], imgs[0].shape[-1]),
+                dtype=torch.bool, device=device,
+            )
+        else:
+            bin_masks = (masks[:, 0] >= score_thresh)
+
+        if clear_masks is not None and boxes.shape[0] > 0:
+            keep = _lookup_clear_at_centers(clear_masks, boxes, i)
+            bin_masks = bin_masks[keep]
+            scores = scores[keep]
+            labels = labels[keep]
+            boxes = boxes[keep]
+
+        preds.append({
+            "masks": bin_masks,
+            "scores": scores,
+            "labels": labels,
+            "boxes": boxes,
+        })
+    return preds
+
+
+@torch.no_grad()
 def evaluate(model, dataloader, device, iou_metric, map_metric,
              score_thresh=0.5, iou_thresh=0.5, use_ocm_masks=False):
     """Compute binary-IoU (union of masks), mask mAP, and event-level
@@ -906,41 +1008,15 @@ def evaluate(model, dataloader, device, iou_metric, map_metric,
 
     for imgs, targets in dataloader:
         imgs = [img.to(device) for img in imgs]
-        outputs = model(imgs)
-
+        preds_for_map = filtered_predictions(
+            model, imgs, targets, device, score_thresh=score_thresh,
+            use_ocm_masks=use_ocm_masks,
+        )
         clear_masks = None
         if use_ocm_masks:
             clear_masks = [
                 tgt['clear_mask'].to(device).bool() for tgt in targets
             ]
-
-        preds_for_map = []
-        for i, out in enumerate(outputs):
-            masks = out["masks"]  # (N, 1, H, W) float
-            scores = out["scores"]
-            labels = out["labels"]
-            boxes = out["boxes"]
-            if masks.numel() == 0:
-                bin_masks = torch.zeros(
-                    (0, imgs[0].shape[-2], imgs[0].shape[-1]),
-                    dtype=torch.bool, device=device,
-                )
-            else:
-                bin_masks = (masks[:, 0] >= score_thresh)
-
-            if clear_masks is not None and boxes.shape[0] > 0:
-                keep = _lookup_clear_at_centers(clear_masks, boxes, i)
-                bin_masks = bin_masks[keep]
-                scores = scores[keep]
-                labels = labels[keep]
-                boxes = boxes[keep]
-
-            preds_for_map.append({
-                "masks": bin_masks,
-                "scores": scores,
-                "labels": labels,
-                "boxes": boxes,
-            })
 
         gts_for_map = []
         for tgt in targets:
@@ -1079,15 +1155,49 @@ def evaluate(model, dataloader, device, iou_metric, map_metric,
               help='Write epoch_NNN.pth every epoch (default, ~170 MB each: '
                    '200 epochs is ~34 GB). --no-save-every-epoch keeps only '
                    'best_model.pth and last_model.pth.')
+@click.option('--save-epochs', default=None,
+              help='Comma-separated epochs (1-based) to write epoch_NNN.pth '
+                   'for, e.g. 1,2,3,5,8,12,17,25,40. Overrides '
+                   '--save-every-epoch; last_model.pth is always written.')
+@click.option('--folds', 'folds_csv', default=None,
+              type=click.Path(exists=True, dir_okay=False),
+              help='Temporal fold CSV from make_temporal_folds.py. With '
+                   '--fold, replaces the left/right split: both windows of '
+                   'every chip are used, chips are split by fold.')
+@click.option('--fold', default=None,
+              help="With --folds: an integer K trains on the chips of every "
+                   "other fold and tests on fold K; 'all' trains on every "
+                   'chip with no test set (the final full-record model).')
 @click.option('--wandb/--no-wandb', 'use_wandb', default=True)
 def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
          min_instance_size, nms_thresh, score_thresh, detections_per_img,
          use_ocm_masks, fourth_band, replace, nir_init, extra_train_dirs,
          use_copy_paste, copy_paste_count, copy_paste_prob,
          lr_schedule, warmup_epochs, select_metric, save_every_epoch,
-         use_wandb):
+         save_epochs, folds_csv, fold, use_wandb):
 
+    if (folds_csv is None) != (fold is None):
+        raise click.UsageError('--folds and --fold must be given together')
     os.makedirs(outputdir, exist_ok=True)
+    # One JSON line of logged metrics per epoch, appended as training runs.
+    open(os.path.join(outputdir, 'metrics.jsonl'), 'w').close()
+
+    # The default east/west split trains on the left window of every chip
+    # and tests on the right. A temporal fold instead splits chips by date
+    # and uses both windows of each, so held-out chips are new dates over
+    # the same ground.
+    if folds_csv is None:
+        train_split, test_split = 'left', 'right'
+        train_chips, test_chips = None, None
+    else:
+        train_split = test_split = ('left', 'right')
+        train_chips, test_chips = read_fold_chips(folds_csv, fold)
+        print(f"Fold {fold} of {folds_csv}: {len(train_chips)} train chips, "
+              f"{len(test_chips)} test chips")
+    has_test = test_chips is None or len(test_chips) > 0
+
+    if save_epochs is not None:
+        save_epochs = {int(e) for e in save_epochs.split(',') if e.strip()}
 
     channel_kinds = resolve_channels(fourth_band, replace)
     n_channels = len(channel_kinds)
@@ -1096,12 +1206,11 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
     # derived from the training split; the other kinds use fixed stats.
     ndvi_mean = ndvi_std = None
     if 'ndvi' in channel_kinds:
-        mask_files = sorted(glob.glob(os.path.join(imagedir, "*.mask.png")))
         train_img_files = [
-            mf.replace('.mask.png', '.tif') for mf in mask_files
+            img_file for _, img_file in list_chips(imagedir, train_chips)
         ]
         ndvi_mean, ndvi_std = compute_ndvi_stats(
-            train_img_files, 'left', size,
+            train_img_files, train_split, size,
         )
         print(
             f"Derived NDVI normalization from training split: "
@@ -1119,12 +1228,13 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
             image_std.append(s)
 
     # Donors are taken from the training crop of every training dir ('left'
-    # for imagedir, 'whole' for the extra chip dirs) so no validation-crop
-    # pixel can reach the training set.
+    # or the training-fold chips for imagedir, 'whole' for the extra chip
+    # dirs) so no validation-crop pixel can reach the training set.
     instance_bank = None
     if use_copy_paste:
         instance_bank = build_instance_bank(
-            [(imagedir, 'left')] + [(d, 'whole') for d in extra_train_dirs],
+            [(imagedir, train_split, train_chips)]
+            + [(d, 'whole') for d in extra_train_dirs],
             size, channel_kinds, min_instance_size,
             use_ocm_masks=use_ocm_masks,
         )
@@ -1161,6 +1271,12 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
         'copy_paste_count': copy_paste_count,
         'copy_paste_prob': copy_paste_prob,
         'copy_paste_bank_size': len(instance_bank) if instance_bank else 0,
+        'folds': folds_csv,
+        'fold': fold,
+        'train_split': list(as_splits(train_split)),
+        'test_split': list(as_splits(test_split)),
+        'train_chips': train_chips,
+        'test_chips': test_chips,
     }
 
     run = None
@@ -1177,11 +1293,11 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
     device = select_device()
 
     train_dataset = PlanetMaskRCNNDataset(
-        imagedir, split='left', size=size, color_jitter=True,
+        imagedir, split=train_split, size=size, color_jitter=True,
         min_instance_size=min_instance_size,
         use_ocm_masks=use_ocm_masks, channel_kinds=channel_kinds,
         instance_bank=instance_bank, copy_paste_count=copy_paste_count,
-        copy_paste_prob=copy_paste_prob,
+        copy_paste_prob=copy_paste_prob, chip_names=train_chips,
     )
     # Append any extra whole-image chip dirs to the *training* set only,
     # leaving the left/right validation split on imagedir untouched.
@@ -1199,18 +1315,21 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
             print(f"Adding {len(extra_ds)} whole-image train chips from {extra_dir}")
             datasets.append(extra_ds)
         train_dataset = torch.utils.data.ConcatDataset(datasets)
-    test_dataset = PlanetMaskRCNNDataset(
-        imagedir, split='right', size=size, color_jitter=False,
-        min_instance_size=min_instance_size,
-        use_ocm_masks=use_ocm_masks, channel_kinds=channel_kinds,
-    )
     train_loader = DataLoader(
         train_dataset, batch_size=batch_size, shuffle=True,
         collate_fn=collate_fn,
     )
-    test_loader = DataLoader(
-        test_dataset, batch_size=1, shuffle=False, collate_fn=collate_fn,
-    )
+    test_loader = None
+    if has_test:
+        test_dataset = PlanetMaskRCNNDataset(
+            imagedir, split=test_split, size=size, color_jitter=False,
+            min_instance_size=min_instance_size,
+            use_ocm_masks=use_ocm_masks, channel_kinds=channel_kinds,
+            chip_names=test_chips,
+        )
+        test_loader = DataLoader(
+            test_dataset, batch_size=1, shuffle=False, collate_fn=collate_fn,
+        )
 
     model = build_model(
         num_classes=2, nms_thresh=nms_thresh, score_thresh=score_thresh,
@@ -1281,51 +1400,63 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
 
         avg_losses = {k: v / max(n_batches, 1) for k, v in loss_totals.items()}
 
-        test_iou, test_map, test_event = evaluate(
-            model, test_loader, device, iou_metric, map_metric,
-            use_ocm_masks=use_ocm_masks,
-        )
-
-        log = {'epoch': epoch, 'test_iou': test_iou,
-               'lr': optimizer.param_groups[0]['lr']}
+        log = {'epoch': epoch, 'lr': optimizer.param_groups[0]['lr']}
         log.update({f'train/{k}': v for k, v in avg_losses.items()})
-        for k, v in test_map.items():
-            if isinstance(v, torch.Tensor) and v.numel() == 1:
-                log[f'test_map/{k}'] = v.item()
-        log.update({f'test_event/{k}': v for k, v in test_event.items()})
 
         if scheduler is not None:
             scheduler.step()
 
-        # Track the best epoch by --select-metric. The final epoch of a long
-        # run is heavily overfit (recall collapses while precision climbs), so
-        # the last checkpoint is a poor choice for downstream inference.
-        if select_metric not in log:
-            raise KeyError(
-                f"--select-metric {select_metric!r} is not a logged metric; "
-                f"available: {sorted(k for k in log if k.startswith('test'))}"
+        score = None
+        is_best = False
+        if test_loader is not None:
+            test_iou, test_map, test_event = evaluate(
+                model, test_loader, device, iou_metric, map_metric,
+                use_ocm_masks=use_ocm_masks,
             )
-        score = log[select_metric]
-        is_best = score > best_score
-        if is_best:
-            best_score, best_epoch = score, epoch + 1
+            log['test_iou'] = test_iou
+            for k, v in test_map.items():
+                if isinstance(v, torch.Tensor) and v.numel() == 1:
+                    log[f'test_map/{k}'] = v.item()
+            log.update({f'test_event/{k}': v for k, v in test_event.items()})
 
-        print(
-            f"Epoch {epoch+1}/{num_epochs} - loss: {avg_losses['loss_total']:.4f}"
-            f" - test_iou: {test_iou:.4f}"
-            f" - test_map50: {log.get('test_map/map_50', float('nan')):.4f}"
-            f" - P/R/A: {test_event['precision']:.3f}"
-            f"/{test_event['recall']:.3f}/{test_event['accuracy']:.3f}"
-            f"{' *best*' if is_best else ''}"
-        )
-        log['best/score'] = best_score
-        log['best/epoch'] = best_epoch
+            # Track the best epoch by --select-metric. The final epoch of a
+            # long run is heavily overfit (recall collapses while precision
+            # climbs), so the last checkpoint is a poor choice for downstream
+            # inference.
+            if select_metric not in log:
+                raise KeyError(
+                    f"--select-metric {select_metric!r} is not a logged metric; "
+                    f"available: {sorted(k for k in log if k.startswith('test'))}"
+                )
+            score = log[select_metric]
+            is_best = score > best_score
+            if is_best:
+                best_score, best_epoch = score, epoch + 1
+
+            print(
+                f"Epoch {epoch+1}/{num_epochs} - loss: {avg_losses['loss_total']:.4f}"
+                f" - test_iou: {test_iou:.4f}"
+                f" - test_map50: {log.get('test_map/map_50', float('nan')):.4f}"
+                f" - P/R/A: {test_event['precision']:.3f}"
+                f"/{test_event['recall']:.3f}/{test_event['accuracy']:.3f}"
+                f"{' *best*' if is_best else ''}"
+            )
+            log['best/score'] = best_score
+            log['best/epoch'] = best_epoch
+        else:
+            print(
+                f"Epoch {epoch+1}/{num_epochs} - loss: "
+                f"{avg_losses.get('loss_total', float('nan')):.4f} (no test set)"
+            )
         if run is not None:
             run.log(log)
+        with open(os.path.join(outputdir, 'metrics.jsonl'), 'a') as fh:
+            fh.write(json.dumps(log) + '\n')
 
         ckpt = {'model': model, 'params': params,
                 'epoch': epoch + 1, select_metric: score}
-        if save_every_epoch:
+        if (epoch + 1 in save_epochs if save_epochs is not None
+                else save_every_epoch):
             torch.save(
                 ckpt, os.path.join(outputdir, f'epoch_{epoch+1:03d}.pth')
             )
