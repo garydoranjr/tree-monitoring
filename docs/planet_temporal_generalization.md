@@ -161,9 +161,10 @@ Each array task trains one fold:
 - settings `--ocm-masks --min-instance-size 64 --lr 1e-4`, flat LR, batch 4;
 - 40 epochs, with checkpoints at epochs 1, 2, 3, 5, 8, 12, 17, 25 and 40.
 
-A fold trains on about 118 chips × 2 windows. The October runs took 70 s/epoch
-for 142 single-window samples, so expect about 2 min/epoch and about 1.5 h per
-fold on an A100.
+A fold trains on about 118 chips × 2 windows. On an A100 with chips staged to
+`/local`, a fold took 30–35 min (about 50 s/epoch). With the 2-GPU-per-user
+limit (see [gattaca2_cluster.md](gattaca2_cluster.md)) the array runs one or
+two folds at a time, so the six folds take about 2–3 h.
 
 40 epochs is enough: every earlier run peaked between epoch 4 and 12 and then
 overfit, and each epoch here has twice as many samples. If the pooled curve
@@ -246,7 +247,8 @@ a mavic ortho takes about 1 min to load. The JSON is rewritten after each
 group, so an interrupted run resumes where it stopped.
 
 In a test on 2025-02-12 to 02-28, 1 of 2 scenes coregistered (shift 7.3 m E,
-1.4 m N). Expect a success rate near the training build's 40 %. A scene that
+1.4 m N). The full run took 72 min with 8 workers, and 546 of the 798 scenes
+(68 %) coregistered, more than the training build's 40 %. A scene that
 fails is still predicted, but its crown rows use unshifted polygons and are
 flagged `coreg_ok = false`.
 
@@ -316,21 +318,40 @@ Where polygons overlap, a pixel belongs to the smaller crown.
 
 ## Results
 
-*To be filled in after the gattaca2 runs.*
+Temporal CV run on gattaca2 on 2026-10-17 and 18 (`$TEMPORAL_RUNS/temporal_cv.json`;
+figure `temporal_cv.png`). The pooled held-out `map_50` peaks at
+**epoch 12 (E\* = 12)**. It then falls slightly (0.336–0.340 from epoch 17 to
+40), while IoU and precision keep rising and recall falls. So the later epochs
+trade detections for cleaner masks rather than generalizing better.
+
+| Epoch | 1 | 2 | 3 | 5 | 8 | **12** | 17 | 25 | 40 |
+|---|---|---|---|---|---|---|---|---|---|
+| Pooled `map_50` | 0.169 | 0.247 | 0.269 | 0.303 | 0.335 | **0.354** | 0.337 | 0.340 | 0.336 |
+| Pooled `test_iou` | 0.199 | 0.209 | 0.203 | 0.227 | 0.280 | **0.352** | 0.381 | 0.407 | 0.422 |
 
 | | Pooled `map_50` | `test_iou` | Precision | Recall |
 |---|---|---|---|---|
-| Temporal CV, epoch E* | | | | |
+| Temporal CV, epoch 12 | 0.354 | 0.352 | 0.242 | 0.477 |
 
 | Days to nearest training chip | Chips | `map_50` | `test_iou` | Precision | Recall |
 |---|---|---|---|---|---|
-| 0–3 | 7 | | | | |
-| 4–7 | 27 | | | | |
-| 8–14 | 51 | | | | |
-| 15–30 | 35 | | | | |
-| >30 | 22 | | | | |
+| 0–3 | 7 | 0.512 | 0.416 | 0.305 | 0.600 |
+| 4–7 | 27 | 0.435 | 0.420 | 0.298 | 0.549 |
+| 8–14 | 51 | 0.372 | 0.385 | 0.278 | 0.496 |
+| 15–30 | 35 | 0.258 | 0.272 | 0.185 | 0.386 |
+| >30 | 22 | 0.203 | 0.217 | 0.124 | 0.347 |
 
-The per-fold spread is printed by `eval_temporal_cv.py`.
+Precision and recall are the event metrics (`test_event/*`).
+
+**Skill falls steadily with distance from training data.** `map_50` drops
+from about 0.5 within 3 days of a training chip, to 0.37 at 1–2 weeks, to 0.26
+at 2–4 weeks. Within the 30-day envelope that the apply step flags, the
+weakest interpolated scenes therefore score about half as well as scenes near
+a flight.
+
+By fold at epoch 12, `map_50` is 0.365–0.376 for folds 0 and 2–5 and
+0.292 for fold 1. Fold 1 holds most of the sparse 2021 flights and is the
+furthest from its training data (median 30 days).
 
 ## Caveats
 
