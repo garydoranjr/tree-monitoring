@@ -32,7 +32,9 @@ set -u
 
 MODEL="$TEMPORAL_RUNS/final_e$TEMPORAL_FINAL_EPOCHS/last_model.pth"
 # Any training chip defines the output grid; they all share one footprint.
-GRID_LIKE=$(ls "$TEMPORAL_CHIPS"/*_4band.tif | head -1)
+# (A glob, not `ls | head -1`: under pipefail the SIGPIPE to ls fails the job.)
+CHIP_TIFS=("$TEMPORAL_CHIPS"/*_4band.tif)
+GRID_LIKE=${CHIP_TIFS[0]}
 SHARD="$SLURM_ARRAY_TASK_ID/$SLURM_ARRAY_TASK_COUNT"
 echo "SLURM job: ${SLURM_JOB_ID} shard ${SHARD} on $(hostname)"
 echo "Model:     $MODEL"
