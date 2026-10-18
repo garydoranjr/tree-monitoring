@@ -6,6 +6,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Tree phenology monitoring research (Caltech/JPL) using drone and Planet satellite imagery over the BCI 50ha forest plot. See [README.md](README.md) for full project description, environment setup, workflow commands, and code organization.
 
+## Cluster (gattaca2)
+
+Before submitting Slurm jobs or running GPU work on gattaca2, read
+[docs/gattaca2_cluster.md](docs/gattaca2_cluster.md): partitions, the
+2-GPU-per-user limit (an interactive GPU session counts against it), the
+`/scratch/tree-monitoring` data layout, staging chips to `/local`, and how
+the `flower` env differs there. Update it when you learn something new
+about the cluster.
+
 ## Git workflow
 
 After implementing any significant change, automatically create a git
