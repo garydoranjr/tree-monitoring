@@ -602,6 +602,59 @@ python scripts/plot_headtohead_epochs.py \
   /Volumes/Earth03/flower/figs/202610_updates/maskrcnn_headtohead.png --label ...
 ```
 
+### Colour-transfer mavic masks (`20261012` set)
+
+`full_mkl` repeats `full` on the `20261012` set from step 2d: the same
+142 chips, but with the colour-transferred mavic masks. The 56 test chips
+are all phantom 2020-23, so their masks did not change, and the scores
+compare directly with the table above. Stage the new set and the test
+set to `/local` (both copies were checked against `/scratch` with md5),
+then train with the October settings:
+
+```bash
+mkdir -p /local/gdoran_flower
+for d in 20261012_full_label_extended2_mkl_x4_coreg_4band_stretch_stats_curated \
+         20260706_full_label_application_x4_coreg_4band_stretch_stats_curated; do
+  cp -r /scratch/ecopro-hpc/flower/$d /local/gdoran_flower/
+done
+python scripts/train_planet_image_maskrcnn.py \
+  $L/20261012_full_label_extended2_mkl_x4_coreg_4band_stretch_stats_curated \
+  $O/202610_full2_mkl_curated_maskrcnn_out_min064 \
+  --ocm-masks --min-instance-size 64 --lr 1e-4 --num-epochs 200 --no-wandb
+```
+
+All 26 params in `epoch_001.pth` match the `full` run. Training took
+2 h 27 m on one A100 (44 s/epoch; fewer instances than the old masks).
+The sweep is the one above with a fifth `--checkpoint
+full_mkl_e$e=$O/202610_full2_mkl_curated_maskrcnn_out_min064/epoch_$e.pth`
+per epoch, written to `logs/headtohead_sweep_202610_mkl.json`. Scoring
+the 60 checkpoints took 20 min. The four re-scored runs reproduce
+`headtohead_sweep_202610.json` exactly (1,128 values, max abs diff 0).
+
+Result (2026-10-17), peak over the twelve scored epochs:
+
+| Run | Chips | Peak `map_50` | at | Peak `test_iou` | at | P/R at `map_50` peak |
+|---|---|---|---|---|---|---|
+| `base` | 56 | **0.1681** | e012 | **0.3076** | e017 | 0.129 / 0.320 |
+| `full` | 142 | 0.1637 | e008 | 0.2730 | e025 | 0.095 / 0.329 |
+| `full_mkl` | 142 | 0.1488 | e005 | 0.2929 | e017 | 0.091 / 0.325 |
+
+The new masks lower peak `map_50` by 0.0149 and raise peak `test_iou` by
+0.0199, which puts `full_mkl` between `phantom` (0.2988) and `full`
+(0.2730) on IoU. Both changes are about the size of the ~0.01 noise
+already seen on this benchmark, so the mask change does not move the
+conclusion: no larger set beats `base`. `full_mkl` also peaks earlier and
+falls faster than `full` (`map_50` 0.1057 at e008 and 0.0202 at e100,
+against 0.1637 and 0.0576). The run's own validation reports a best
+`map_50` of 0.2018 at epoch 4. That figure is on the right halves of its
+142 training scenes, not on the 56-chip benchmark, so it is not
+comparable with the table. The benchmark caveats above still apply. In
+particular, it scores only phantom test chips, so it cannot show whether
+cleaner mavic labels help on mavic-era dates.
+
+To plot, add `--label full_mkl="all three, colour-transfer mavic (142)"`
+to the commands above, pointed at a copy of the new JSON.
+
 ## Consumers
 
 Both loaders glob `*.mask.png` and pair it with the sibling `.tif`:
