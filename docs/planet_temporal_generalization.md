@@ -353,6 +353,23 @@ By fold at epoch 12, `map_50` is 0.365–0.376 for folds 0 and 2–5 and
 0.292 for fold 1. Fold 1 holds most of the sparse 2021 flights and is the
 furthest from its training data (median 30 days).
 
+**Apply run** (2026-10-18, model `final_e12`, 4 shards of about 8 min each).
+All 798 selected scenes were predicted, giving 1,819,440 crown rows
+(798 × 2,280). Of these scenes, 546 have a coregistered raster as well as the
+raw one. 478 scenes are `in_envelope` (30 days or less from a training chip),
+almost all of them from 2021 to 2025. Of the 160 scenes from 2020 only 3 are
+in the envelope, and of the 115 from 2026 only 14.
+
+| Year | Scenes | In envelope | `coreg_ok` | Median days to train | Median detections ≥ 0.5 |
+|---|---|---|---|---|---|
+| 2020 | 160 | 3 | 107 | 250 | 22.5 |
+| 2021 | 167 | 159 | 124 | 14 | 28 |
+| 2022 | 182 | 133 | 122 | 15.5 | 19 |
+| 2023 | 88 | 85 | 66 | 9 | 18.5 |
+| 2024 | 57 | 55 | 38 | 4 | 32 |
+| 2025 | 29 | 29 | 19 | 4 | 38 |
+| 2026 | 115 | 14 | 70 | 98 | 27 |
+
 ## Caveats
 
 - **The epoch choice is slightly optimistic.** E* is chosen on the same pooled
