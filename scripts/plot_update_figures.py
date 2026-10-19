@@ -1165,7 +1165,9 @@ RUN_ANNOT = {'base': (8, 8), 'ext': (8, -18), 'phantom': (-88, 10), 'full': (-70
               help='Legend text per run (checkpoint labels are <run>_e<epoch>).')
 @click.option('--run', 'keep', multiple=True, metavar='RUN',
               help='Plot only these run prefixes. Repeatable; default all.')
-def maskrcnn_summary(outdir, sweep, labels, keep):
+@click.option('--name', default='maskrcnn_summary', show_default=True,
+              help='Output file stem under OUTDIR.')
+def maskrcnn_summary(outdir, sweep, labels, keep, name):
     """Single-panel mAP@50 vs epoch per training set, for a slide."""
     blob = json.loads((sweep or outdir / 'headtohead_sweep.json').read_text())
     names = {'base': 'phantom 2020-23 chips only (56)',
@@ -1206,7 +1208,7 @@ def maskrcnn_summary(outdir, sweep, labels, keep):
     ax.legend(fontsize=9, loc='lower center')
     ax.set_title(f"Mask R-CNN on the same {blob['n_chips']} phantom 2020-23 test chips")
     fig.tight_layout()
-    save(fig, outdir, 'maskrcnn_summary')
+    save(fig, outdir, name)
 
 
 if __name__ == '__main__':

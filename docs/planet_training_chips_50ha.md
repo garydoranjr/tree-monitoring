@@ -667,6 +667,20 @@ python scripts/plot_update_figures.py maskrcnn-summary --outdir $D --sweep $J "$
 python scripts/plot_headtohead_epochs.py $J $D/maskrcnn_headtohead.png "${L[@]}" "${R[@]}"
 ```
 
+The `*_mavic_masks` figures isolate the mask change: `full` against
+`full_mkl`, the same 142 chips and settings with old against
+colour-transfer mavic masks. `--name` keeps the summary from overwriting
+the one above:
+
+```bash
+L=(--label full="all three, old mavic masks (142)"
+   --label full_mkl="all three, colour-transfer mavic masks (142)")
+R=(--run full --run full_mkl)
+python scripts/plot_update_figures.py maskrcnn-summary --outdir $D --sweep $J \
+  --name maskrcnn_summary_mavic_masks "${L[@]}" "${R[@]}"
+python scripts/plot_headtohead_epochs.py $J $D/maskrcnn_headtohead_mavic_masks.png "${L[@]}" "${R[@]}"
+```
+
 ## Consumers
 
 Both loaders glob `*.mask.png` and pair it with the sibling `.tif`:

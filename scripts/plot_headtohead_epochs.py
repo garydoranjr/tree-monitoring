@@ -138,10 +138,10 @@ def plot(blob, runs, display, outputfile):
     top = {key: max(r[key] for rows in runs.values() for r in rows)
            for key in ('test_map/map_50', 'test_iou')}
     ax_map.set_ylabel('mask mAP@50')
-    ax_map.set_ylim(0, top['test_map/map_50'] * 1.25)
+    ax_map.set_ylim(0, top['test_map/map_50'] * 1.35)
     ax_map.set_title('Mask mAP@50 vs epoch (star = peak)', fontsize=10)
     ax_iou.set_ylabel('binary IoU')
-    ax_iou.set_ylim(0, top['test_iou'] * 1.2)
+    ax_iou.set_ylim(0, top['test_iou'] * 1.35)
     ax_iou.set_title('Binary IoU vs epoch (star = peak)', fontsize=10)
     ax_pr.set_ylabel('precision / recall')
     ax_pr.set_ylim(0, 0.92)
