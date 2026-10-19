@@ -664,7 +664,8 @@ L=(--label base="phantom 2020-23 only (56)" --label phantom="+ phantom 2023-24 (
    --label full_mkl="all three, colour-transfer mavic (142)")
 R=(--run base --run phantom --run full_mkl)
 python scripts/plot_update_figures.py maskrcnn-summary --outdir $D --sweep $J "${L[@]}" "${R[@]}"
-python scripts/plot_headtohead_epochs.py $J $D/maskrcnn_headtohead.png "${L[@]}" "${R[@]}"
+python scripts/plot_headtohead_epochs.py $J $D/maskrcnn_headtohead.png "${L[@]}" "${R[@]}" \
+  --standalone iou --standalone pr
 ```
 
 The `*_mavic_masks` figures isolate the mask change: `full` against
@@ -678,8 +679,12 @@ L=(--label full="all three, old mavic masks (142)"
 R=(--run full --run full_mkl)
 python scripts/plot_update_figures.py maskrcnn-summary --outdir $D --sweep $J \
   --name maskrcnn_summary_mavic_masks "${L[@]}" "${R[@]}"
-python scripts/plot_headtohead_epochs.py $J $D/maskrcnn_headtohead_mavic_masks.png "${L[@]}" "${R[@]}"
+python scripts/plot_headtohead_epochs.py $J $D/maskrcnn_headtohead_mavic_masks.png "${L[@]}" "${R[@]}" \
+  --standalone iou --standalone pr
 ```
+
+`--standalone PANEL` (`map`, `iou`, `pr`, `traj`) also writes that panel
+of the grid as its own figure, `<stem>_<panel>.<ext>`.
 
 ## Consumers
 

@@ -23,6 +23,7 @@ os.environ.setdefault('MPLBACKEND', 'Agg')
 import json
 import re
 from collections import defaultdict
+from pathlib import Path
 
 import click
 import numpy as np
@@ -70,9 +71,15 @@ def series(rows, key):
             np.array([r[key] for r in rows], dtype=float))
 
 
-def plot(blob, runs, display, outputfile):
-    fig, axs = plt.subplots(ncols=2, nrows=2, figsize=(13, 9.5))
-    ax_map, ax_iou, ax_pr, ax_traj = axs[0, 0], axs[0, 1], axs[1, 0], axs[1, 1]
+PANELS = ('map', 'iou', 'pr', 'traj')
+
+
+def draw(blob, runs, display, axes):
+    """Draw the panels named in ``axes`` ({panel: Axes}); any may be absent.
+
+    Returns the trajectory scatters so the caller can hang a colorbar on them.
+    """
+    ax_map, ax_iou, ax_pr, ax_traj = (axes.get(k) for k in PANELS)
     cycle = iter(plt.rcParams['axes.prop_cycle'].by_key()['color'][4:])
     colors = {run: RUN_COLORS.get(run) or next(cycle) for run in sorted(runs)}
     traj_scatter = []
@@ -92,6 +99,8 @@ def plot(blob, runs, display, outputfile):
         # Top row: the selection metrics, each with its peak marked, since the
         # whole point is that the reported final epoch is far from the peak.
         for ax, key in ((ax_map, 'test_map/map_50'), (ax_iou, 'test_iou')):
+            if ax is None:
+                continue
             x, y = series(rows, key)
             ax.plot(x, y, '-o', color=color, lw=1.6, ms=4, label=label)
             i = int(np.nanargmax(y))
@@ -107,27 +116,31 @@ def plot(blob, runs, display, outputfile):
         # linestyle separates the metrics, color the runs.
         x, p = series(rows, 'test_event/precision')
         _, r = series(rows, 'test_event/recall')
-        ax_pr.plot(x, p, '-o', color=color, lw=1.6, ms=4,
-                   label=f'{label} precision')
-        ax_pr.plot(x, r, '--s', color=color, lw=1.3, ms=4, alpha=0.8,
-                   label=f'{label} recall')
+        if ax_pr is not None:
+            ax_pr.plot(x, p, '-o', color=color, lw=1.6, ms=4,
+                       label=f'{label} precision')
+            ax_pr.plot(x, r, '--s', color=color, lw=1.3, ms=4, alpha=0.8,
+                       label=f'{label} recall')
 
         # Bottom right: the same data as a trajectory, which makes the
         # precision-for-recall trade legible as a single arc per run. Epoch is
         # encoded in the marker fill on a shared log norm so both runs decode
         # against the one colorbar.
-        ax_traj.plot(r, p, '-', color=color, lw=1.4, alpha=0.7, label=label)
-        sc = ax_traj.scatter(r, p, c=x, cmap='viridis', s=46, zorder=4,
-                             edgecolors=color, linewidths=1.1,
-                             norm=LogNorm(vmin=1, vmax=vmax))
-        for xi, ri, pi in zip(x, r, p):
-            if int(xi) in ANNOT_EPOCHS:
-                ax_traj.annotate(f'ep{int(xi)}', xy=(ri, pi), xytext=(6, 5),
-                                 textcoords='offset points', fontsize=7,
-                                 color=color)
-        traj_scatter.append(sc)
+        if ax_traj is not None:
+            ax_traj.plot(r, p, '-', color=color, lw=1.4, alpha=0.7, label=label)
+            sc = ax_traj.scatter(r, p, c=x, cmap='viridis', s=46, zorder=4,
+                                 edgecolors=color, linewidths=1.1,
+                                 norm=LogNorm(vmin=1, vmax=vmax))
+            for xi, ri, pi in zip(x, r, p):
+                if int(xi) in ANNOT_EPOCHS:
+                    ax_traj.annotate(f'ep{int(xi)}', xy=(ri, pi), xytext=(6, 5),
+                                     textcoords='offset points', fontsize=7,
+                                     color=color)
+            traj_scatter.append(sc)
 
     for ax in (ax_map, ax_iou, ax_pr):
+        if ax is None:
+            continue
         ax.set_xscale('log')
         ax.set_xlabel('training epoch')
         ax.grid(alpha=0.3)
@@ -137,43 +150,67 @@ def plot(blob, runs, display, outputfile):
     # sit without overlapping the curves.
     top = {key: max(r[key] for rows in runs.values() for r in rows)
            for key in ('test_map/map_50', 'test_iou')}
-    ax_map.set_ylabel('mask mAP@50')
-    ax_map.set_ylim(0, top['test_map/map_50'] * 1.35)
-    ax_map.set_title('Mask mAP@50 vs epoch (star = peak)', fontsize=10)
-    ax_iou.set_ylabel('binary IoU')
-    ax_iou.set_ylim(0, top['test_iou'] * 1.35)
-    ax_iou.set_title('Binary IoU vs epoch (star = peak)', fontsize=10)
-    ax_pr.set_ylabel('precision / recall')
-    ax_pr.set_ylim(0, 0.92)
-    ax_pr.set_title(
-        'Crown-level precision (solid circles) and recall (dashed squares):\n'
-        'late epochs trade recall away for precision', fontsize=10,
-    )
-    ax_traj.set_xlabel('recall')
-    ax_traj.set_ylabel('precision')
-    ax_traj.grid(alpha=0.3)
-    ax_traj.set_title(
-        'Precision-recall trajectory (marker fill = epoch)', fontsize=10,
-    )
+    if ax_map is not None:
+        ax_map.set_ylabel('mask mAP@50')
+        ax_map.set_ylim(0, top['test_map/map_50'] * 1.35)
+        ax_map.set_title('Mask mAP@50 vs epoch (star = peak)', fontsize=10)
+        ax_map.legend(fontsize=8, loc='lower center')
+    if ax_iou is not None:
+        ax_iou.set_ylabel('binary IoU')
+        ax_iou.set_ylim(0, top['test_iou'] * 1.35)
+        ax_iou.set_title('Binary IoU vs epoch (star = peak)', fontsize=10)
+        ax_iou.legend(fontsize=8, loc='lower center')
+    if ax_pr is not None:
+        ax_pr.set_ylabel('precision / recall')
+        ax_pr.set_ylim(0, 0.92)
+        ax_pr.set_title(
+            'Crown-level precision (solid circles) and recall (dashed squares):\n'
+            'late epochs trade recall away for precision', fontsize=10,
+        )
+        ax_pr.legend(fontsize=7, loc='upper left', ncol=2, framealpha=0.95)
+    if ax_traj is not None:
+        ax_traj.set_xlabel('recall')
+        ax_traj.set_ylabel('precision')
+        ax_traj.grid(alpha=0.3)
+        ax_traj.set_title(
+            'Precision-recall trajectory (marker fill = epoch)', fontsize=10,
+        )
+        ax_traj.legend(fontsize=8, loc='lower left')
+    return traj_scatter
 
-    ax_map.legend(fontsize=8, loc='lower center')
-    ax_iou.legend(fontsize=8, loc='lower center')
-    ax_pr.legend(fontsize=7, loc='upper left', ncol=2, framealpha=0.95)
-    ax_traj.legend(fontsize=8, loc='lower left')
 
+def colorbar(fig, traj_scatter, ax):
     if traj_scatter:
-        cb = fig.colorbar(traj_scatter[0], ax=ax_traj, pad=0.02)
+        cb = fig.colorbar(traj_scatter[0], ax=ax, pad=0.02)
         cb.set_label('training epoch', fontsize=8)
         cb.ax.tick_params(labelsize=7)
 
-    fig.suptitle(
-        f"Mask R-CNN training-set head-to-head on {blob['n_chips']} shared "
-        f"chips (test/right crops, min_instance_size="
-        f"{blob['min_instance_size']}, OCM={blob['use_ocm_masks']})",
-        fontsize=11,
-    )
+
+def suptitle(blob):
+    return (f"Mask R-CNN training-set head-to-head on {blob['n_chips']} shared "
+            f"chips (test/right crops, min_instance_size="
+            f"{blob['min_instance_size']}, OCM={blob['use_ocm_masks']})")
+
+
+def plot(blob, runs, display, outputfile):
+    fig, axs = plt.subplots(ncols=2, nrows=2, figsize=(13, 9.5))
+    axes = dict(zip(PANELS, axs.flat))
+    colorbar(fig, draw(blob, runs, display, axes), axes['traj'])
+    fig.suptitle(suptitle(blob), fontsize=11)
     fig.tight_layout(rect=(0, 0, 1, 0.97))
     fig.savefig(outputfile, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    print(f'Wrote {outputfile}')
+
+
+def plot_panel(blob, runs, display, panel, outputfile):
+    """One panel of the grid as its own figure, at the grid's panel size."""
+    fig, ax = plt.subplots(figsize=(7, 5))
+    colorbar(fig, draw(blob, runs, display, {panel: ax}), ax)
+    fig.suptitle(suptitle(blob), fontsize=9)
+    fig.tight_layout()
+    fig.savefig(outputfile, dpi=150, bbox_inches='tight')
+    plt.close(fig)
     print(f'Wrote {outputfile}')
 
 
@@ -207,7 +244,10 @@ def report(runs, display):
                    'chips)". Repeatable.')
 @click.option('--run', 'keep', multiple=True, metavar='RUN',
               help='Plot only these run prefixes. Repeatable; default all.')
-def main(statfile, outputfile, labels, keep):
+@click.option('--standalone', multiple=True, type=click.Choice(PANELS),
+              help='Also write this panel as its own figure, to '
+                   'OUTPUTFILE with _<panel> before the suffix. Repeatable.')
+def main(statfile, outputfile, labels, keep, standalone):
     display = {}
     for spec in labels:
         if '=' not in spec:
@@ -226,6 +266,10 @@ def main(statfile, outputfile, labels, keep):
           f"{len(runs)} run(s), scored on {blob['n_chips']} chips")
     report(runs, display)
     plot(blob, runs, display, outputfile)
+    out = Path(outputfile)
+    for panel in standalone:
+        plot_panel(blob, runs, display, panel,
+                   out.with_name(f'{out.stem}_{panel}{out.suffix}'))
 
 
 if __name__ == '__main__':
