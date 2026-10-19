@@ -652,8 +652,20 @@ comparable with the table. The benchmark caveats above still apply. In
 particular, it scores only phantom test chips, so it cannot show whether
 cleaner mavic labels help on mavic-era dates.
 
-To plot, add `--label full_mkl="all three, colour-transfer mavic (142)"`
-to the commands above, pointed at a copy of the new JSON.
+The figures in `figs/20261020_updates/` compare `full_mkl` with the
+phantom-only baselines, `base` and `phantom`, and leave out `ext` and
+`full`, whose mavic masks predate the full 3 × 3 colour transfer. Both
+plotters take a repeatable `--run` to pick the runs:
+
+```bash
+D=/Volumes/Earth03/flower/figs/20261020_updates
+J=$D/headtohead_sweep_202610_mkl.json
+L=(--label base="phantom 2020-23 only (56)" --label phantom="+ phantom 2023-24 (77)"
+   --label full_mkl="all three, colour-transfer mavic (142)")
+R=(--run base --run phantom --run full_mkl)
+python scripts/plot_update_figures.py maskrcnn-summary --outdir $D --sweep $J "${L[@]}" "${R[@]}"
+python scripts/plot_headtohead_epochs.py $J $D/maskrcnn_headtohead.png "${L[@]}" "${R[@]}"
+```
 
 ## Consumers
 

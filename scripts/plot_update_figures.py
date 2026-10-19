@@ -1149,10 +1149,11 @@ def coreg_stats_alignment(outdir):
 # maskrcnn-summary
 # --------------------------------------------------------------------------
 RUN_COLORS = {'base': C_PHANTOM, 'ext': C_MAVIC, 'phantom': C_PHANTOM_EXT,
-              'full': '#9467bd'}
+              'full': '#9467bd', 'full_mkl': '#ff7f0e'}
 # Peak-callout offsets (points) per run, so runs peaking at the same epoch
 # do not print their labels on top of each other.
-RUN_ANNOT = {'base': (8, 8), 'ext': (8, -18), 'phantom': (-88, 10), 'full': (-70, 14)}
+RUN_ANNOT = {'base': (8, 8), 'ext': (8, -18), 'phantom': (-88, 10), 'full': (-70, 14),
+             'full_mkl': (-88, -16)}
 
 
 @cli.command('maskrcnn-summary')
@@ -1162,7 +1163,9 @@ RUN_ANNOT = {'base': (8, 8), 'ext': (8, -18), 'phantom': (-88, 10), 'full': (-70
                                  '[default: OUTDIR/headtohead_sweep.json]')
 @click.option('--label', 'labels', multiple=True, metavar='RUN=TEXT',
               help='Legend text per run (checkpoint labels are <run>_e<epoch>).')
-def maskrcnn_summary(outdir, sweep, labels):
+@click.option('--run', 'keep', multiple=True, metavar='RUN',
+              help='Plot only these run prefixes. Repeatable; default all.')
+def maskrcnn_summary(outdir, sweep, labels, keep):
     """Single-panel mAP@50 vs epoch per training set, for a slide."""
     blob = json.loads((sweep or outdir / 'headtohead_sweep.json').read_text())
     names = {'base': 'phantom 2020-23 chips only (56)',
@@ -1171,6 +1174,8 @@ def maskrcnn_summary(outdir, sweep, labels):
     runs = {}
     for label, row in blob['results'].items():
         run, ep = label.rsplit('_e', 1)
+        if keep and run not in keep:
+            continue
         runs.setdefault(run, []).append((int(ep), row['test_map/map_50']))
     fig, ax = plt.subplots(figsize=(7.5, 4.3))
     curves = {}
@@ -1198,7 +1203,7 @@ def maskrcnn_summary(outdir, sweep, labels):
     ax.set_ylabel('mask mAP@50')
     ax.set_ylim(0, max(m.max() for _, m in curves.values()) * 1.18)
     ax.grid(alpha=0.3)
-    ax.legend(fontsize=9, loc='upper right')
+    ax.legend(fontsize=9, loc='lower center')
     ax.set_title(f"Mask R-CNN on the same {blob['n_chips']} phantom 2020-23 test chips")
     fig.tight_layout()
     save(fig, outdir, 'maskrcnn_summary')

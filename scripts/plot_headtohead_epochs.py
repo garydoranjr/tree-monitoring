@@ -36,9 +36,13 @@ LABEL_RE = re.compile(r'^(?P<run>.+)_e(?P<epoch>\d+)$')
 ANNOT_EPOCHS = (1, 3, 5, 12, 25, 60, 200)
 
 # Fixed colours for the run prefixes used so far (base = phantom 2020-23 chips,
-# ext = + mavic, phantom = + C3KW2X phantom, full = all three); others cycle.
+# ext = + mavic, phantom = + C3KW2X phantom, full = all three, full_mkl = all
+# three with colour-transfer mavic masks); others cycle.
 RUN_COLORS = {'base': '#1f77b4', 'ext': '#d62728', 'phantom': '#2ca02c',
-              'full': '#9467bd'}
+              'full': '#9467bd', 'full_mkl': '#ff7f0e'}
+# Peak-callout offsets (points) for runs that peak together at early epochs:
+# phantom and full_mkl both peak at ep5, so their labels stack to the left.
+RUN_ANNOT = {'base': (8, 10), 'phantom': (-95, 14), 'full_mkl': (-95, 40)}
 
 
 def load(path):
@@ -74,9 +78,11 @@ def plot(blob, runs, display, outputfile):
     traj_scatter = []
 
     # Stagger the peak callouts per run so they don't land on top of each other
-    # or on the curves, which peak at nearby epochs.
-    offsets = [(8, 10), (8, -26), (8, 24), (8, -40)]
-    annot_offsets = {run: offsets[i % len(offsets)] for i, run in enumerate(sorted(runs))}
+    # or on the curves, which peak at nearby epochs. Runs with a fixed offset
+    # keep it whatever else is plotted; others take the next free slot.
+    offsets = iter([(8, 10), (8, -26), (8, 24), (8, -40)])
+    annot_offsets = {run: RUN_ANNOT.get(run) or next(offsets, (8, 10))
+                     for run in sorted(runs)}
     vmax = max(r['epoch_n'] for rows in runs.values() for r in rows)
 
     for run, rows in sorted(runs.items()):
@@ -199,7 +205,9 @@ def report(runs, display):
 @click.option('--label', 'labels', multiple=True, metavar='RUN=TEXT',
               help='Legend text for a run prefix, e.g. base="20260706 (56 '
                    'chips)". Repeatable.')
-def main(statfile, outputfile, labels):
+@click.option('--run', 'keep', multiple=True, metavar='RUN',
+              help='Plot only these run prefixes. Repeatable; default all.')
+def main(statfile, outputfile, labels, keep):
     display = {}
     for spec in labels:
         if '=' not in spec:
@@ -208,6 +216,12 @@ def main(statfile, outputfile, labels):
         display[run] = text
 
     blob, runs = load(statfile)
+    if keep:
+        missing = set(keep) - set(runs)
+        if missing:
+            raise click.ClickException(
+                f'--run {sorted(missing)} not in sweep (has {sorted(runs)})')
+        runs = {run: rows for run, rows in runs.items() if run in keep}
     print(f"Loaded {sum(len(v) for v in runs.values())} checkpoints across "
           f"{len(runs)} run(s), scored on {blob['n_chips']} chips")
     report(runs, display)
