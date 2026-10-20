@@ -2,7 +2,7 @@
 """Detail plots for a blocked temporal cross-validation scored by
 eval_temporal_cv.py, complementing plot_temporal_cv.py's mAP@50 summary.
 
-Writes three figures with the given output prefix (PNG + PDF each):
+Writes four figures with the given output prefix (PNG + PDF each):
 
 - <prefix>_metrics: mAP@50, binary IoU, crown precision and crown recall
   against training epoch, pooled over folds and per fold.
@@ -11,6 +11,8 @@ Writes three figures with the given output prefix (PNG + PDF each):
 - <prefix>_chips: per-chip IoU, precision and recall at the selected epoch
   (left and right windows summed), against distance to training data and
   against acquisition date, coloured by fold.
+- <prefix>_season: the same per-chip values against day of year, all years
+  together, with the values pooled over each calendar month.
 """
 import os
 
@@ -40,6 +42,12 @@ METRICS = [
     ('test_event/precision', 'crown precision (IoU >= 0.5)'),
     ('test_event/recall', 'crown recall (IoU >= 0.5)'),
 ]
+# Pooled per-chip metrics from summed counts, matching eval_temporal_cv.py.
+POOL_FNS = {
+    'iou': lambda c: c['inter_px'].sum() / c['union_px'].sum(),
+    'precision': lambda c: c['tp'].sum() / (c['tp'].sum() + c['fp'].sum()),
+    'recall': lambda c: c['tp'].sum() / (c['tp'].sum() + c['fn'].sum()),
+}
 CHIP_METRICS = [
     ('iou', 'test_iou', 'binary IoU (clear pixels)'),
     ('precision', 'test_event/precision', 'crown precision (IoU >= 0.5)'),
@@ -196,6 +204,55 @@ def plot_chips(cv, windows, prefix):
     return chips
 
 
+def plot_season(cv, windows, prefix):
+    best = cv['best_epoch']
+    chips = chip_table(windows, best)
+    chips['doy'] = chips['planet_date'].dt.dayofyear
+    chips['month'] = chips['planet_date'].dt.month
+    # Day-of-year span of each month in a non-leap year.
+    starts = pd.date_range('2001-01-01', periods=13, freq='MS').dayofyear.values
+    starts[-1] = 366
+
+    fig, axes = plt.subplots(len(CHIP_METRICS), 1, figsize=(10, 8.5),
+                             sharex=True)
+    for ax, (col, key, label) in zip(axes, CHIP_METRICS):
+        ax.scatter(chips['doy'], chips[col], s=24, color=FOLD_COLORS[0],
+                   edgecolor='white', linewidth=0.8, label='held-out chip')
+        for i, (m, c) in enumerate(chips.groupby('month')):
+            ax.hlines(POOL_FNS[col](c), starts[m - 1], starts[m], color=INK,
+                      lw=2, label='pooled over month' if i == 0 else None)
+        ax.set_ylabel(f'per-chip {label}')
+        style(ax)
+    counts = chips['month'].value_counts()
+    top = axes[0]
+    for m in range(1, 13):
+        top.annotate(f'n={counts.get(m, 0)}',
+                     xy=((starts[m - 1] + starts[m]) / 2, 1),
+                     xycoords=('data', 'axes fraction'), xytext=(0, 2),
+                     textcoords='offset points', ha='center', va='bottom',
+                     fontsize=8, color=INK)
+    mids = (starts[:-1] + starts[1:]) / 2
+    axes[-1].set_xticks(starts[:-1], minor=True)
+    axes[-1].set_xticks(mids)
+    axes[-1].set_xticklabels(pd.date_range('2001-01-01', periods=12,
+                                           freq='MS').strftime('%b'))
+    axes[-1].tick_params(axis='x', which='major', length=0)
+    axes[-1].set_xlim(1, 366)
+    axes[-1].set_xlabel('Planet acquisition day of year (all years, '
+                        f'{chips.planet_date.min():%Y-%m} to '
+                        f'{chips.planet_date.max():%Y-%m})')
+    for ax in axes:
+        ax.grid(axis='x', which='minor', color=GRID, lw=0.8)
+    fig.legend(*axes[0].get_legend_handles_labels(), frameon=False,
+               loc='upper center', ncol=2)
+    fig.tight_layout(rect=(0, 0, 1, 0.96))
+    save(fig, prefix, 'season')
+    print(chips.groupby('month').apply(
+        lambda c: pd.Series({'n': len(c), **{k: f(c) for k, f in
+                                              POOL_FNS.items()}}),
+        include_groups=False).round(3).to_string())
+
+
 @click.command()
 @click.argument('cvjson', type=click.Path(exists=True, dir_okay=False))
 @click.argument('windowscsv', type=click.Path(exists=True, dir_okay=False))
@@ -207,6 +264,7 @@ def main(cvjson, windowscsv, outputprefix):
     plot_metrics(cv, outputprefix)
     plot_bins(cv, outputprefix)
     chips = plot_chips(cv, windows, outputprefix)
+    plot_season(cv, windows, outputprefix)
     print(chips.groupby('fold')[['iou', 'precision', 'recall']].median()
           .round(3).to_string())
 

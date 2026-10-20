@@ -189,9 +189,9 @@ python scripts/plot_temporal_cv.py \
   $TEMPORAL_RUNS/temporal_cv.json $TEMPORAL_RUNS/temporal_cv.png
 ```
 
-`plot_temporal_cv_detail.py` draws three more figures that show IoU, precision
-and recall next to mAP@50. It writes `temporal_cv_metrics`, `temporal_cv_bins`
-and `temporal_cv_chips` (PNG and PDF):
+`plot_temporal_cv_detail.py` draws four more figures that show IoU, precision
+and recall next to mAP@50. It writes `temporal_cv_metrics`, `temporal_cv_bins`,
+`temporal_cv_chips` and `temporal_cv_season` (PNG and PDF):
 
 ```bash
 python scripts/plot_temporal_cv_detail.py $TEMPORAL_RUNS/temporal_cv.json \
@@ -363,6 +363,27 @@ at 2–4 weeks. Within the 30-day envelope that the apply step flags, the
 weakest interpolated scenes therefore score about half as well as scenes near
 a flight.
 
+**Skill is seasonal.** By calendar month at epoch 12 (`temporal_cv_season.png`;
+all years together, counts summed over chips), the dry-season chips
+(December to April, 110 chips) score far above the wet-season ones (May to
+November, 32 chips):
+
+| Season | Days to nearest training chip | Chips | `test_iou` | Precision | Recall |
+|---|---|---|---|---|---|
+| Dry (Dec–Apr) | ≤ 14 | 85 | 0.399 | 0.287 | 0.522 |
+| Dry (Dec–Apr) | 15–30 | 19 | 0.325 | 0.247 | 0.422 |
+| Dry (Dec–Apr) | > 30 | 6 | 0.314 | 0.216 | 0.459 |
+| Wet (May–Nov) | 15–30 | 16 | 0.187 | 0.117 | 0.323 |
+| Wet (May–Nov) | > 30 | 16 | 0.124 | 0.051 | 0.193 |
+
+August to October is the weakest stretch (IoU 0.11–0.13, precision
+0.04–0.06). No wet-season chip is within 14 days of training data: their
+median distance is 30.5 days, against 12 for the dry season. Distance alone
+does not explain the gap, though. At the same 15–30 days, wet-season IoU is
+0.19 against 0.33 in the dry season. Scenes are cloudier then, there are fewer
+flights and the canopy is in full leaf, so the wet-season interpolation is the
+least reliable part of the apply output.
+
 By fold at epoch 12, `map_50` is 0.365–0.376 for folds 0 and 2–5 and
 0.292 for fold 1. Fold 1 holds most of the sparse 2021 flights and is the
 furthest from its training data (median 30 days).
@@ -487,3 +508,17 @@ in the envelope, and of the 115 from 2026 only 14.
 > 30 days), and the dashed line is the 30-day envelope. Right: against the
 > chip's Planet acquisition date. The dotted line is the value pooled over all
 > held-out chips.
+
+`temporal_cv_season.png`:
+
+> Seasonal variation in the per-chip held-out binary IoU (top, predicted and
+> labelled crown masks over clear pixels), crown precision (middle) and crown
+> recall (bottom; a match is a mask IoU of at least 0.5) of the Planet Mask
+> R-CNN at the selected epoch 12, under the blocked temporal cross-validation
+> of the 142 chips of the 20261012 curated set. The x-axis is the chip's
+> Planet acquisition day of year, with chips from 2021-01 to 2026-01 shown
+> together. Each blue point is one chip, with its left and right 512 × 512
+> windows summed. The black segments are the values pooled over each
+> calendar month, computed from the TP/FP/FN counts and mask pixels summed
+> over that month's chips, and the number of chips in each month is printed
+> above the top panel.
