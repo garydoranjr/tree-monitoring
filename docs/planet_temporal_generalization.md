@@ -8,6 +8,7 @@ Scripts:
 - [`scripts/plot_temporal_cv_detail.py`](../scripts/plot_temporal_cv_detail.py)
 - [`scripts/coreg_planet_to_nearest_drone.py`](../scripts/coreg_planet_to_nearest_drone.py)
 - [`scripts/apply_planet_maskrcnn.py`](../scripts/apply_planet_maskrcnn.py)
+- [`scripts/plot_crown_species_comparison.py`](../scripts/plot_crown_species_comparison.py)
 - the Slurm wrappers `scripts/slurm/planet_temporal_{cv,eval,final}.sh`,
   `scripts/slurm/planet_coreg_nearest.sh` and `scripts/slurm/planet_apply.sh`
 
@@ -405,6 +406,90 @@ in the envelope, and of the 115 from 2026 only 14.
 | 2025 | 29 | 29 | 19 | 4 | 38 |
 | 2026 | 115 | 14 | 70 | 98 | 27 |
 
+## Crown-level comparison with the drone classifications
+
+`plot_crown_species_comparison.py` compares the apply run's per-crown calls
+with the drone crown classifications, by species. It runs on the Mac, from the
+Earth03 copy, in about 5 s:
+
+```bash
+python scripts/plot_crown_species_comparison.py \
+  /Volumes/Earth03/flower/202610_temporal_apply/crown_species
+```
+
+It writes `crown_species_{timeseries,season,agreement}.{png,pdf}` and
+`crown_species_agreement.csv`.
+
+**The drone label is the training-mask rule applied per crown.** The rule is
+`apply_drone_labels_coreg.py --mode both`: a crown is an *event* (flowering or
+deciduous) when `1 − (1 − p_flowering)(1 − p_deciduous) > 0.5`. Here it is
+applied to the per-crown mean probabilities in `results/crown_classifications.nc4`
+(phantom, 2018 to 2024-03-18) and `crown_classifications_mavic.nc4` (mavic,
+from 2024-03-19). The classification rasters are almost constant inside a
+crown: the within-crown standard deviation of `p_flowering` is about 0.01 on a
+2022-03-30 sample. So the crown mean gives the same answer as the per-pixel
+rule.
+
+**The Planet call.** A Planet crown is an event when at least 25 % of its
+clear pixels lie under a detection scoring 0.5 or more (`pos_frac ≥ 0.25`,
+`--pos-frac`). On both sides, only these crowns are used:
+- crowns of at least 64 Planet pixels, the training `--min-instance-size`
+  (2,000 of the 2,227 crown tags);
+- Planet crowns at least 50 % clear.
+
+The choice of rule was checked on the matched set below:
+
+| Planet rule | Precision | Recall | Share of crowns called |
+|---|---|---|---|
+| `pos_frac ≥ 0.10` | 0.47 | 0.41 | 4.2 % |
+| **`pos_frac ≥ 0.25`** | **0.56** | **0.39** | **3.3 %** |
+| `pos_frac ≥ 0.50` | 0.68 | 0.29 | 2.0 % |
+| `max_score ≥ 0.50` | 0.35 | 0.42 | 5.8 % |
+
+The drone label calls 4.8 % of the same crown-scenes events. `max_score`
+ranks crowns slightly better (AUROC 0.75, against 0.70 for `pos_frac`), but
+at any useful cutoff it calls far more false events.
+
+**Species.** The twelve species with the most drone event crown-dates over
+the apply period are shown.
+
+**Agreement.** Each Planet scene is matched to the drone flight it was
+coregistered to (`drone_date`). The match uses only scenes that are
+coregistered, in the envelope, and 3 to 7 days from that flight (the apply
+step excludes scenes within 2 days). That gives 304,890 crown-scenes in 203
+scenes, matched to 74 flights.
+
+| Species | Drone events | Precision | Recall | Drone share | Planet share |
+|---|---|---|---|---|---|
+| *Cavanillesia platanifolia* | 1,204 | 0.90 | 0.61 | 0.50 | 0.34 |
+| *Tachigali panamensis* | 361 | 0.82 | 0.62 | 0.08 | 0.06 |
+| *Dipteryx oleifera* | 989 | 0.75 | 0.70 | 0.23 | 0.22 |
+| *Hura crepitans* | 1,268 | 0.74 | 0.60 | 0.14 | 0.11 |
+| *Platypodium elegans* | 586 | 0.73 | 0.50 | 0.32 | 0.22 |
+| *Handroanthus guayacan* | 373 | 0.72 | 0.46 | 0.16 | 0.11 |
+| *Ceiba pentandra* | 572 | 0.72 | 0.59 | 0.15 | 0.12 |
+| *Tabebuia rosea* | 423 | 0.70 | 0.41 | 0.16 | 0.10 |
+| *Cordia alliodora* | 326 | 0.64 | 0.27 | 0.19 | 0.08 |
+| *Jacaranda copaia* | 1,363 | 0.54 | 0.17 | 0.08 | 0.03 |
+| *Zanthoxylum ekmanii* | 636 | 0.51 | 0.08 | 0.07 | 0.01 |
+| *Quararibea stenophylla* | 798 | 0.30 | 0.18 | 0.03 | 0.02 |
+| other species | 5,590 | 0.39 | 0.32 | 0.025 | 0.021 |
+| all species | 14,489 | 0.56 | 0.39 | 0.048 | 0.033 |
+
+**What the comparison shows.**
+- **Large deciduous and mass-flowering canopy species track the drone
+  closely.** *Dipteryx*, *Hura*, *Ceiba* and *Cavanillesia* reach precision
+  0.7–0.9 and recall 0.6–0.7, and their Planet shares follow the drone's
+  dry-season peaks year by year.
+- **Planet under-calls everywhere** (3.3 % against 4.8 %), most of all for
+  *Zanthoxylum*, *Jacaranda*, *Cordia* and *Quararibea*. Their events are
+  likely smaller in area or lower in contrast at 3 m.
+- ***Zanthoxylum's* September–October drone peak is missed entirely.** This
+  matches the wet-season weakness in the temporal CV.
+- Before 2021 and after 2026-01, almost every Planet scene is outside the
+  envelope (grey in the time series). There the Planet shares still rise
+  with the drone in season, but they are not validated.
+
 ## Caveats
 
 - **The epoch choice is slightly optimistic.** E* is chosen on the same pooled
@@ -522,3 +607,52 @@ in the envelope, and of the 115 from 2026 only 14.
 > calendar month, computed from the TP/FP/FN counts and mask pixels summed
 > over that month's chips, and the number of chips in each month is printed
 > above the top panel.
+
+`crown_species_timeseries.png`:
+
+> Share of the crowns of each of the twelve species with the most drone
+> event crown-dates that are flowering or deciduous, from 2020 to 2026. Each
+> panel is one species, with the number of crowns of at least 64 Planet
+> pixels (0.75 m) in the plot. The drone series (black, one point per drone
+> flight) counts a crown as an event when its mean classification
+> probabilities give 1 − (1 − p_flowering)(1 − p_deciduous) > 0.5. That is
+> the rule used to make the training masks, applied to the phantom record to
+> 2024-03-18 and the mavic record after it. The Planet series has one point
+> per Planet scene between flights. It counts a crown as an event when at
+> least 25 % of its clear pixels lie under a detection of the epoch-12
+> temporal Mask R-CNN scoring 0.5 or more. It uses only crowns at least 50 %
+> clear, and scenes with at least 5 such crowns of the species. Scenes 30 days
+> or less from a training chip are blue, and scenes further away grey.
+
+`crown_species_season.png`:
+
+> Seasonal variation in the share of the crowns of each of the twelve species
+> with the most drone event crown-dates that are flowering or deciduous, by
+> calendar month. The drone flights (black) and the Planet scenes 30 days or
+> less from a training chip (blue) both cover 2020-12 to 2026-02. Each month's
+> value pools the crown-dates of that month across all years. The drone
+> series counts a crown as an event when its mean classification
+> probabilities give 1 − (1 − p_flowering)(1 − p_deciduous) > 0.5, the
+> training-mask rule. The Planet series counts a crown as an event when at
+> least 25 % of its clear pixels lie under a detection of the epoch-12
+> temporal Mask R-CNN scoring 0.5 or more, for crowns at least 50 % clear.
+> Only crowns of at least 64 Planet pixels (0.75 m) are used, and the number
+> of such crowns of each species is in its title.
+
+`crown_species_agreement.png`:
+
+> Crown-level agreement between the Planet Mask R-CNN's event calls and the
+> drone classifications, by species. The Planet scenes are 203 coregistered
+> scenes 3 to 7 days from the drone flight they were coregistered to and 30
+> days or less from a training chip (304,890 crown-scenes, 74 flights,
+> 2021-2026). Left: precision (orange, share of Planet event calls that the
+> drone also calls an event) and recall (green, share of drone events that
+> Planet calls). Right: the share of crown-scenes called an event by the
+> drone label (black) and by Planet (blue). A drone event is
+> 1 − (1 − p_flowering)(1 − p_deciduous) > 0.5 on the crown's mean
+> classification probabilities. A Planet event is at least 25 % of the
+> crown's clear pixels under a detection scoring 0.5 or more. Only crowns of
+> at least 64 Planet pixels (0.75 m) and at least 50 % clear are used. The
+> twelve species with the most drone event crown-dates are shown above the
+> rule, with the remaining species and all species pooled below it. The
+> number of drone events for each row is given next to its name.
