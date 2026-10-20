@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>BCI 50ha crowns: drone vs Planet classification confidence</title>
+<script>/*PLOTLYJS*/</script>
+<style>
+  :root {
+    --ink: #1a1a1a; --ink2: #555; --muted: #8a8a8a; --grid: #e6e6e6;
+    --surface: #ffffff; --blue: #2a78d6; --orange: #eb6834; --aqua: #1baf7a;
+    --grey: #b0b0b0; --sel: #eb6834;
+  }
+  body { font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+         color: var(--ink); background: var(--surface); margin: 0; padding: 12px 18px; }
+  h1 { font-size: 16px; margin: 0 0 4px; font-weight: 600; }
+  .sub { color: var(--ink2); margin: 0 0 10px; max-width: 1100px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 14px; align-items: end; margin-bottom: 8px; }
+  .controls label { display: flex; flex-direction: column; gap: 2px; color: var(--ink2); font-size: 12px; }
+  select, input[type=text] { font: inherit; padding: 3px 5px; border: 1px solid #ccc; border-radius: 4px; }
+  #species { min-width: 260px; } #crown { min-width: 240px; }
+  button { font: inherit; padding: 3px 9px; border: 1px solid #ccc; border-radius: 4px;
+           background: #fafafa; cursor: pointer; }
+  button:hover { background: #f0f0f0; }
+  #mapwrap { position: relative; border: 1px solid var(--grid); border-radius: 4px; }
+  #map { display: block; width: 100%; height: auto; }
+  #map path { stroke: #fff; stroke-width: 0.35; cursor: pointer; }
+  #map path:hover { stroke: var(--ink); stroke-width: 1; }
+  #map path.sel { stroke: var(--sel); stroke-width: 2.2; }
+  #tip { position: absolute; pointer-events: none; background: rgba(255,255,255,.96);
+         border: 1px solid #ccc; border-radius: 4px; padding: 4px 7px; font-size: 12px;
+         display: none; white-space: nowrap; box-shadow: 0 1px 4px rgba(0,0,0,.1); }
+  .maprow { display: flex; gap: 12px; align-items: center; margin: 6px 0 2px; flex-wrap: wrap; }
+  #legend { display: flex; align-items: center; gap: 6px; color: var(--ink2); font-size: 12px; }
+  #ramp { width: 160px; height: 10px; border-radius: 2px; }
+  #info { margin: 8px 0 0; color: var(--ink2); }
+  #info b { color: var(--ink); }
+  #ts { width: 100%; height: 560px; }
+  .muted { color: var(--muted); }
+</style>
+</head>
+<body>
+<h1>BCI 50ha: drone vs Planet classification confidence per crown</h1>
+<p class="sub">
+Drone: per-crown mean probabilities from the crown classifications (phantom to
+<span id="phEnd"></span>, mavic after), and the training-mask event probability
+1 − (1 − p<sub>flowering</sub>)(1 − p<sub>deciduous</sub>); an event is &gt; 0.5.
+Planet: the epoch-12 temporal Mask R-CNN on scenes between flights;
+<i>max score</i> is the highest detection score on a clear crown pixel, and
+<i>covered fraction</i> the share of clear crown pixels under a detection scoring ≥ 0.5
+(a Planet event is ≥ 0.25). Click a crown on the map, or a point in the plot to
+set the map date.
+</p>
+
+<div class="controls">
+  <label>Species (ranked by drone events)<select id="species"></select></label>
+  <label>Crown<select id="crown"></select></label>
+  <label>Find tag<input id="tagq" type="text" size="9" placeholder="e.g. 260042"></label>
+  <label>Min Planet clear fraction
+    <select id="minclear">
+      <option value="10">0.1</option><option value="25">0.25</option>
+      <option value="50" selected>0.5</option><option value="75">0.75</option>
+      <option value="100">1.0</option>
+    </select></label>
+  <label>Map colour
+    <select id="mode">
+      <option value="species">Highlight species</option>
+      <option value="drone">Drone event probability on date</option>
+      <option value="planet">Planet max score on date</option>
+      <option value="planetcov">Planet covered fraction on date</option>
+    </select></label>
+  <div>
+    <button id="prev" title="Previous flight or scene">◀</button>
+    <span id="curdate" class="muted">—</span>
+    <button id="next" title="Next flight or scene">▶</button>
+  </div>
+</div>
+
+<div id="mapwrap">
+  <svg id="map" xmlns="http://www.w3.org/2000/svg"></svg>
+  <div id="tip"></div>
+</div>
+<div class="maprow">
+  <div id="legend"></div>
+  <div id="info"></div>
+</div>
+<div id="ts"></div>
+
+<script>
+const D = /*DATA*/;
+const S = D.scenes, C = D.crowns;
+document.getElementById('phEnd').textContent = D.phantomEnd;
+const MIN_PX = 64, POS_EVENT = 25, MIN_OBS = 5;
+
+// Derived per-crown arrays (values are ints 0-100, -1 missing).
+for (const c of C) {
+  if (c.f) c.e = c.f.map((f, i) => (f < 0 || c.d[i] < 0) ? -1
+    : Math.round(100 * (1 - (1 - f / 100) * (1 - c.d[i] / 100))));
+  c.nEvents = c.e ? c.e.filter(v => v > 50).length : 0;
+}
+const byTag = new Map(C.map(c => [c.tag, c]));
+
+// Scene-major Planet lookup for map colouring.
+const sceneVals = S.date.map(() => new Map());
+for (const c of C) if (c.ps) c.ps.forEach((s, i) => sceneVals[s].set(c.tag, i));
+
+// Species, ranked by drone event crown-dates of crowns >= MIN_PX.
+const spMap = new Map();
+for (const c of C) {
+  const s = spMap.get(c.sp) || {name: c.sp, crowns: [], events: 0};
+  s.crowns.push(c); if (c.px >= MIN_PX) s.events += c.nEvents; spMap.set(c.sp, s);
+}
+const species = [...spMap.values()].sort((a, b) => b.events - a.events);
+const spSel = document.getElementById('species');
+spSel.innerHTML = '<option value="__all">All species</option>' + species.map(s =>
+  `<option value="${s.name}">${s.name} (${s.crowns.length} crowns, ${s.events} events)</option>`).join('');
+
+let cur = {sp: species[0].name, tag: null, mode: 'species', date: null,
+           droneI: null, sceneI: null};
+const minClear = () => +document.getElementById('minclear').value;
+
+// ---------- map ----------
+const svg = document.getElementById('map');
+svg.setAttribute('viewBox', `0 0 ${D.width} ${D.height}`);
+const paths = new Map();
+const frag = document.createDocumentFragment();
+for (const c of C) {
+  if (!c.path) continue;
+  const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  p.setAttribute('d', c.path); p.dataset.tag = c.tag;
+  frag.appendChild(p); paths.set(c.tag, p);
+}
+svg.appendChild(frag);
+const tip = document.getElementById('tip');
+svg.addEventListener('mousemove', ev => {
+  const t = ev.target.dataset && ev.target.dataset.tag;
+  if (!t) { tip.style.display = 'none'; return; }
+  const c = byTag.get(+t), r = svg.parentNode.getBoundingClientRect();
+  const v = mapValue(c);
+  tip.innerHTML = `<b>${c.tag}</b> ${c.sp} <span class="muted">(${c.mn}, ${c.px} px)</span>` +
+    (cur.mode !== 'species' ? `<br>${v == null ? 'no data' : (v / 100).toFixed(2)}` : '');
+  tip.style.display = 'block';
+  tip.style.left = Math.min(ev.clientX - r.left + 12, r.width - 260) + 'px';
+  tip.style.top = (ev.clientY - r.top + 12) + 'px';
+});
+svg.addEventListener('mouseleave', () => tip.style.display = 'none');
+svg.addEventListener('click', ev => {
+  const t = ev.target.dataset && ev.target.dataset.tag;
+  if (t) selectCrown(+t, true);
+});
+
+// Sequential one-hue ramp (light -> dark blue).
+const RAMP = ['#cde2fb', '#9ec5f4', '#6da7ec', '#3987e5', '#256abf', '#184f95', '#0d366b'];
+function rampColor(v) {
+  const x = Math.max(0, Math.min(1, v / 100)) * (RAMP.length - 1);
+  const i = Math.min(RAMP.length - 2, Math.floor(x)), t = x - i;
+  const a = hex(RAMP[i]), b = hex(RAMP[i + 1]);
+  return `rgb(${a.map((u, k) => Math.round(u + (b[k] - u) * t)).join(',')})`;
+}
+function hex(h) { return [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16)); }
+
+const isPlanet = () => cur.mode === 'planet' || cur.mode === 'planetcov';
+function mapValue(c) {
+  if (cur.mode === 'drone' && cur.droneI != null) {
+    const v = c.e ? c.e[cur.droneI] : -1; return v < 0 ? null : v;
+  }
+  if (isPlanet() && cur.sceneI != null) {
+    const i = sceneVals[cur.sceneI].get(c.tag);
+    if (i == null || c.pc[i] < minClear()) return null;
+    const v = cur.mode === 'planet' ? c.pm[i] : c.pp[i];
+    return v < 0 ? 0 : v;
+  }
+  return null;
+}
+
+function drawMap() {
+  const legend = document.getElementById('legend');
+  for (const c of C) {
+    const p = paths.get(c.tag); if (!p) continue;
+    let fill;
+    if (cur.mode === 'species') {
+      fill = (cur.sp === '__all' || c.sp === cur.sp) ? '#3987e5' : '#e3e3e3';
+    } else {
+      const v = mapValue(c);
+      fill = v == null ? '#f2f2f2' : rampColor(v);
+    }
+    p.setAttribute('fill', fill);
+    p.classList.toggle('sel', c.tag === cur.tag);
+  }
+  const sel = paths.get(cur.tag); if (sel) svg.appendChild(sel);
+  if (cur.mode === 'species') {
+    legend.innerHTML = `<svg width="12" height="12"><rect width="12" height="12" fill="#3987e5"/></svg>
+      ${cur.sp === '__all' ? 'all species' : cur.sp}`;
+  } else {
+    const grad = `linear-gradient(90deg, ${RAMP.join(',')})`;
+    legend.innerHTML = `0 <div id="ramp" style="background:${grad}"></div> 1
+      &nbsp;<svg width="12" height="12"><rect width="12" height="12" fill="#f2f2f2" stroke="#ccc"/></svg>
+      ${cur.mode === 'drone' ? 'not flown' : 'cloudy / not clear enough'}`;
+  }
+  updateDateLabel();
+}
+
+// ---------- crown selection ----------
+const crownSel = document.getElementById('crown');
+function fillCrowns() {
+  const list = cur.sp === '__all' ? C : spMap.get(cur.sp).crowns;
+  const sorted = [...list].sort((a, b) => b.nEvents - a.nEvents || b.px - a.px);
+  crownSel.innerHTML = sorted.map(c =>
+    `<option value="${c.tag}">${c.tag} · ${c.mn} · ${c.px} px · ${c.nEvents} drone events</option>`).join('');
+  return sorted;
+}
+function selectCrown(tag, fromMap) {
+  const c = byTag.get(tag); if (!c) return;
+  if (fromMap && cur.sp !== '__all' && c.sp !== cur.sp) {
+    cur.sp = c.sp; spSel.value = c.sp; fillCrowns();
+  }
+  cur.tag = tag; crownSel.value = String(tag);
+  location.hash = tag;
+  const nP = c.ps ? c.pp.filter((v, i) => c.pc[i] >= minClear() && v >= POS_EVENT).length : 0;
+  const nObs = c.ps ? c.pc.filter(v => v >= minClear()).length : 0;
+  document.getElementById('info').innerHTML =
+    `<b>${c.tag}</b> · <i>${c.sp}</i> (${c.mn}) · ${c.px} Planet px (${(c.px * 0.5625).toFixed(0)} m²) · ` +
+    `drone events ${c.nEvents} of ${c.e ? c.e.filter(v => v >= 0).length : 0} flights · ` +
+    `Planet events ${nP} of ${nObs} clear scenes` +
+    (c.px < MIN_PX ? ' · <span style="color:var(--orange)">below the 64 px training minimum</span>' : '');
+  drawMap(); drawPlot();
+}
+spSel.addEventListener('change', () => {
+  cur.sp = spSel.value; const l = fillCrowns(); selectCrown(l[0].tag);
+});
+crownSel.addEventListener('change', () => selectCrown(+crownSel.value));
+document.getElementById('tagq').addEventListener('change', ev => {
+  const t = +ev.target.value.trim(); const c = byTag.get(t);
+  if (!c) { ev.target.style.borderColor = '#d33'; return; }
+  ev.target.style.borderColor = '';
+  if (cur.sp !== '__all') { cur.sp = c.sp; spSel.value = c.sp; fillCrowns(); }
+  selectCrown(t);
+});
+document.getElementById('minclear').addEventListener('change', () => selectCrown(cur.tag));
+document.getElementById('mode').addEventListener('change', ev => {
+  cur.mode = ev.target.value;
+  if (cur.mode === 'drone' && cur.droneI == null) setDate(D.droneDates[D.droneDates.length - 1]);
+  if (isPlanet() && cur.sceneI == null) setDate(S.date[0]);
+  drawMap(); drawPlot();
+});
+
+// ---------- date ----------
+const tms = s => new Date(s + 'T00:00:00Z').getTime();
+const droneT = D.droneDates.map(tms), sceneT = S.date.map(tms);
+function nearest(arr, t) {
+  let b = 0; for (let i = 1; i < arr.length; i++) if (Math.abs(arr[i] - t) < Math.abs(arr[b] - t)) b = i;
+  return b;
+}
+function setDate(dateStr, sceneI) {
+  const t = tms(dateStr.slice(0, 10));
+  cur.droneI = nearest(droneT, t);
+  cur.sceneI = sceneI != null ? sceneI : nearest(sceneT, t);
+  cur.date = isPlanet() ? S.date[cur.sceneI] : cur.mode === 'drone'
+    ? D.droneDates[cur.droneI] : dateStr.slice(0, 10);
+}
+function updateDateLabel() {
+  const el = document.getElementById('curdate');
+  if (cur.mode === 'drone' && cur.droneI != null) el.textContent = `drone flight ${D.droneDates[cur.droneI]}`;
+  else if (isPlanet() && cur.sceneI != null) {
+    const i = cur.sceneI;
+    el.textContent = `Planet ${S.date[i]} · ${S.ddrone[i]} d to drone · ${S.dtrain[i]} d to training` +
+      (S.env[i] ? '' : ' (outside envelope)') + (S.coreg[i] ? '' : ' · not coregistered');
+  } else el.textContent = cur.date || '—';
+}
+function step(dir) {
+  if (cur.mode === 'drone') {
+    cur.droneI = Math.max(0, Math.min(D.droneDates.length - 1, (cur.droneI ?? 0) + dir));
+    cur.date = D.droneDates[cur.droneI];
+  } else if (isPlanet()) {
+    cur.sceneI = Math.max(0, Math.min(S.date.length - 1, (cur.sceneI ?? 0) + dir));
+    cur.date = S.date[cur.sceneI];
+  } else return;
+  drawMap(); drawPlot();
+}
+document.getElementById('prev').onclick = () => step(-1);
+document.getElementById('next').onclick = () => step(1);
+document.addEventListener('keydown', ev => {
+  if (ev.target.tagName === 'INPUT') return;
+  if (ev.key === 'ArrowLeft') step(-1); if (ev.key === 'ArrowRight') step(1);
+});
+
+// ---------- plot ----------
+function speciesShares(sp) {
+  const crowns = (sp === '__all' ? C : spMap.get(sp).crowns).filter(c => c.px >= MIN_PX);
+  const dn = D.droneDates.map(() => [0, 0]);
+  for (const c of crowns) if (c.e) c.e.forEach((v, i) => { if (v >= 0) { dn[i][1]++; if (v > 50) dn[i][0]++; } });
+  const pn = S.date.map(() => [0, 0]);
+  for (const c of crowns) if (c.ps) c.ps.forEach((s, i) => {
+    if (c.pc[i] >= minClear()) { pn[s][1]++; if (c.pp[i] >= POS_EVENT) pn[s][0]++; }
+  });
+  return {dn, pn};
+}
+
+const ts = document.getElementById('ts');
+function drawPlot() {
+  const c = byTag.get(cur.tag);
+  const traces = [];
+  const dd = D.droneDates;
+  if (c.e) {
+    const v = a => a.map(x => x < 0 ? null : x / 100);
+    traces.push({x: dd, y: v(c.e), name: 'drone event probability', mode: 'lines+markers',
+      line: {color: '#1a1a1a', width: 2}, marker: {size: 5}, connectgaps: true,
+      hovertemplate: '%{x}<br>drone event p %{y:.2f}<extra></extra>'});
+    traces.push({x: dd, y: v(c.f), name: 'drone p flowering', mode: 'lines',
+      line: {color: '#eb6834', width: 1.2}, connectgaps: true,
+      hovertemplate: '%{x}<br>p flowering %{y:.2f}<extra></extra>'});
+    traces.push({x: dd, y: v(c.d), name: 'drone p deciduous', mode: 'lines',
+      line: {color: '#1baf7a', width: 1.2}, connectgaps: true,
+      hovertemplate: '%{x}<br>p deciduous %{y:.2f}<extra></extra>'});
+  }
+  if (c.ps) {
+    const groups = {in: [], out: []};
+    c.ps.forEach((s, i) => { if (c.pc[i] >= minClear()) groups[S.env[s] ? 'in' : 'out'].push(i); });
+    for (const [key, color, name] of [['in', '#2a78d6', 'Planet max score'],
+                                       ['out', '#b0b0b0', 'Planet max score, > 30 d from training']]) {
+      const idx = groups[key];
+      const cd = idx.map(i => {
+        const s = c.ps[i];
+        return [s, c.pc[i] / 100, c.pp[i] < 0 ? 0 : c.pp[i] / 100, S.ddrone[s], S.dtrain[s],
+                S.coreg[s] ? 'yes' : 'no'];
+      });
+      const ht = '%{x}<br>%{meta}: %{y:.2f}<br>covered fraction %{customdata[2]:.2f}' +
+        '<br>clear fraction %{customdata[1]:.2f}<br>%{customdata[3]} d to drone, ' +
+        '%{customdata[4]} d to training<br>coregistered %{customdata[5]}<extra></extra>';
+      traces.push({x: idx.map(i => S.date[c.ps[i]]), y: idx.map(i => c.pm[i] < 0 ? 0 : c.pm[i] / 100),
+        name, mode: 'markers', customdata: cd, meta: 'max score', hovertemplate: ht,
+        marker: {color, size: 6, symbol: idx.map(i => S.coreg[c.ps[i]] ? 'circle' : 'circle-open'),
+                 line: {width: 1, color}}});
+      traces.push({x: idx.map(i => S.date[c.ps[i]]), y: idx.map(i => c.pp[i] < 0 ? 0 : c.pp[i] / 100),
+        name: key === 'in' ? 'Planet covered fraction' : 'Planet covered fraction, > 30 d',
+        mode: 'markers', customdata: cd, meta: 'covered fraction', hovertemplate: ht,
+        visible: 'legendonly', marker: {color: key === 'in' ? '#86b6ef' : '#d6d6d6', size: 6, symbol: 'diamond'}});
+    }
+  }
+  const sh = speciesShares(cur.sp);
+  const spName = cur.sp === '__all' ? 'all species' : cur.sp;
+  traces.push({x: dd, y: sh.dn.map(([e, n]) => n ? e / n : null), name: 'species: drone share',
+    xaxis: 'x', yaxis: 'y2', mode: 'lines+markers', line: {color: '#1a1a1a', width: 1.5},
+    marker: {size: 4}, connectgaps: true, customdata: sh.dn.map(([e, n]) => [e, n]),
+    hovertemplate: '%{x}<br>drone: %{customdata[0]} of %{customdata[1]} crowns<extra></extra>'});
+  const keep = S.date.map((_, s) => sh.pn[s][1] >= MIN_OBS);
+  const sIdx = S.date.map((_, s) => s).filter(s => keep[s]);
+  traces.push({x: sIdx.map(s => S.date[s]), y: sIdx.map(s => sh.pn[s][0] / sh.pn[s][1]),
+    name: 'species: Planet share', xaxis: 'x', yaxis: 'y2', mode: 'markers',
+    marker: {size: 5, color: sIdx.map(s => S.env[s] ? '#2a78d6' : '#b0b0b0')},
+    customdata: sIdx.map(s => sh.pn[s]),
+    hovertemplate: '%{x}<br>Planet: %{customdata[0]} of %{customdata[1]} clear crowns<extra></extra>'});
+
+  const shapes = [{type: 'line', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: 0.5, y1: 0.5,
+                   line: {color: '#1a1a1a', width: 1, dash: 'dot'}}];
+  if (cur.mode !== 'species' && cur.date) {
+    for (const yref of ['y', 'y2']) shapes.push({type: 'line', xref: 'x', x0: cur.date, x1: cur.date,
+      yref: yref + ' domain', y0: 0, y1: 1, line: {color: '#eb6834', width: 1.5}});
+  }
+  const prev = ts.layout && ts.layout.xaxis && ts.layout.xaxis.range;
+  const layout = {
+    margin: {l: 60, r: 20, t: 30, b: 40}, hovermode: 'closest', showlegend: true,
+    legend: {orientation: 'h', y: 1.08, x: 0, font: {size: 11}},
+    xaxis: {type: 'date', anchor: 'y2', gridcolor: '#e6e6e6', range: prev,
+            rangeslider: {visible: false}},
+    yaxis: {domain: [0.42, 1], range: [-0.03, 1.03], title: {text: `crown ${c.tag}`},
+            gridcolor: '#e6e6e6', zeroline: false},
+    yaxis2: {domain: [0, 0.32], rangemode: 'tozero', gridcolor: '#e6e6e6', zeroline: false,
+             title: {text: 'share of crowns<br>flowering or deciduous'}},
+    annotations: [{text: `<i>${spName}</i>: crowns ≥ ${MIN_PX} px; Planet scenes with ≥ ${MIN_OBS} clear crowns`,
+                   xref: 'paper', yref: 'paper', x: 0, y: 0.345, showarrow: false, xanchor: 'left',
+                   font: {size: 11, color: '#555'}}],
+    shapes, plot_bgcolor: '#fff', paper_bgcolor: '#fff', font: {family: 'inherit', size: 12},
+  };
+  Plotly.react(ts, traces, layout, {displaylogo: false, responsive: true});
+}
+ts.addEventListener && setTimeout(() => ts.on('plotly_click', ev => {
+  const p = ev.points[0];
+  const sceneI = (p.customdata && p.data.name.startsWith('Planet')) ? p.customdata[0] : null;
+  if (cur.mode === 'species') { cur.mode = sceneI != null ? 'planet' : 'drone';
+    document.getElementById('mode').value = cur.mode; }
+  setDate(String(p.x), sceneI);
+  drawMap(); drawPlot();
+}), 0);
+
+// ---------- start ----------
+const hashTag = +location.hash.slice(1);
+if (byTag.has(hashTag)) { cur.sp = byTag.get(hashTag).sp; }
+spSel.value = cur.sp;
+const first = fillCrowns();
+selectCrown(byTag.has(hashTag) ? hashTag : first[0].tag);
+</script>
+</body>
+</html>

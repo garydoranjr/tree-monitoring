@@ -9,6 +9,8 @@ Scripts:
 - [`scripts/coreg_planet_to_nearest_drone.py`](../scripts/coreg_planet_to_nearest_drone.py)
 - [`scripts/apply_planet_maskrcnn.py`](../scripts/apply_planet_maskrcnn.py)
 - [`scripts/plot_crown_species_comparison.py`](../scripts/plot_crown_species_comparison.py)
+- [`scripts/make_crown_timeseries_html.py`](../scripts/make_crown_timeseries_html.py), with the page template
+  [`scripts/crown_timeseries_template.html`](../scripts/crown_timeseries_template.html)
 - the Slurm wrappers `scripts/slurm/planet_temporal_{cv,eval,final}.sh`,
   `scripts/slurm/planet_coreg_nearest.sh` and `scripts/slurm/planet_apply.sh`
 
@@ -475,6 +477,39 @@ scenes, matched to 74 flights.
 | *Quararibea stenophylla* | 798 | 0.30 | 0.18 | 0.03 | 0.02 |
 | other species | 5,590 | 0.39 | 0.32 | 0.025 | 0.021 |
 | all species | 14,489 | 0.56 | 0.39 | 0.048 | 0.033 |
+
+**Interactive per-crown viewer.** `make_crown_timeseries_html.py` writes one
+self-contained page (about 21 MB, with plotly.js inlined so it opens offline):
+
+```bash
+python scripts/make_crown_timeseries_html.py \
+  /Volumes/Earth03/flower/202610_temporal_apply/crown_timeseries_viewer.html
+```
+
+- **The map** is the 2022-09-29 crown map, and a crown is selected by
+  clicking it. It colours crowns by one of:
+  - the selected species;
+  - the drone event probability at a flight;
+  - the Planet `max_score` or `pos_frac` in a scene.
+
+  The ◀ ▶ buttons (or the arrow keys) step through flights or scenes.
+- **The crown panel** plots, for the selected crown:
+  - the drone `p_flowering` and `p_deciduous`, and the event probability
+    1 − (1 − p_f)(1 − p_d), at every flight from 2018 to 2026;
+  - the Planet `max_score` at every scene, with `pos_frac` available from
+    the legend.
+
+  Grey points are outside the 30-day envelope, and open circles are scenes
+  that were not coregistered. Hovering over a point gives its clear fraction
+  and its distances to the nearest drone flight and training chip. Clicking a
+  point moves the map to that date.
+- **The species panel** repeats the species shares of
+  `crown_species_timeseries.png` for the selected crown's species.
+- **Filtering.** A minimum Planet clear fraction (default 0.5) filters both
+  panels and the map. The page includes only crown-scenes at least 10 % clear
+  (`--store-min-clear`).
+- **The URL** keeps the selected tag (`#<tag>`), so a crown can be linked
+  directly.
 
 **What the comparison shows.**
 - **Large deciduous and mass-flowering canopy species track the drone
