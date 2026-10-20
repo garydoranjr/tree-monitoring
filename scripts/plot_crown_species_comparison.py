@@ -141,7 +141,7 @@ def plot_timeseries(drone, planet, species, n_crowns, min_obs, prefix):
     axes[-1].xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
     axes[-1].set_xlim(t0, t1)
     axes[-1].set_xlabel('date')
-    fig.supylabel('share of crowns flowering or deciduous', x=0.005)
+    fig.supylabel('share of crowns with an event (flowering and/or deciduous)', x=0.005)
     handles, labels = axes[0].get_legend_handles_labels()
     order = [labels.index(l) for l in ('drone flight', 'Planet scene',
                                        'Planet, > 30 d from training')]
@@ -181,7 +181,7 @@ def plot_season(drone, planet, species, n_crowns, prefix):
         ax.set_xticks(months)
         ax.set_xticklabels([m[0] for m in pd.date_range(
             '2001-01-01', periods=12, freq='MS').strftime('%b')])
-    fig.supylabel('share of crowns flowering or deciduous')
+    fig.supylabel('share of crowns with an event (flowering and/or deciduous)')
     fig.supxlabel(f'calendar month (all years, {t0:%Y-%m} to {t1:%Y-%m})')
     fig.legend(*axes.flat[0].get_legend_handles_labels(), frameon=False,
                loc='upper center', ncol=2)
@@ -228,7 +228,7 @@ def plot_agreement(table, n_scenes, match_days, prefix):
                  table[['drone_share', 'planet_share']].max(axis=1),
                  color=GRID, lw=2, zorder=2)
     ax_sh.set_xlim(left=0)
-    ax_sh.set_xlabel('share of crown-scenes called flowering or deciduous')
+    ax_sh.set_xlabel('share of crown-scenes called an event')
     ax_sh.legend(frameon=False, loc='lower right')
     ax_pr.set_yticks(y)
     ax_pr.set_yticklabels([f"{s} (n={d:,} drone events)" for s, d in
