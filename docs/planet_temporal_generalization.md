@@ -5,6 +5,7 @@ Scripts:
 - [`scripts/train_planet_image_maskrcnn.py`](../scripts/train_planet_image_maskrcnn.py), with `--folds/--fold` and `--save-epochs`
 - [`scripts/eval_temporal_cv.py`](../scripts/eval_temporal_cv.py)
 - [`scripts/plot_temporal_cv.py`](../scripts/plot_temporal_cv.py)
+- [`scripts/plot_temporal_cv_detail.py`](../scripts/plot_temporal_cv_detail.py)
 - [`scripts/coreg_planet_to_nearest_drone.py`](../scripts/coreg_planet_to_nearest_drone.py)
 - [`scripts/apply_planet_maskrcnn.py`](../scripts/apply_planet_maskrcnn.py)
 - the Slurm wrappers `scripts/slurm/planet_temporal_{cv,eval,final}.sh`,
@@ -187,6 +188,19 @@ source config/temporal_cv_20261012.sh
 python scripts/plot_temporal_cv.py \
   $TEMPORAL_RUNS/temporal_cv.json $TEMPORAL_RUNS/temporal_cv.png
 ```
+
+`plot_temporal_cv_detail.py` draws three more figures that show IoU, precision
+and recall next to mAP@50. It writes `temporal_cv_metrics`, `temporal_cv_bins`
+and `temporal_cv_chips` (PNG and PDF):
+
+```bash
+python scripts/plot_temporal_cv_detail.py $TEMPORAL_RUNS/temporal_cv.json \
+  $TEMPORAL_RUNS/temporal_cv_windows.csv $TEMPORAL_RUNS/temporal_cv
+```
+
+The per-chip values sum the left and right windows of each chip. The script
+checks that the per-chip TP/FP/FN add up to the pooled counts. The figures
+were made on the Mac from the Earth03 copy (`/Volumes/Earth03/flower/202610_temporal/`).
 
 ### 5. Train the final model (gattaca2)
 
@@ -428,3 +442,48 @@ in the envelope, and of the 115 from 2026 only 14.
 > between a held-out chip's Planet acquisition and the nearest training chip's
 > acquisition, with the number of held-out chips in each bin printed above
 > its bar.
+
+`temporal_cv_metrics.png`:
+
+> Held-out mask and crown metrics of the Planet Mask R-CNN against training
+> epoch (log scale) under the blocked temporal cross-validation of
+> `temporal_cv.png` (142 chips of the 20261012 curated set, 2021-01 to
+> 2026-01, 6 folds of contiguous blocks of at most 14 days). The four panels
+> show mask mAP at IoU 0.5 (top left), binary IoU of the union of predicted
+> and labelled crown masks over clear pixels (top right), crown precision
+> (bottom left) and crown recall (bottom right). For the last two, a predicted
+> crown counts as a true positive when it matches a labelled crown at mask
+> IoU 0.5 or more, after greedy matching. Each panel shows the metric for the
+> windows of all six held-out folds pooled together (black, two 512 × 512
+> windows per chip, crowns of at least 64 px, cloud-centred predictions
+> removed), with each fold scored on its own in grey. The dashed line marks
+> the epoch selected by pooled mAP@50 (epoch 12).
+
+`temporal_cv_bins.png`:
+
+> Held-out performance of the Planet Mask R-CNN at the selected epoch 12 by
+> the number of days between a held-out chip's Planet acquisition and the
+> nearest training chip's acquisition, under the blocked temporal
+> cross-validation of the 142 chips of the 20261012 curated set (2021-01 to
+> 2026-01). The bars in each bin show, from dark to light: mask mAP at IoU
+> 0.5, binary IoU of the predicted and labelled crown masks over clear
+> pixels, crown precision and crown recall (a match is a mask IoU of at least
+> 0.5). All are pooled over every held-out window in the bin. The number of
+> held-out chips in each bin is given under its label. The hatched bin
+> (more than 30 days) lies outside the 30-day envelope used when the model is
+> applied.
+
+`temporal_cv_chips.png`:
+
+> Per-chip held-out binary IoU (top row, predicted and labelled crown masks
+> over clear pixels), crown precision (middle) and crown recall (bottom; a
+> match is a mask IoU of at least 0.5) of the Planet Mask R-CNN at the
+> selected epoch 12, under the blocked temporal cross-validation of the 142
+> chips of the 20261012 curated set (2021-01 to 2026-01). Each point is one
+> chip, with its left and right 512 × 512 windows summed, coloured and shaped
+> by the fold in which it was held out. Left: against the number of days to
+> the nearest training chip's Planet acquisition. The black segments are the
+> values pooled over each distance bin (0–3, 4–7, 8–14, 15–30 and more than
+> 30 days), and the dashed line is the 30-day envelope. Right: against the
+> chip's Planet acquisition date. The dotted line is the value pooled over all
+> held-out chips.
