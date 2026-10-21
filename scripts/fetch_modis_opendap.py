@@ -5,7 +5,9 @@ Faster alternative to scripts/fetch_modis_appeears.py (whose queue can sit in
 "pending" for many hours). Each daily MCD43A1.061 granule of tile h10v08 is
 listed through CMR and only the pixel window covering the AOI is read from
 NASA's cloud OPeNDAP (Hyrax) server with a DAP4 index constraint: ~160 KB and
-a few seconds per day instead of the 138 MB HDF4 granule. The layers are the
+a few seconds per day instead of the 138 MB HDF4 granule. Granules that
+OPeNDAP cannot serve (missing .dmrpp sidecar, HTTP 404; ~250 days, mostly
+2006-2012) are downloaded whole and cut locally. The layers are the
 same as the AppEEARS request: BRDF_Albedo_Parameters_Band{1-4} (iso, vol, geo)
 and BRDF_Albedo_Band_Mandatory_Quality_Band{1-4}.
 
@@ -42,6 +44,7 @@ from fetch_modis_appeears import AOI, MODIS_BANDS
 CMR = 'https://cmr.earthdata.nasa.gov/search/granules.json'
 COLLECTION = 'C2343116130-LPCLOUD'  # MCD43A1.061, LP DAAC cloud
 OPENDAP = f'https://opendap.earthdata.nasa.gov/collections/{COLLECTION}/granules'
+DATA_URL = 'https://data.lpdaac.earthdatacloud.nasa.gov/lp-prod-protected/MCD43A1.061'
 TILE = 'h10v08'
 # MODIS sinusoidal tile grid (sphere R = 6371007.181 m)
 R_EARTH = 6371007.181
@@ -110,29 +113,70 @@ def constraint(r0, r1, c0, c1) -> str:
                     for b in MODIS_BANDS)
 
 
-def fetch_day(day: date, granule: str, window, out_dir: Path, retries: int = 5) -> Path:
-    dest = out_dir / 'daily' / f'{day:%Y}' / f'MCD43A1.A{day:%Y%j}.nc'
-    if dest.exists():
-        return dest
-    r0, r1, c0, c1, x0t, y0t = window
+def get_with_retry(url: str, retries: int = 5, **kw) -> requests.Response | None:
+    """GET with exponential backoff; None if the server answers 404."""
     for attempt in range(retries):
         try:
-            r = session().get(f'{OPENDAP}/{granule}.dap.nc4',
-                              params={'dap4.ce': constraint(r0, r1, c0, c1)}, timeout=300)
+            r = session().get(url, timeout=600, **kw)
+            if r.status_code == 404:
+                return None
             r.raise_for_status()
-            break
+            return r
         except requests.RequestException:
             if attempt == retries - 1:
                 raise
             time.sleep(10 * 2 ** attempt)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.with_suffix('.dap.nc4')
+
+
+def read_opendap(granule: str, window, tmp: Path) -> xr.Dataset | None:
+    r0, r1, c0, c1 = window[:4]
+    r = get_with_retry(f'{OPENDAP}/{granule}.dap.nc4',
+                       params={'dap4.ce': constraint(r0, r1, c0, c1)})
+    if r is None:
+        return None
     tmp.write_bytes(r.content)
     with xr.open_dataset(tmp, group='/MOD_Grid_BRDF/Data_Fields',
                          mask_and_scale=False) as raw:
         ds = raw.load()
-    ds = ds.rename({'YDim_MOD_Grid_BRDF': 'y', 'XDim_MOD_Grid_BRDF': 'x',
-                    'Num_Parameters_MOD_Grid_BRDF': 'param'})
+    tmp.unlink()
+    return ds.rename({'YDim_MOD_Grid_BRDF': 'y', 'XDim_MOD_Grid_BRDF': 'x',
+                      'Num_Parameters_MOD_Grid_BRDF': 'param'})
+
+
+def read_hdf(granule: str, window, tmp: Path) -> xr.Dataset:
+    """Fallback for granules OPeNDAP cannot serve (no .dmrpp sidecar, 404):
+    download the full HDF4 granule (~140 MB) and cut the window locally."""
+    import netCDF4  # libnetcdf built with HDF4 reads MODIS HDF-EOS2 directly
+    r0, r1, c0, c1 = window[:4]
+    r = get_with_retry(f'{DATA_URL}/{granule}/{granule}.hdf')
+    if r is None:
+        raise FileNotFoundError(f'{granule}.hdf not found')
+    tmp.write_bytes(r.content)
+    data = {}
+    with netCDF4.Dataset(tmp) as nc:
+        for b in MODIS_BANDS:
+            for name, dims in ((f'BRDF_Albedo_Parameters_Band{b}', ('y', 'x', 'param')),
+                               (f'BRDF_Albedo_Band_Mandatory_Quality_Band{b}', ('y', 'x'))):
+                v = nc[name]
+                v.set_auto_maskandscale(False)
+                attrs = {k: v.getncattr(k) for k in v.ncattrs()}
+                fill = attrs.pop('_FillValue')
+                arr = v[r0:r1 + 1, c0:c1 + 1].astype(v.dtype.newbyteorder('='))
+                data[name] = xr.Variable(dims, np.ma.filled(arr, fill), attrs)
+                data[name].encoding['_FillValue'] = fill
+    tmp.unlink()
+    return xr.Dataset(data)
+
+
+def fetch_day(day: date, granule: str, window, out_dir: Path) -> Path:
+    dest = out_dir / 'daily' / f'{day:%Y}' / f'MCD43A1.A{day:%Y%j}.nc'
+    if dest.exists():
+        return dest
+    r0, r1, c0, c1, x0t, y0t = window
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    ds = read_opendap(granule, window, dest.with_suffix('.dap.nc4'))
+    if ds is None:
+        ds = read_hdf(granule, window, dest.with_suffix('.hdf'))
     ds = ds.assign_coords(
         y=y0t - (np.arange(r0, r1 + 1) + 0.5) * PIXEL,
         x=x0t + (np.arange(c0, c1 + 1) + 0.5) * PIXEL,
@@ -143,7 +187,6 @@ def fetch_day(day: date, granule: str, window, out_dir: Path, retries: int = 5) 
     part = dest.with_suffix('.part')
     ds.to_netcdf(part)
     part.rename(dest)
-    tmp.unlink()
     return dest
 
 
