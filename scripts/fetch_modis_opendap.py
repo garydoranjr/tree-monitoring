@@ -55,6 +55,9 @@ PIXEL = TILE_SIZE / NPIX
 DEFAULT_OUT = Path('/Volumes/Earth03/flower/modis/mcd43a1_bcnm/opendap')
 
 _local = threading.local()
+# netCDF-C/HDF4/HDF5 are not thread-safe: downloads run in parallel, file I/O
+# is serialised.
+NC_LOCK = threading.Lock()
 
 
 def session() -> requests.Session:
@@ -135,8 +138,8 @@ def read_opendap(granule: str, window, tmp: Path) -> xr.Dataset | None:
     if r is None:
         return None
     tmp.write_bytes(r.content)
-    with xr.open_dataset(tmp, group='/MOD_Grid_BRDF/Data_Fields',
-                         mask_and_scale=False) as raw:
+    with NC_LOCK, xr.open_dataset(tmp, group='/MOD_Grid_BRDF/Data_Fields',
+                                  mask_and_scale=False) as raw:
         ds = raw.load()
     tmp.unlink()
     return ds.rename({'YDim_MOD_Grid_BRDF': 'y', 'XDim_MOD_Grid_BRDF': 'x',
@@ -153,7 +156,7 @@ def read_hdf(granule: str, window, tmp: Path) -> xr.Dataset:
         raise FileNotFoundError(f'{granule}.hdf not found')
     tmp.write_bytes(r.content)
     data = {}
-    with netCDF4.Dataset(tmp) as nc:
+    with NC_LOCK, netCDF4.Dataset(tmp) as nc:
         for b in MODIS_BANDS:
             for name, dims in ((f'BRDF_Albedo_Parameters_Band{b}', ('y', 'x', 'param')),
                                (f'BRDF_Albedo_Band_Mandatory_Quality_Band{b}', ('y', 'x'))):
@@ -185,7 +188,8 @@ def fetch_day(day: date, granule: str, window, out_dir: Path) -> Path:
     ds.attrs = {'granule': granule, 'tile': TILE,
                 'crs': f'+proj=sinu +lon_0=0 +x_0=0 +y_0=0 +R={R_EARTH} +units=m +no_defs'}
     part = dest.with_suffix('.part')
-    ds.to_netcdf(part)
+    with NC_LOCK:
+        ds.to_netcdf(part)
     part.rename(dest)
     return dest
 
