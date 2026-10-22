@@ -38,10 +38,13 @@ Wu's group at HKU:
    (Kvol = −0.0459, Kgeo = −1.1068). Quality control keeps mandatory quality 0
    or 1 and requires QA30 (more than 30% of an 11 × 11 pixel, ~5 km window
    passes). Each pixel, band and year is gap-filled daily by the number N of
-   good days: N ≥ 250, cubic spline through the pixel; 50 ≤ N < 250, the 5 km
-   neighbourhood mean seasonality (that year if it has ≥ 250 good days, else
-   the 2005–2026 day-of-year mean) shifted to the pixel's good days; N < 50, the
-   neighbourhood day-of-year mean.
+   good days: N ≥ 250, shape-preserving (PCHIP) cubic through the pixel;
+   50 ≤ N < 250, the 5 km neighbourhood seasonality (that year, Gaussian-kernel
+   smoothed with σ = 8 days, if it has ≥ 250 good days, else the 2005–2026
+   day-of-year mean) shifted to the pixel's good days; N < 50, the
+   neighbourhood day-of-year mean. The neighbourhood series is the pixel's
+   long-term median plus the mean anomaly of good neighbours of the same
+   cover class (land where the long-term median NIR is ≥ 0.15).
 4. **Histogram matching** (`calibrate_planet_modis.py`). Scenes are grouped by
    date and satellite and mosaicked on a 3 m grid over the box; clear land
    reflectance is aggregated onto the MODIS 500 m sinusoidal grid. MODIS pixels
@@ -64,6 +67,21 @@ Wu's group at HKU:
   an explicit one-MODIS-pixel land buffer.
 - **Gain:** fixed at 1 (mean matching only) instead of σ_MODIS / σ_Planet; see
   *Sources of uncertainty*.
+- **Gap-fill neighbourhood and smoothers.** HKU's neighbourhood is the plain
+  mean of good pixels in the 5 km window, smoothed or interpolated with cubic
+  splines. Around BCI ~40% of each window is lake, and the share of water
+  among the good pixels changes with the season (59% in July vs ~40% in other
+  months for the 50ha pixel), so the plain mean followed the land/water mix,
+  not the forest. The splines also overshot across long wet-season gaps:
+  Jun–Sep 2022 fills at the 50ha pixel ranged 0.08–1.19 NIR (observed
+  0.29–0.33), and over all land pixels the 1st/99th percentiles of flag-2
+  fills were −1.69/1.88. The neighbourhood is now a same-class anomaly mean,
+  and the splines are replaced by PCHIP and a Gaussian-kernel mean. In the
+  rebuilt 2005–2026 reference, land NIR 1st/50th/99th percentiles are
+  0.125/0.293/0.375 observed, 0.150/0.302/0.378 for flag 2 and
+  0.155/0.304/0.368 for flag 3, and the monthly medians of every fill type at
+  the 50ha pixel stay within 0.27–0.32 (the spline version is kept as
+  `reference_nadir_sza45_v1_spline.nc`).
 
 ## Sources of uncertainty
 
@@ -101,10 +119,21 @@ where they can be quantified; the rest are known but not yet quantified.
    footprints). Calibrated dates are biased toward clear days, and the
    wet-season rate will be lower.
 5. **MODIS reference.** Errors of the MCD43A1 BRDF inversion (only QA 0/1 and
-   QA30 days kept), and of the gap fill on days without a good retrieval
-   (`fill_flag` scenarios 1–4 in the reference). The reference is at nadir
-   and SZA 45°, while Planet is at the actual sun/view geometry; the offset
-   absorbs the box-mean BRDF difference, assumed uniform across land covers.
+   QA30 days kept: 45–48% of pixel-days, 2005–2026), and of the gap fill on
+   the other days (`fill_flag` 1–4 in the reference). Fewer than 0.5% of
+   filled days come from the pixel's own series (N ≥ 250 good days in a year
+   is rare in Panama); nearly all are the neighbourhood seasonality shifted
+   to the pixel, 31–42% from that year and 58–68% from the multi-year mean
+   (by band), so wet-season references are largely modelled. HKU's
+   scenarios i + ii (N ≥ 50) cover 99.8–99.9% of filled days, as in their
+   >99%. Each fit records the share of
+   its matched MODIS pixels that were observed that day
+   (`modis_observed_frac`). The kernel evaluation itself is exact: MCD43A1
+   kernels at the local-noon SZA reproduce MCD43A4 NBAR to within its 0.001
+   quantization (median |Δ| 0.0003, ~3,000 pixels on each of 2021-12-05 and
+   2024-02-15). The reference is at nadir and SZA 45°, while Planet is at the
+   actual sun/view geometry; the offset absorbs the box-mean BRDF difference,
+   assumed uniform across land covers.
 6. **Geolocation and point-spread function.** MODIS geolocation error
    (~50 m) and a point-spread function wider than the nominal 463 m pixel blur
    the reference and contaminate it with lake reflectance near shores; the

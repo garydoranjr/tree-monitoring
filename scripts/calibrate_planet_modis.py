@@ -227,8 +227,9 @@ def main(stage_dir, reference, water_mask, clip_config, sr_root, cal_root, outpu
             if calibrated:
                 p = to_modis(refl[b] * valid, box_tf, m_tf, m_w, m_h)[use] / n_valid[use]
                 m = ref['reflectance'].isel(time=ti).sel(band=name).values[use]
+                ff = ref['fill_flag'].isel(time=ti).sel(band=name).values[use]
                 ok = np.isfinite(m)
-                p, m, par = p[ok], m[ok], parity[use][ok]
+                p, m, par, ff = p[ok], m[ok], parity[use][ok], ff[ok]
                 g, o = fit(p, m, gain_mode)
                 gains[b], offsets[b] = g, o
                 off_ci, ratio_ci = bootstrap(p, m, gain_mode, n_boot, rng)
@@ -242,7 +243,8 @@ def main(stage_dir, reference, water_mask, clip_config, sr_root, cal_root, outpu
                         oos_raw.append(rmse(p[te], m[te]))
                 row.update(
                     planet_mean=p.mean(), planet_sd=p.std(ddof=1),
-                    modis_mean=m.mean(), modis_sd=m.std(ddof=1), gain=g, offset=o,
+                    modis_mean=m.mean(), modis_sd=m.std(ddof=1),
+                    modis_observed_frac=float(np.mean(ff == 0)), gain=g, offset=o,
                     offset_ci_lo=off_ci[0], offset_ci_hi=off_ci[1],
                     gain_sd_ratio=sd_ratio(p, m),
                     gain_sd_ratio_ci_lo=ratio_ci[0], gain_sd_ratio_ci_hi=ratio_ci[1],
@@ -266,7 +268,8 @@ def main(stage_dir, reference, water_mask, clip_config, sr_root, cal_root, outpu
                                  gains, offsets)
 
     fields = ['date', 'satellite_id', 'instrument', 'band', 'calibrated', 'n_pixels',
-              'planet_mean', 'planet_sd', 'modis_mean', 'modis_sd', 'gain', 'offset',
+              'planet_mean', 'planet_sd', 'modis_mean', 'modis_sd',
+              'modis_observed_frac', 'gain', 'offset',
               'offset_ci_lo', 'offset_ci_hi', 'gain_sd_ratio', 'gain_sd_ratio_ci_lo',
               'gain_sd_ratio_ci_hi', 'r', 'rmse_before', 'rmse_after', 'rmse_oos_before', 'rmse_oos_after',
               'sun_elevation', 'view_angle', 'scene_ids']

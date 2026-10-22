@@ -13,14 +13,26 @@ to, following Wang et al. (2020, RSE 246:111865) as described in Wu et al.
    30% of the pixels in the surrounding ~5 x 5 km (11 x 11 pixel) window pass.
 3. Gap filling, per pixel, band and calendar year, by the number N of good
    days in that year:
-     N >= 250       cubic spline through the good days of the pixel;
-     50 <= N < 250  smoothing spline of the 5 km neighbourhood mean seasonality
-                    (that year if the neighbourhood has >= 250 good days,
-                    else its multi-year day-of-year mean), shifted by the mean
-                    pixel-minus-reference difference on the good days;
-     N < 50         smoothing spline of the neighbourhood multi-year
-                    day-of-year mean, unshifted.
+     N >= 250       shape-preserving (PCHIP) cubic through the good days of
+                    the pixel;
+     50 <= N < 250  the 5 km neighbourhood seasonality (that year, smoothed
+                    with a Gaussian kernel, if the neighbourhood has >= 250
+                    good days, else its multi-year day-of-year mean), shifted
+                    by the mean pixel-minus-reference difference on the good
+                    days;
+     N < 50         the neighbourhood multi-year day-of-year mean, unshifted.
    Good days keep their observed value.
+
+   Deviations from HKU, forced by Gatun Lake (~40% of each 5 km window):
+   the neighbourhood series is the pixel's own long-term median plus the mean
+   anomaly (value minus that pixel's long-term median) of good neighbours of
+   the same cover class (land: long-term median NIR >= 0.15), so the
+   seasonality no longer follows the day-to-day land/water mix of the good
+   pixels (in July 59% of the good neighbours of the 50ha pixel are water vs
+   ~40% otherwise). The interpolating cubic and smoothing splines are
+   replaced by PCHIP and a Gaussian-kernel mean, which cannot overshoot across
+   long wet-season gaps (the splines gave 0.08-1.19 NIR in Jun-Sep 2022 at the
+   50ha pixel, observed 0.29-0.33).
 
 Output netCDF (sinusoidal grid of the input) holds `reflectance`
 (band, time, y, x) for MODIS bands blue (B3), green (B4), red (B1) and NIR (B2),
@@ -40,8 +52,8 @@ import click
 import numpy as np
 import pandas as pd
 import xarray as xr
-from scipy.interpolate import CubicSpline, make_smoothing_spline
-from scipy.ndimage import uniform_filter
+from scipy.interpolate import PchipInterpolator, make_smoothing_spline
+from scipy.ndimage import gaussian_filter1d, uniform_filter
 from tqdm import tqdm
 
 # PlanetScope band order B, G, R, N -> MODIS bands 3, 4, 1, 2
@@ -51,6 +63,8 @@ WINDOW = 11          # ~5 km at 463 m
 QA30 = 0.3
 N_SPLINE, N_NEIGHBOUR = 250, 50
 EDGE_DAYS = 30       # neighbouring-year days used to stabilise spline ends
+SMOOTH_DAYS = 8.0    # Gaussian sigma of the current-year neighbourhood series
+LAND_NIR = 0.15      # long-term median NIR separating land from water
 DEFAULT_OUT = Path('/Volumes/Earth03/flower/modis/mcd43a1_bcnm/reference_nadir_sza45.nc')
 
 
@@ -110,6 +124,32 @@ def neighbourhood_mean(values: np.ndarray, good: np.ndarray) -> tuple[np.ndarray
     return mean, frac
 
 
+def neighbourhood_anomaly(values: np.ndarray, good: np.ndarray, land: np.ndarray
+                          ) -> np.ndarray:
+    """Per-day neighbourhood series that ignores the land/water mix: each pixel's
+    long-term median plus the WINDOW x WINDOW mean anomaly of good neighbours
+    of the same class (`land`, (y, x) bool); (t, y, x)."""
+    with np.errstate(invalid='ignore'):
+        med = np.nanmedian(np.where(good, values, np.nan), axis=0)
+    anom = values - med
+    out = np.full(values.shape, np.nan)
+    for cls in (True, False):
+        g = good & (land == cls)
+        m, frac = neighbourhood_mean(anom, g)
+        out[:, land == cls] = m[:, land == cls]
+    return med + out
+
+
+def kernel_smooth(series: np.ndarray, sigma: float = SMOOTH_DAYS) -> np.ndarray:
+    """Gaussian-kernel weighted mean along time of a (t, y, x) series with NaN
+    gaps; NaN where no data lies within ~2 sigma."""
+    ok = np.isfinite(series)
+    num = gaussian_filter1d(np.where(ok, series, 0.0), sigma, axis=0, mode='nearest')
+    den = gaussian_filter1d(ok.astype(np.float64), sigma, axis=0, mode='nearest')
+    with np.errstate(invalid='ignore', divide='ignore'):
+        return np.where(den > 0.05, num / den, np.nan)
+
+
 def doy_climatology(series: np.ndarray, doy: np.ndarray) -> np.ndarray:
     """Multi-year mean by day of year (1..365; 366 folded into 365); (365, y, x)."""
     d = np.minimum(doy, 365) - 1
@@ -133,15 +173,11 @@ def smooth_periodic(clim: np.ndarray) -> np.ndarray:
     return make_smoothing_spline(xx, yy)(x)
 
 
-def smooth_series(t: np.ndarray, y: np.ndarray, t_eval: np.ndarray) -> np.ndarray:
-    ok = np.isfinite(y)
-    return make_smoothing_spline(t[ok], y[ok])(t_eval)
-
-
-def gap_fill_band(refl: np.ndarray, good: np.ndarray, times: pd.DatetimeIndex
-                  ) -> tuple[np.ndarray, np.ndarray]:
-    """Gap-fill one band; refl/good are (t, y, x). Returns (filled, flag)."""
-    nb_mean, _ = neighbourhood_mean(refl, good)
+def gap_fill_band(refl: np.ndarray, good: np.ndarray, times: pd.DatetimeIndex,
+                  land: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Gap-fill one band; refl/good are (t, y, x), land (y, x). Returns (filled, flag)."""
+    nb_mean = neighbourhood_anomaly(refl, good, land)
+    nb_smooth = kernel_smooth(nb_mean)
     doy = times.dayofyear.values
     clim = doy_climatology(nb_mean, doy)
     nt, ny, nx = refl.shape
@@ -167,12 +203,13 @@ def gap_fill_band(refl: np.ndarray, good: np.ndarray, times: pd.DatetimeIndex
                     continue
                 if n >= N_SPLINE:
                     gw = good[win, i, j]
-                    cs = CubicSpline(tnum[win][gw], refl[win, i, j][gw])
+                    cs = PchipInterpolator(tnum[win][gw], refl[win, i, j][gw])
                     est, code = cs(tnum[in_yr]), 1
                 elif n >= N_NEIGHBOUR:
                     nb_yr = nb_mean[in_yr, i, j]
                     if np.isfinite(nb_yr).sum() >= N_SPLINE:
-                        ref = smooth_series(tnum[win], nb_mean[win, i, j], tnum[in_yr])
+                        ref = nb_smooth[in_yr, i, j]
+                        ref = np.where(np.isfinite(ref), ref, clim_yr[:, i, j])
                         code = 2
                     else:
                         ref, code = clim_yr[:, i, j], 3
@@ -200,23 +237,32 @@ def main(mcd43a1, output, sza):
     times = pd.DatetimeIndex(np.concatenate([p[0]['time'].values for p in parts]))
     order = np.argsort(times)
     times = times[order]
-    refl_out, flag_out = [], []
-    for name in PLANET_BANDS:
+    def reflectance_qc(name):
         b = MODIS_BAND_FOR[name]
         par = np.concatenate([p[1][b] for p in parts])[order]
         qa = np.concatenate([p[2][b] for p in parts])[order]
         refl = par[..., 0] + kvol * par[..., 1] + kgeo * par[..., 2]
         good = np.isfinite(refl) & (qa <= 1)
         _, frac = neighbourhood_mean(refl, good)
-        good &= frac > QA30
-        click.echo(f'{name} (MODIS B{b}): {good.mean():.1%} of pixel-days pass QC')
-        filled, flag = gap_fill_band(refl, good, times)
+        return refl, good & (frac > QA30)
+
+    refl, good = reflectance_qc('nir')
+    with np.errstate(invalid='ignore'):
+        land = np.nanmedian(np.where(good, refl, np.nan), axis=0) >= LAND_NIR
+    click.echo(f'{land.mean():.1%} of pixels are land (median NIR >= {LAND_NIR})')
+    refl_out, flag_out = [], []
+    for name in PLANET_BANDS:
+        refl, good = reflectance_qc(name)
+        click.echo(f'{name} (MODIS B{MODIS_BAND_FOR[name]}): '
+                   f'{good.mean():.1%} of pixel-days pass QC')
+        filled, flag = gap_fill_band(refl, good, times, land)
         refl_out.append(filled)
         flag_out.append(flag)
     ydim = [d for d in ds0[f'BRDF_Albedo_Band_Mandatory_Quality_Band1'].dims if d != 'time']
     out = xr.Dataset(
         {'reflectance': (('band', 'time', 'y', 'x'), np.stack(refl_out)),
-         'fill_flag': (('band', 'time', 'y', 'x'), np.stack(flag_out))},
+         'fill_flag': (('band', 'time', 'y', 'x'), np.stack(flag_out)),
+         'land': (('y', 'x'), land.astype(np.uint8))},
         coords={'band': PLANET_BANDS, 'time': times,
                 'y': ds0[ydim[0]].values, 'x': ds0[ydim[1]].values},
         attrs={'source': 'MCD43A1.061', 'sza_deg': sza, 'vza_deg': 0.0,
