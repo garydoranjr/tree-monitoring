@@ -18,18 +18,27 @@ box (~12 x 14 km) around Barro Colorado Island:
    buffer against MODIS geolocation error and point-spread blur from the
    lake), and they are at least --min-clear clear in the Planet mosaic.
 4. Per band, Gaussian fits (mean, standard deviation) of the upscaled Planet
-   and the same-day MODIS reference give gain = sd_M / sd_P and
-   offset = mu_M - gain * mu_P. Groups with fewer than --min-pixels usable
-   pixels are left uncalibrated.
+   and the same-day MODIS reference give offset = mu_M - gain * mu_P with
+   gain = 1 (--gain-mode fixed, the default) or gain = sd_M / sd_P as in Wang
+   et al. (--gain-mode sd). Over the near-uniform forest of the box the
+   standard deviations are a few thousandths of reflectance, so the sd ratio
+   is dominated by noise and MODIS/Planet misregistration (Feb-2024 pilot:
+   blue gains 1.5-2.6, bootstrap 95% CI width 0.3-0.6) while the mean is
+   pinned to ~0.001 (visible) and ~0.003 (NIR). Groups with fewer than
+   --min-pixels usable pixels are left uncalibrated.
 5. Every scene is clipped to the 50ha plot; the raw SR clip goes to
    <sr-root>/4band/<YYYY>/<scene>_4band.tif and, for calibrated groups, the
    calibrated clip (uint16 reflectance x 10000, nodata 0) to
    <cal-root>/4band/<YYYY>/<scene>_4band.tif, the layout of planet_clipped/.
 
 Fit diagnostics (results CSV, one row per group and band): pixel count, Planet
-and MODIS mean/sd, gain, offset, Pearson r, RMSE against MODIS before and after,
-and an out-of-sample RMSE from a checkerboard split (fit on one parity of MODIS
-pixels, score on the other, averaged over both directions).
+and MODIS mean/sd, the applied gain and offset, Pearson r, RMSE against MODIS
+before and after, and an out-of-sample RMSE from a checkerboard split (fit on
+one parity of MODIS pixels, score on the other, averaged over both directions).
+Uncertainty is tracked with a pixel bootstrap (--n-boot resamples): 95%
+intervals of the applied offset and of the sd-ratio gain, which is reported
+(gain_sd_ratio) even when not applied. The bootstrap treats 500 m pixels as
+independent, so with spatial autocorrelation its intervals are lower bounds.
 
 Typical usage:
     python scripts/calibrate_planet_modis.py
@@ -98,9 +107,23 @@ def load_group_mosaic(scenes, stage_dir, water, box_tf, w, h, dilate):
     return refl, valid
 
 
-def fit(p: np.ndarray, m: np.ndarray):
-    gain = np.std(m, ddof=1) / np.std(p, ddof=1)
+def sd_ratio(p: np.ndarray, m: np.ndarray) -> float:
+    return np.std(m, ddof=1) / np.std(p, ddof=1)
+
+
+def fit(p: np.ndarray, m: np.ndarray, gain_mode: str = 'fixed'):
+    gain = sd_ratio(p, m) if gain_mode == 'sd' else 1.0
     return gain, np.mean(m) - gain * np.mean(p)
+
+
+def bootstrap(p, m, gain_mode, n_boot, rng):
+    """95% intervals (lo, hi) of the applied offset and of the sd-ratio gain."""
+    offs, ratios = np.empty(n_boot), np.empty(n_boot)
+    for k in range(n_boot):
+        i = rng.integers(0, len(p), len(p))
+        offs[k] = fit(p[i], m[i], gain_mode)[1]
+        ratios[k] = sd_ratio(p[i], m[i])
+    return np.percentile(offs, [2.5, 97.5]), np.percentile(ratios, [2.5, 97.5])
 
 
 def rmse(a, b):
@@ -151,9 +174,14 @@ def write_calibrated(raw_clip: Path, out: Path, gains, offsets):
               default=REPO / 'results/planet_modis_calibration_pixels', show_default=True,
               help='Per-group npz of the matched 500 m Planet/MODIS values.')
 @click.option('--no-clips', is_flag=True, help='Fit only; do not write 50ha clips.')
+@click.option('--gain-mode', type=click.Choice(['fixed', 'sd']), default='fixed',
+              show_default=True,
+              help='fixed: gain 1, match means only; sd: gain = sd_M / sd_P (Wang et al.).')
+@click.option('--n-boot', type=int, default=500, show_default=True,
+              help='Bootstrap resamples for the offset / sd-ratio intervals.')
 def main(stage_dir, reference, water_mask, clip_config, sr_root, cal_root, output,
          start, end, min_land, min_land_nbhd, min_clear, min_pixels, dilate,
-         pixels_dir, no_clips):
+         pixels_dir, no_clips, gain_mode, n_boot):
     water_mask = water_mask or stage_dir / 'aux' / 'bcnm_water_mask.tif'
     box_tf, w, h = box_grid()
     with rio.open(water_mask) as src:
@@ -178,6 +206,7 @@ def main(stage_dir, reference, water_mask, clip_config, sr_root, cal_root, outpu
         groups[(d, r['satellite_id'])].append(r)
 
     rows = []
+    rng = np.random.default_rng(0)
     parity = (np.add.outer(np.arange(m_h), np.arange(m_w)) % 2).astype(bool)
     for (d, sat), scenes in tqdm(sorted(groups.items()), desc='groups'):
         refl, valid = load_group_mosaic(scenes, stage_dir, water, box_tf, w, h, dilate)
@@ -200,19 +229,23 @@ def main(stage_dir, reference, water_mask, clip_config, sr_root, cal_root, outpu
                 m = ref['reflectance'].isel(time=ti).sel(band=name).values[use]
                 ok = np.isfinite(m)
                 p, m, par = p[ok], m[ok], parity[use][ok]
-                g, o = fit(p, m)
+                g, o = fit(p, m, gain_mode)
                 gains[b], offsets[b] = g, o
+                off_ci, ratio_ci = bootstrap(p, m, gain_mode, n_boot, rng)
                 matched[f'planet_{name}'], matched[f'modis_{name}'] = p, m
                 oos, oos_raw = [], []
                 for side in (False, True):
                     tr, te = par == side, par != side
                     if tr.sum() >= min_pixels // 2 and te.sum() >= min_pixels // 2:
-                        gs, os_ = fit(p[tr], m[tr])
+                        gs, os_ = fit(p[tr], m[tr], gain_mode)
                         oos.append(rmse(gs * p[te] + os_, m[te]))
                         oos_raw.append(rmse(p[te], m[te]))
                 row.update(
                     planet_mean=p.mean(), planet_sd=p.std(ddof=1),
                     modis_mean=m.mean(), modis_sd=m.std(ddof=1), gain=g, offset=o,
+                    offset_ci_lo=off_ci[0], offset_ci_hi=off_ci[1],
+                    gain_sd_ratio=sd_ratio(p, m),
+                    gain_sd_ratio_ci_lo=ratio_ci[0], gain_sd_ratio_ci_hi=ratio_ci[1],
                     r=float(np.corrcoef(p, m)[0, 1]), rmse_before=rmse(p, m),
                     rmse_after=rmse(g * p + o, m),
                     rmse_oos_before=np.mean(oos_raw) if oos else np.nan,
@@ -234,7 +267,8 @@ def main(stage_dir, reference, water_mask, clip_config, sr_root, cal_root, outpu
 
     fields = ['date', 'satellite_id', 'instrument', 'band', 'calibrated', 'n_pixels',
               'planet_mean', 'planet_sd', 'modis_mean', 'modis_sd', 'gain', 'offset',
-              'r', 'rmse_before', 'rmse_after', 'rmse_oos_before', 'rmse_oos_after',
+              'offset_ci_lo', 'offset_ci_hi', 'gain_sd_ratio', 'gain_sd_ratio_ci_lo',
+              'gain_sd_ratio_ci_hi', 'r', 'rmse_before', 'rmse_after', 'rmse_oos_before', 'rmse_oos_after',
               'sun_elevation', 'view_angle', 'scene_ids']
     output.parent.mkdir(parents=True, exist_ok=True)
     with open(output, 'w', newline='') as f:
@@ -243,7 +277,8 @@ def main(stage_dir, reference, water_mask, clip_config, sr_root, cal_root, outpu
         wr.writerows(rows)
     n_groups = len(rows) // 4
     n_cal = sum(r['calibrated'] for r in rows) // 4
-    click.echo(f'{n_cal}/{n_groups} date-satellite groups calibrated; wrote {output}')
+    click.echo(f'{n_cal}/{n_groups} date-satellite groups calibrated '
+               f'(gain mode {gain_mode}); wrote {output}')
 
 
 if __name__ == '__main__':
