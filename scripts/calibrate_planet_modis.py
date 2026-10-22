@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import csv
 import sys
+import zlib
 from collections import defaultdict
 from pathlib import Path
 
@@ -69,6 +70,11 @@ from planet_box_grid import UTM, box_grid, warp_to_box  # noqa: E402
 from util import load_config  # noqa: E402
 
 BANDS = ['blue', 'green', 'red', 'nir']
+FIELDS = ['date', 'satellite_id', 'instrument', 'band', 'calibrated', 'n_pixels',
+          'planet_mean', 'planet_sd', 'modis_mean', 'modis_sd', 'modis_observed_frac',
+          'gain', 'offset', 'offset_ci_lo', 'offset_ci_hi', 'gain_sd_ratio',
+          'gain_sd_ratio_ci_lo', 'gain_sd_ratio_ci_hi', 'r', 'rmse_before', 'rmse_after',
+          'rmse_oos_before', 'rmse_oos_after', 'sun_elevation', 'view_angle', 'scene_ids']
 SCALE = 10000.0
 MODIS_SINU = CRS.from_proj4('+proj=sinu +lon_0=0 +x_0=0 +y_0=0 +R=6371007.181 '
                             '+units=m +no_defs')
@@ -205,10 +211,24 @@ def main(stage_dir, reference, water_mask, clip_config, sr_root, cal_root, outpu
             continue
         groups[(d, r['satellite_id'])].append(r)
 
-    rows = []
-    rng = np.random.default_rng(0)
+    # Rows are appended per finished group (fits and clips done) to a partial
+    # file, so an interrupted run resumes after the last finished group.
+    partial = output.with_suffix('.partial.csv')
+    rows = list(csv.DictReader(open(partial))) if partial.exists() else []
+    done = {(r['date'], r['satellite_id']) for r in rows}
+    if done:
+        click.echo(f'resuming: {len(done)} groups already in {partial}')
+    output.parent.mkdir(parents=True, exist_ok=True)
+    part_f = open(partial, 'a', newline='')
+    part_wr = csv.DictWriter(part_f, fieldnames=FIELDS, extrasaction='ignore')
+    if not done:
+        part_wr.writeheader()
     parity = (np.add.outer(np.arange(m_h), np.arange(m_w)) % 2).astype(bool)
-    for (d, sat), scenes in tqdm(sorted(groups.items()), desc='groups'):
+    todo = sorted(k for k in groups if k not in done)
+    for d, sat in tqdm(todo, desc='groups'):
+        scenes = groups[(d, sat)]
+        rng = np.random.default_rng(zlib.crc32(f'{d}_{sat}'.encode()))
+        group_rows = []
         refl, valid = load_group_mosaic(scenes, stage_dir, water, box_tf, w, h, dilate)
         n_valid = to_modis(valid.astype(np.float32), box_tf, m_tf, m_w, m_h)
         use = land_ok & (n_valid / expected >= min_clear)
@@ -252,34 +272,32 @@ def main(stage_dir, reference, water_mask, clip_config, sr_root, cal_root, outpu
                     rmse_after=rmse(g * p + o, m),
                     rmse_oos_before=np.mean(oos_raw) if oos else np.nan,
                     rmse_oos_after=np.mean(oos) if oos else np.nan)
-            rows.append(row)
+            group_rows.append(row)
         if matched:
             pixels_dir.mkdir(parents=True, exist_ok=True)
             np.savez_compressed(pixels_dir / f'{d}_{sat}.npz', gain=gains,
                                 offset=offsets, **matched)
-        if no_clips:
-            continue
-        for s in scenes:
-            sid = s['scene_id']
-            raw = sr_root / '4band' / sid[:4] / f'{sid}_4band.tif'
-            status = _clip_to(region, Path(s['sr_path']), raw)
-            if status == 'ok' and calibrated:
-                write_calibrated(raw, cal_root / '4band' / sid[:4] / f'{sid}_4band.tif',
-                                 gains, offsets)
+        if not no_clips:
+            for s in scenes:
+                sid = s['scene_id']
+                raw = sr_root / '4band' / sid[:4] / f'{sid}_4band.tif'
+                status = _clip_to(region, Path(s['sr_path']), raw)
+                if status == 'ok' and calibrated:
+                    write_calibrated(raw, cal_root / '4band' / sid[:4] / f'{sid}_4band.tif',
+                                     gains, offsets)
+        part_wr.writerows(group_rows)
+        part_f.flush()
+        rows += group_rows
+    part_f.close()
 
-    fields = ['date', 'satellite_id', 'instrument', 'band', 'calibrated', 'n_pixels',
-              'planet_mean', 'planet_sd', 'modis_mean', 'modis_sd',
-              'modis_observed_frac', 'gain', 'offset',
-              'offset_ci_lo', 'offset_ci_hi', 'gain_sd_ratio', 'gain_sd_ratio_ci_lo',
-              'gain_sd_ratio_ci_hi', 'r', 'rmse_before', 'rmse_after', 'rmse_oos_before', 'rmse_oos_after',
-              'sun_elevation', 'view_angle', 'scene_ids']
-    output.parent.mkdir(parents=True, exist_ok=True)
+    rows.sort(key=lambda r: (r['date'], r['satellite_id'], BANDS.index(r['band'])))
     with open(output, 'w', newline='') as f:
-        wr = csv.DictWriter(f, fieldnames=fields, extrasaction='ignore')
+        wr = csv.DictWriter(f, fieldnames=FIELDS, extrasaction='ignore')
         wr.writeheader()
         wr.writerows(rows)
+    partial.unlink()
     n_groups = len(rows) // 4
-    n_cal = sum(r['calibrated'] for r in rows) // 4
+    n_cal = sum(str(r['calibrated']) == 'True' for r in rows) // 4
     click.echo(f'{n_cal}/{n_groups} date-satellite groups calibrated '
                f'(gain mode {gain_mode}); wrote {output}')
 
