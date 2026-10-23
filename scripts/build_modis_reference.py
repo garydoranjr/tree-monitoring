@@ -119,8 +119,11 @@ def neighbourhood_mean(values: np.ndarray, good: np.ndarray) -> tuple[np.ndarray
     v = np.where(good, values, 0).astype(np.float64)
     s = uniform_filter(v, size=(1, WINDOW, WINDOW), mode='nearest')
     frac = uniform_filter(good.astype(np.float64), size=(1, WINDOW, WINDOW), mode='nearest')
+    # uniform_filter's running sums leave ~1e-17 residues where no pixel is good;
+    # dividing by them gave spurious values (e.g. 0.86 NIR), so require at least
+    # half a good pixel in the window.
     with np.errstate(invalid='ignore', divide='ignore'):
-        mean = np.where(frac > 0, s / frac, np.nan)
+        mean = np.where(frac > 0.5 / WINDOW ** 2, s / frac, np.nan)
     return mean, frac
 
 
