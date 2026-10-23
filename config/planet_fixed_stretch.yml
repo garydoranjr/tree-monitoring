@@ -1,0 +1,10 @@
+scale: 0.0001
+lo: [0.0039, 0.0177, 0.0074, 0.1825]
+hi: [0.0446, 0.0632, 0.0484, 0.4448]
+bands: [blue, green, red, nir]
+percentiles: [0.5, 99.9]
+n_clips: 548
+per_clip: 20000
+min_clear: 0.5
+source: OCM-clear pixels of /Volumes/Earth03/flower/planet_clipped_cal/4band (MODIS-calibrated
+  SR), scripts/derive_planet_fixed_stretch.py
