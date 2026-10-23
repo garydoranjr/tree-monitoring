@@ -151,6 +151,7 @@ planet_out_*/     Planet processing outputs
 | Utilities | `util.py` |
 | Data acquisition | `fetch_planet.py`, `select_relevant_planet_images.py` |
 | Image processing | `coreg.py`, `planet_coreg.py`, `calculate_ndvi.py`, `clip_planet_image.py`, `cloud_mask_planet.py` |
+| Radiometric calibration | `fetch_modis_opendap.py`, `build_modis_reference.py`, `build_bcnm_water_mask.py`, `calibrate_planet_modis.py`, `evaluate_planet_calibration.py` (Planet SR cross-calibrated to MODIS MCD43A1) — see [docs/planet_radiometric_calibration.md](docs/planet_radiometric_calibration.md) |
 | Machine learning | `train_drone_image_segformer.py`, `crown_classification.py`, `deploy_drone_image_segformer.py`, `sam2_segmentation.py` |
 | Crown extraction | `crown_extractor.py`, `extract_labeled_crowns.py`, `coreg_crown_sequence.py`, `match_crowns_to_labels.py` |
 | Analysis | `parse_*.py`, `*_analysis.py`, `illumination.py` |
