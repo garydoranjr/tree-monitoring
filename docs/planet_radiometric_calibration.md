@@ -212,6 +212,8 @@ python scripts/build_modis_reference.py /Volumes/Earth03/flower/modis/mcd43a1_bc
 # 4. calibrate and cut 50ha clips; 5. evaluate
 python scripts/calibrate_planet_modis.py
 python scripts/evaluate_planet_calibration.py
+python scripts/plot_planet_calibration_examples.py                  # Fig. 7
+python scripts/plot_planet_calibration_examples.py --stretch fixed  # Fig. 8
 ```
 
 ## Results
@@ -320,3 +322,32 @@ version.
    pixels): distributions over matched 500 m pixels of the MODIS reference
    (black), raw Planet SR (orange) and calibrated Planet SR (green), per band
    (panels), in 30 equal reflectance bins spanning all three.
+7. `example_clips_model.png` (`plot_planet_calibration_examples.py`) — The
+   50ha plot as the Mask R-CNN classifier sees it, for two pairs of clear
+   clips (≥ 97% OCM-clear) from different instruments 2 days apart in January
+   and February 2021 (columns; date, instrument and satellite in each title),
+   chosen as the cross-instrument pairs ≤ 3 days apart with the largest
+   raw-SR plot-mean NIR difference. Rows are the existing TOA clip the current
+   models use (top), raw Planet SR (middle) and SR cross-calibrated to MODIS
+   (bottom), each rendered as R, G, B after `build_input_channels`, the
+   training and apply-time per-image, per-band stretch of the 0th–99.9th
+   percentile to [0, 1]; the label in each panel is the plot-mean NIR
+   reflectance of that version.
+8. `example_clips_fixed.png` — The same four clips as Fig. 7 as raw SR and
+   calibrated SR, in true colour (R, G, B) and false colour (NIR, R, G)
+   (rows), with one linear stretch per band shared by all panels (1st–99th
+   percentile of all pixels shown, both versions pooled: blue 0.004–0.057,
+   green 0.016–0.078, red 0.007–0.065, NIR 0.149–0.448 reflectance), so
+   brightness differences between panels are real reflectance differences.
+
+**What the classifier sees.** The model stretch starts at each band's
+minimum over the whole clip, nodata included. All 142 chips of the current
+training set and 2,103 of the 2,146 TOA 50ha clips contain some nodata (0)
+pixels, so in practice each band is divided by its own 99.9th percentile.
+That keeps part of the calibration offset: in Fig. 7 the calibrated inputs
+are more alike across instruments than the raw-SR or TOA ones, and the largest
+per-pixel change between raw-SR and calibrated inputs is 0.57 of the [0, 1]
+range. The 43 TOA clips without nodata (2020: 22, 2021: 18, 2022: 3) are
+instead stretched from their true minimum, so they get a different, higher
+contrast at apply time than any training chip (Fig. 7, columns 1 and 4, top
+row).
