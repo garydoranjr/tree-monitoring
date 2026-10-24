@@ -18,6 +18,10 @@ Settings: [`config/temporal_cv_20261012.sh`](../config/temporal_cv_20261012.sh).
 Folds: [`config/temporal_folds_20261012.csv`](../config/temporal_folds_20261012.csv).
 Chips: `20261012_full_label_extended2_mkl_x4_coreg_4band_stretch_stats_curated`
 (142 chips; see [planet_training_chips_50ha.md](planet_training_chips_50ha.md)).
+A MODIS-calibrated copy of the same chips with a fixed input stretch
+(`--fixed-stretch`) is set up in
+[`config/temporal_cv_20261012_cal.sh`](../config/temporal_cv_20261012_cal.sh); see
+[planet_radiometric_calibration.md](planet_radiometric_calibration.md#classifier-input-stretch).
 
 This pipeline is not in the `Snakefile`. It depends on the chip set, the drone
 orthos and GPU training on gattaca2, none of which can be reproduced from

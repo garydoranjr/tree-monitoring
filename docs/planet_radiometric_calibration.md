@@ -173,6 +173,21 @@ where they can be quantified; the rest are known but not yet quantified.
    instead of 205 × 367 (7 px inside the usual clip). The evaluation reads
    every version on the mask's own bounds, so plot means for those clips
    cover a slightly smaller area.
+11. **Borrowed offsets.** Uncalibrated scenes (1,271 of the 2,138 SR clips;
+   12 of the 142 training chips) take the median offset of nearby
+   calibrated groups (`fill_planet_calibration.py`). Scored
+   leave-one-group-out on the 638 calibrated groups, the borrowed offset's
+   RMSE is 0.015 / 0.014 / 0.013 / 0.027 (blue / green / red / NIR), vs
+   0.025 / 0.023 / 0.024 / 0.066 for no offset (raw SR), with bias below
+   0.001. It removes the sensor and seasonal part of the offset but not
+   the day-to-day atmospheric error, which neighbouring dates do not
+   predict. Same-satellite (±30 days) and same-instrument (±15 days)
+   donors score alike (RMSE 0.0144 vs 0.0151 in blue).
+12. **Local haze.** The offset is a single box-wide value, so haze over the
+   plot that differs from the box mean stays in the calibrated clip. Under
+   the fixed classifier stretch such chips saturate: 4 of the 142 training
+   chips (3 borrowed, 1 own fit) have 45–99% of clear pixels at the upper
+   limit, with plot blue ≈ 0.05 against 0.016 for clear forest.
 
 ## Data locations
 
@@ -186,6 +201,10 @@ where they can be quantified; the rest are known but not yet quantified.
 | 50ha clips, calibrated | `/Volumes/Earth03/flower/planet_clipped_cal/4band/<YYYY>/` (uint16 reflectance × 10⁴, nodata 0; same grid as `planet_clipped/ocm`) |
 | Fit table, matched pixels | `results/planet_modis_calibration.csv`, `results/planet_modis_calibration_pixels/` |
 | Evaluation | `results/planet_calibration_eval.csv`, `figs/planet_calibration/` |
+| Per-scene offsets (fit or borrowed), validation | `results/planet_scene_offsets.csv`, `results/planet_offset_borrow_validation.csv` |
+| 50ha clips, calibrated or borrowed offset | `/Volumes/Earth03/flower/planet_clipped_calfill/4band/<YYYY>/` (symlinks into `planet_clipped_cal` for calibrated scenes) |
+| Fixed classifier stretch | `config/planet_fixed_stretch.yml` |
+| Calibrated training chips | `/Volumes/Earth03/flower/20261012_full_label_extended2_mkl_x4_coreg_4band_cal_curated/` (`chips.csv`: offset source, saturation) |
 
 ## Commands
 
@@ -214,6 +233,14 @@ python scripts/calibrate_planet_modis.py
 python scripts/evaluate_planet_calibration.py
 python scripts/plot_planet_calibration_examples.py                  # Fig. 7
 python scripts/plot_planet_calibration_examples.py --stretch fixed  # Fig. 8
+
+# 6. classifier input: borrowed offsets, fixed stretch, calibrated chips, figures
+python scripts/fill_planet_calibration.py
+python scripts/derive_planet_fixed_stretch.py
+python scripts/build_calibrated_chips.py \
+    /Volumes/Earth03/flower/20261012_full_label_extended2_mkl_x4_coreg_4band_stretch_stats_curated \
+    /Volumes/Earth03/flower/20261012_full_label_extended2_mkl_x4_coreg_4band_cal_curated
+python scripts/plot_planet_fixed_stretch_examples.py               # Figs. 9-11
 ```
 
 ## Results
@@ -351,3 +378,74 @@ range. The 43 TOA clips without nodata (2020: 22, 2021: 18, 2022: 3) are
 instead stretched from their true minimum, so they get a different, higher
 contrast at apply time than any training chip (Fig. 7, columns 1 and 4, top
 row).
+
+## Classifier input stretch
+
+The Mask R-CNN (`train_planet_image_maskrcnn.py`) stretches each band of each
+chip from its 0th to 99.9th percentile. Every training chip has some nodata
+pixels, so this divides each TOA band by its own 99.9th percentile: path
+radiance puts the forest at 0.54–0.90 of the input range (washed out), and a
+bright cloud in the chip pushes it down to ~0.1 (dark). The QA `.png` previews
+next to each chip use a clear-pixel 2–98% stretch instead, so they do not show
+this. Across the 142 chips of the current set, the clear-pixel median input
+spans p10–p90 = 0.28–0.77 (red), 0.41–0.87 (green) and 0.45–0.91 (blue).
+
+To give the model the same input for the same reflectance on every date:
+
+1. **Offsets for every scene** (`fill_planet_calibration.py`). Calibrated
+   scenes keep their fit; the rest borrow the median offset of calibrated
+   groups of the same satellite within 30 days (187 scenes), else the same
+   instrument within 15 days (1,032), else the instrument's calendar month
+   (71) or all its groups (11). See *Sources of uncertainty* 11 for the
+   leave-one-out error.
+2. **One stretch** (`derive_planet_fixed_stretch.py`,
+   `config/planet_fixed_stretch.yml`): lo/hi are the 0.5th/99.9th
+   percentiles of OCM-clear calibrated reflectance pooled over 548 calibrated
+   clips (≥ 50% clear, 20,000 pixels each): blue 0.0039–0.0446, green
+   0.0177–0.0632, red 0.0074–0.0484, NIR 0.1825–0.4448. Median forest maps to
+   0.29 / 0.40 / 0.31 / 0.47.
+3. **Calibrated chips** (`build_calibrated_chips.py`). Each chip is the
+   scene's calibrated clip resampled bilinearly onto the existing chip grid;
+   the coregistration shift lives in the labels, so masks, folds, curation and
+   `coreg_log.json` carry over. 130 of the 142 chips have their own fit, 12 a
+   borrowed offset.
+4. **Training and apply** with `--fixed-stretch config/planet_fixed_stretch.yml`
+   (stored as `params['stretch']` in the checkpoint and used by apply, deploy
+   and the evaluation scripts; without it the old stretch is unchanged).
+   `config/temporal_cv_20261012_cal.sh` runs the temporal CV on the
+   calibrated chips and applies to `planet_clipped_calfill`; not yet run.
+
+**Effect on the inputs** (`results/planet_fixed_stretch_metrics_summary.csv`).
+The p10–p90 range across chips of the clear-pixel median input shrinks from
+0.28–0.77 to 0.21–0.44 (red), 0.41–0.87 to 0.30–0.56 (green) and 0.45–0.91 to
+0.18–0.39 (blue); the SD across chips, which the hazy chips inflate, drops
+from 0.18 to 0.12 / 0.13 / 0.15. The crown-minus-background difference in input
+units rises from 0.090 / 0.037 / 0.035 to 0.195 / 0.104 / 0.126 (median over
+chips), so crowns take up 2–4 times more of the input range. Their contrast
+relative to the background's own spread is unchanged (2.1 / 0.9 / 1.9),
+since both stretches are linear within a chip. What remains uneven: the
+4 hazy chips (whitish blue), real seasonal change (bright green leaf flush in
+May 2024, darker canopy in October 2024), and some 2021–2022 Dove Classic
+(PS2) chips that look greyer or redder.
+
+### Figures (`figs/planet_calibration/`, continued)
+
+9. `training_inputs_current_vs_fixed.png` — The model input for 8 training
+   chips (columns; date, instrument, satellite and offset source in each
+   title) with the current recipe (top row: TOA chip, per-image 0th–99.9th
+   percentile stretch per band) and the new one (bottom row: MODIS-calibrated
+   chip, fixed stretch of `config/planet_fixed_stretch.yml`), shown as the
+   R, G, B channels in [0, 1] exactly as `build_input_channels` returns them,
+   before ImageNet normalisation. Each panel is the central 400 × 400 chip
+   pixels (300 × 300 m at 0.75 m). Chips are the darkest and brightest current
+   inputs, the most saturated new input (hazy), one borrowed-offset chip and
+   four dates spread over 2021-01 to 2026-01.
+10. `training_inputs_contact_fixed.png` — All 142 chips of the 20261012
+   curated training set as the model would see them with the calibrated chips
+   and fixed stretch (R, G, B model input, whole chip downsampled 4×), sorted
+   by acquisition date (2021-01 to 2026-01, date and instrument above each),
+   with borrowed-offset chips outlined in orange and chips with more than 10%
+   of clear pixels saturated outlined in red.
+11. `training_inputs_contact_current.png` — The same 142 chips in the same
+   order with the current model input (TOA chip, per-image percentile
+   stretch), for comparison with Fig. 10.
