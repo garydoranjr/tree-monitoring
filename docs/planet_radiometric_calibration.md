@@ -416,7 +416,7 @@ To give the model the same input for the same reflectance on every date:
    calibrated chips and applies to `planet_clipped_calfill`;
    `config/spatial_20261012_cal.sh` with `scripts/slurm/planet_spatial_{train,compare}.sh`
    repeats the east/west `full_mkl` run and scores it on the 56-chip
-   benchmark. Neither has run yet; see `docs/handoff_calibrated_training.md`.
+   benchmark. Both ran on 2026-10-24; see *Training results* below.
 
 **Effect on the inputs** (`results/planet_fixed_stretch_metrics_summary.csv`).
 The p10–p90 range across chips of the clear-pixel median input shrinks from
@@ -430,6 +430,21 @@ since both stretches are linear within a chip. What remains uneven: the
 4 hazy chips (whitish blue), real seasonal change (bright green leaf flush in
 May 2024, darker canopy in October 2024), and some 2021–2022 Dove Classic
 (PS2) chips that look greyer or redder.
+
+**Training results** (2026-10-24). The calibrated chips with the fixed stretch
+help the spatial benchmark but not temporal transfer. On the east/west split
+scored on the 56 phantom 2020-23 chips, peak `map_50` rises from 0.149 to
+0.171 and peak IoU from 0.293 to 0.318 over the TOA run on the same 142 chips,
+about twice the benchmark's noise
+([planet_training_chips_50ha.md](planet_training_chips_50ha.md#modis-calibrated-chips-full_mkl_cal)).
+Under the blocked temporal CV, both runs select epoch 12, and pooled `map_50`
+(0.354 → 0.346) and IoU (0.352 → 0.361) are unchanged within noise, including
+in the bins 15–30 and more than 30 days from training data, where the
+atmosphere differs most
+([planet_temporal_generalization.md](planet_temporal_generalization.md#results)).
+So the date-to-date atmospheric differences that calibration removes are not
+what limits transfer to new dates; seasonal change in the canopy and the
+sparse wet-season training data remain the main candidates.
 
 ### Figures (`figs/planet_calibration/`, continued)
 

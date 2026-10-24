@@ -412,6 +412,37 @@ in the envelope, and of the 115 from 2026 only 14.
 | 2025 | 29 | 29 | 19 | 4 | 38 |
 | 2026 | 115 | 14 | 70 | 98 | 27 |
 
+**MODIS-calibrated chips** (2026-10-24, `config/temporal_cv_20261012_cal.sh`,
+`~/Documents/tree-flowering/202610_temporal_cal/`). The same folds, chips,
+labels and training settings, but with the chips as MODIS-calibrated surface
+reflectance and `--fixed-stretch config/planet_fixed_stretch.yml` (see
+[planet_radiometric_calibration.md](planet_radiometric_calibration.md#classifier-input-stretch)).
+Folds took 34–41 min each and the pooled evaluation 24 min. Pooled `map_50`
+again peaks at **epoch 12**, so both runs are compared there
+(`compare_temporal_cv.py`, figure `temporal_cv_toa_vs_cal.png`):
+
+| Run | Pooled `map_50` | 0–3 d | 4–7 d | 8–14 d | 15–30 d | >30 d |
+|---|---|---|---|---|---|---|
+| TOA, epoch 12 | 0.354 | 0.512 | 0.435 | 0.372 | 0.258 | 0.203 |
+| Calibrated, epoch 12 | 0.346 | 0.516 | 0.399 | 0.377 | 0.239 | 0.200 |
+
+| Run | Pooled `test_iou` | 0–3 d | 4–7 d | 8–14 d | 15–30 d | >30 d |
+|---|---|---|---|---|---|---|
+| TOA, epoch 12 | 0.352 | 0.416 | 0.420 | 0.385 | 0.272 | 0.217 |
+| Calibrated, epoch 12 | 0.361 | 0.410 | 0.419 | 0.392 | 0.292 | 0.226 |
+
+**Calibration does not improve temporal transfer.** Pooled `map_50` falls by
+0.008 and IoU rises by 0.009, both within noise. The far bins, where a
+different atmosphere should matter most, do not improve either: at 15–30 days
+`map_50` falls by 0.019 while IoU rises by 0.020, and beyond 30 days both are
+flat. Fold 1 (the sparse 2021 flights) drops from 0.292 to 0.268 in `map_50`;
+the other folds move by −0.04 to +0.02. The calibrated run is ahead early in
+training (`map_50` 0.308 against 0.269 at epoch 3) and its precision is higher
+at every epoch but epoch 5 (0.263 against 0.242 at epoch 12), with recall lower from
+epoch 8 on. The wet season stays the weak spot (IoU 0.10–0.13 from August to
+October). The spatial benchmark, by contrast, gains about 0.02 in both
+metrics ([planet_training_chips_50ha.md](planet_training_chips_50ha.md#modis-calibrated-chips-full_mkl_cal)).
+
 ## Crown-level comparison with the drone classifications
 
 `plot_crown_species_comparison.py` compares the apply run's per-crown calls
@@ -646,6 +677,23 @@ python scripts/make_crown_timeseries_html.py \
 > calendar month, computed from the TP/FP/FN counts and mask pixels summed
 > over that month's chips, and the number of chips in each month is printed
 > above the top panel.
+
+`temporal_cv_toa_vs_cal.png`:
+
+> Held-out performance of the Planet Mask R-CNN under the blocked temporal
+> cross-validation of `temporal_cv.png` (142 chips of the 20261012 curated
+> set, 2021-01 to 2026-01, 6 folds of contiguous blocks of at most 14 days)
+> trained on TOA chips with a per-image 0th–99.9th percentile stretch per band
+> (blue) and on the same chips as MODIS-calibrated surface reflectance with
+> one fixed per-band stretch (green). The first four panels show, against
+> training epoch (log scale), mask mAP at IoU 0.5, binary IoU of the union of
+> predicted and labelled crown masks over clear pixels, crown precision and
+> crown recall (a match is a mask IoU of at least 0.5), each pooled over the
+> windows of all six held-out folds (two 512 × 512 windows per chip, crowns of
+> at least 64 px, cloud-centred predictions removed); circles mark each run's
+> epoch selected by pooled mAP@50 (epoch 12 for both). The right panel gives
+> mAP@50 at that epoch by the number of days between a held-out chip's Planet
+> acquisition and the nearest training chip's acquisition.
 
 `crown_species_timeseries.png`:
 

@@ -686,6 +686,81 @@ python scripts/plot_headtohead_epochs.py $J $D/maskrcnn_headtohead_mavic_masks.p
 `--standalone PANEL` (`map`, `iou`, `pr`, `traj`) also writes that panel
 of the grid as its own figure, `<stem>_<panel>.<ext>`.
 
+### MODIS-calibrated chips (`full_mkl_cal`)
+
+`full_mkl_cal` repeats `full_mkl` on
+`20261012_full_label_extended2_mkl_x4_coreg_4band_cal_curated`: the same 142
+chips, grids, masks, OCM sidecars and curation, but with the `.tif` values
+replaced by Planet surface reflectance calibrated to MODIS (× 10⁴) and the
+per-image percentile stretch replaced by the fixed per-band stretch of
+`config/planet_fixed_stretch.yml` (see
+[planet_radiometric_calibration.md](planet_radiometric_calibration.md#classifier-input-stretch)).
+Both steps run as Slurm jobs, which stage the chip sets to `/local`
+themselves:
+
+```bash
+source config/spatial_20261012_cal.sh
+TRAIN=$(sbatch --parsable -A tree-monitoring scripts/slurm/planet_spatial_train.sh)
+sbatch -A tree-monitoring --dependency=afterok:$TRAIN scripts/slurm/planet_spatial_compare.sh
+```
+
+Training took 2 h 31 m on one A100 and the 48-checkpoint sweep 19 min
+(`logs/headtohead_sweep_202610_mkl_cal.json`). The params in `epoch_001.pth`
+match `full_mkl` except for `stretch` and for `train_split`/`test_split`
+(`left`/`right`). `full_mkl` predates those two keys, so it stores `None`;
+the split is the same. The baselines are scored on the 56 test chips inside
+the 142-chip TOA set rather than the `20260706` copies. Their 36 rows
+reproduce `headtohead_sweep_202610_mkl.json` exactly (max abs diff 0).
+
+Result (2026-10-24), peak over the twelve scored epochs:
+
+| Run | Chips | Peak `map_50` | at | Peak `test_iou` | at | P/R at `map_50` peak |
+|---|---|---|---|---|---|---|
+| `base` | 56 | 0.1681 | e012 | 0.3076 | e017 | 0.129 / 0.320 |
+| `full_mkl` | 142, TOA | 0.1488 | e005 | 0.2929 | e017 | 0.091 / 0.325 |
+| `full_mkl_cal` | 142, calibrated | **0.1707** | e003 | **0.3184** | e012 | 0.111 / 0.338 |
+
+Calibration raises peak `map_50` by 0.022 and peak `test_iou` by 0.026 over
+`full_mkl`. Both gains are about twice the ~0.01 noise on this benchmark, and
+the calibrated run is ahead at 10 of the 12 epochs on both (behind only at
+e025 and e200; for example e008: 0.1525 against 0.1057, IoU 0.3122 against 0.2406). It is
+the first 142-chip run to match `base`: +0.003 on `map_50`, within noise,
+and +0.011 on IoU. It also peaks earlier (e003) and falls as fast as
+`full_mkl` after e025 (0.0298 at e200). The benchmark caveats above still
+apply: the test chips are all phantom 2020-23.
+
+Figures (`logs/` on gattaca2; copies in
+`/Volumes/Earth03/flower/figs/202610_cal_updates/`):
+
+```bash
+J=logs/headtohead_sweep_202610_mkl_cal.json
+L=(--label base="phantom 2020-23 only (56)" --label phantom="+ phantom 2023-24 (77)"
+   --label full_mkl="all three, TOA (142)" --label full_mkl_cal="all three, calibrated (142)")
+R=(--run base --run phantom --run full_mkl --run full_mkl_cal)
+python scripts/plot_headtohead_epochs.py $J logs/maskrcnn_headtohead_cal.png "${L[@]}" "${R[@]}" \
+  --standalone iou --standalone pr
+python scripts/plot_update_figures.py maskrcnn-summary --outdir logs --sweep $J \
+  --name maskrcnn_summary_cal "${L[@]}" "${R[@]}"
+```
+
+`maskrcnn_headtohead_cal.png`:
+
+> Held-out performance of the Planet Mask R-CNN against training epoch (log
+> scale, 12 checkpoints from 1 to 200) for four training sets, scored on the
+> right 512 × 512 windows of the 56 phantom 2020-23 benchmark chips (crowns of
+> at least 64 px, cloud-centred predictions removed): phantom 2020-23 only
+> (blue, 56 chips), plus phantom 2023-24 (green, 77 chips), all three sources
+> with TOA chips and per-image 0th–99.9th percentile stretch (orange, 142
+> chips) and the same 142 chips as MODIS-calibrated surface reflectance with
+> one fixed per-band stretch (purple). Top left: mask mAP at IoU 0.5; top
+> right: binary IoU of the union of predicted and labelled crown masks over
+> clear pixels, with each run's peak starred; bottom left: crown precision
+> (solid circles) and recall (dashed squares), where a predicted crown matching
+> a labelled crown at mask IoU 0.5 or more after greedy matching is a true
+> positive; bottom right: the same precision against recall, with marker fill
+> giving the epoch. Every run is trained on the left windows of its chips, at
+> flat learning rate 1e-4 and batch 4.
+
 ## Consumers
 
 Both loaders glob `*.mask.png` and pair it with the sibling `.tif`:

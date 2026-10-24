@@ -43,12 +43,19 @@ most) kills them otherwise. If array tasks are moved out of Slurm this way,
 (`scontrol update JobId=<id> Dependency=afterok:<array>_0:<array>_1...`),
 otherwise the dependent job never starts.
 
+**Queue waits.** The `gpu` partition is often full with other users' multi-day
+jobs. On 2026-10-24 a 1-GPU job submitted at 11:19, with both of this user's
+slots free, waited with reason `Resources` and a Slurm start estimate of
+2026-10-26 05:48 (`squeue -j <id> --start`). Plan GPU work around waits of hours to days, not
+minutes.
+
 ## Storage
 
 | Path | What | Notes |
 |---|---|---|
 | `/scratch/tree-monitoring` | project data: chip sets, `planet_clipped/{4band,ocm}`, `stri/` drone orthos and crown maps, `results/` | GPFS (1.2 PB). Datasets moved here from `/scratch/ecopro-hpc/flower` on 2026-10-17 |
-| `/home/gdoran` | repo and model runs (`~/Documents/tree-flowering/2026*_out*`, `202610_temporal/`) | NFS, 76 TB shared |
+| `/scratch/tree-monitoring` (calibrated, 2026-10-23) | `20261012_full_label_extended2_mkl_x4_coreg_4band_cal_curated` (142 MODIS-calibrated chips, 2.7 GB) and `planet_clipped_calfill/4band` (2,138 calibrated 50ha clips, real files, 1.1 GB); apply output `202610_temporal_apply_cal/` | Copied from Earth03 with `rsync -aL` (calfill scenes are symlinks there) |
+| `/home/gdoran` | repo and model runs (`~/Documents/tree-flowering/2026*_out*`, `202610_temporal/`, `202610_temporal_cal/`) | NFS, 76 TB shared |
 | `/local` | node-local disk, ~680 GB free | Not shared between nodes; stage chip sets to `/local/gdoran_flower` |
 
 **GPFS is slow for training reads.** Reading one 512 × 512 chip window off
