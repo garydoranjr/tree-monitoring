@@ -8,7 +8,7 @@
 #
 # Data: the chip set and planet_clipped_calfill (rsync -L, its calibrated
 # scenes are symlinks) must be copied from /Volumes/Earth03/flower to $F; see
-# docs/handoff_calibrated_training.md.
+# docs/gattaca2_cluster.md (storage).
 
 F=/scratch/tree-monitoring
 

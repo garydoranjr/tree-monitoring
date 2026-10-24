@@ -4,7 +4,7 @@
 # on the calibrated copy of the same 142 chips, then scored with the earlier
 # runs on the 56-chip benchmark (right halves of the phantom 2020-23 chips).
 # Source this, then sbatch from the repo root (scripts/slurm/planet_spatial_*.sh).
-# See docs/handoff_calibrated_training.md.
+# Results: docs/planet_training_chips_50ha.md ("MODIS-calibrated chips").
 
 F=/scratch/tree-monitoring
 O=$HOME/Documents/tree-flowering
