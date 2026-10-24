@@ -443,6 +443,43 @@ epoch 8 on. The wet season stays the weak spot (IoU 0.10–0.13 from August to
 October). The spatial benchmark, by contrast, gains about 0.02 in both
 metrics ([planet_training_chips_50ha.md](planet_training_chips_50ha.md#modis-calibrated-chips-full_mkl_cal)).
 
+**Calibrated apply run** (2026-10-24, model `final_e12` in
+`202610_temporal_cal/`, trained in 12 min, 4 shards of about 8 min each,
+output `/scratch/tree-monitoring/202610_temporal_apply_cal/`). It reads
+`planet_clipped_calfill/4band` and reuses the TOA coregistration
+(`202610_temporal_apply/coreg_nearest_drone.json`):
+
+```bash
+source config/temporal_cv_20261012_cal.sh
+export TEMPORAL_FINAL_EPOCHS=12
+FINAL=$(sbatch --parsable -A tree-monitoring scripts/slurm/planet_temporal_final.sh)
+sbatch -A tree-monitoring --dependency=afterok:$FINAL scripts/slurm/planet_apply.sh
+python scripts/apply_planet_maskrcnn.py concat $APPLY_OUT
+```
+
+792 of the 798 scenes were predicted, giving 1,805,760 crown rows
+(792 × 2,280). The 6 skipped scenes are Dove Classic `1105` scenes from 2020
+to 2022 with no SR product, so they are absent from `planet_clipped_calfill`.
+Of the 792, 475 are in the envelope and 543 have a coregistered raster. The
+calibrated model returns more confident detections than the TOA one in
+2021–2023 and 2026, and slightly fewer in 2024–2025:
+
+| Year | Scenes | Median detections ≥ 0.5, TOA | Calibrated |
+|---|---|---|---|
+| 2020 | 157 | 22.5 | 23 |
+| 2021 | 166 | 28 | 30.5 |
+| 2022 | 180 | 19 | 29 |
+| 2023 | 88 | 18.5 | 38.5 |
+| 2024 | 57 | 32 | 30 |
+| 2025 | 29 | 38 | 30 |
+| 2026 | 115 | 27 | 32 |
+
+(The TOA medians are over all of that year's scenes, including the 6 the
+calibrated run skips.) The temporal CV found no skill difference between the
+two models, so neither apply output is preferred on accuracy. The calibrated
+one is more consistent in input across dates, but it lacks the 6 Dove Classic
+scenes.
+
 ## Crown-level comparison with the drone classifications
 
 `plot_crown_species_comparison.py` compares the apply run's per-crown calls
