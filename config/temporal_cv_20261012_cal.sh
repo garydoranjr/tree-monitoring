@@ -6,8 +6,9 @@
 # stretch differ, so runs compare one-to-one. Source this, then sbatch from
 # the repo root; see docs/planet_temporal_generalization.md.
 #
-# Not yet staged on gattaca2: copy the chip set and planet_clipped_calfill
-# (dereferencing its symlinks, rsync -L) from /Volumes/Earth03/flower to $F.
+# Data: the chip set and planet_clipped_calfill (rsync -L, its calibrated
+# scenes are symlinks) must be copied from /Volumes/Earth03/flower to $F; see
+# docs/handoff_calibrated_training.md.
 
 F=/scratch/tree-monitoring
 
@@ -24,7 +25,9 @@ export TEMPORAL_TRAIN_ARGS="--ocm-masks --min-instance-size 64 --lr 1e-4 --no-wa
 
 # Coregistration and apply steps. Drone ortho dirs are space-separated; where
 # two hold the same date, the first wins. The coregistration (computed on the
-# TOA clips) is reused: calibration only offsets each band.
+# TOA clips) is reused: calibration only offsets each band. Do not rerun
+# planet_coreg_nearest.sh with this config. 6 of its 798 scenes are Dove
+# Classic scenes without SR, absent from calfill; apply skips them.
 export TEMPORAL_DRONE_DIRS="$F/stri/globus/RGB $F/stri/C3KW2X/BCI_50ha_timeseries_local_alignment $F/stri/24782016/BCI_50ha_timeseries_local_alignment"
 export APPLY_PLANETDIR=$F/planet_clipped_calfill/4band
 export APPLY_OCMDIR=$F/planet_clipped/ocm

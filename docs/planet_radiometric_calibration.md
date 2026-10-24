@@ -413,7 +413,10 @@ To give the model the same input for the same reflectance on every date:
    (stored as `params['stretch']` in the checkpoint and used by apply, deploy
    and the evaluation scripts; without it the old stretch is unchanged).
    `config/temporal_cv_20261012_cal.sh` runs the temporal CV on the
-   calibrated chips and applies to `planet_clipped_calfill`; not yet run.
+   calibrated chips and applies to `planet_clipped_calfill`;
+   `config/spatial_20261012_cal.sh` with `scripts/slurm/planet_spatial_{train,compare}.sh`
+   repeats the east/west `full_mkl` run and scores it on the 56-chip
+   benchmark. Neither has run yet; see `docs/handoff_calibrated_training.md`.
 
 **Effect on the inputs** (`results/planet_fixed_stretch_metrics_summary.csv`).
 The p10–p90 range across chips of the clear-pixel median input shrinks from

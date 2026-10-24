@@ -9,7 +9,10 @@ model quality.
 This script pins the evaluation to an explicit set of chips (``--chip-list``,
 typically the intersection of the two datasets' chip filenames) and to one
 chip directory, so every checkpoint sees byte-identical inputs and identical
-ground truth. Test crops only ('right' split) -- the same region the training
+ground truth. The exception is ``--chip-dir-for PREFIX=DIR``: checkpoints whose
+label starts with PREFIX read the same chips from DIR instead, e.g. the
+MODIS-calibrated copy (build_calibrated_chips.py) for a model trained with
+--fixed-stretch. The two directories must hold the same chip names and labels. Test crops only ('right' split) -- the same region the training
 runs held out -- so no model is scored on pixels it trained on.
 
 Example:
@@ -99,6 +102,11 @@ def build_subset(chip_dir, chip_names, size, min_instance_size,
 @click.option('--checkpoint', 'checkpoints', multiple=True, required=True,
               metavar='LABEL=PATH',
               help='A checkpoint to score, as label=path. Repeatable.')
+@click.option('--chip-dir-for', 'chip_dir_for', multiple=True,
+              metavar='PREFIX=DIR',
+              help='Score checkpoints whose label starts with PREFIX on the '
+                   'same chips in DIR (e.g. the calibrated copy). Repeatable; '
+                   'the longest matching prefix wins.')
 @click.option('--chip-list', type=click.Path(exists=True, dir_okay=False),
               help='File of chip basenames (one per line, e.g. '
                    'foo_4band.tif) restricting the evaluation set. Without '
@@ -114,7 +122,7 @@ def build_subset(chip_dir, chip_names, size, min_instance_size,
 @click.option('--iou-thresh', default=0.5, type=float)
 @click.option('--json-out', type=click.Path(dir_okay=False),
               help='Write the full results table here as JSON.')
-def main(chip_dir, checkpoints, chip_list, size, min_instance_size,
+def main(chip_dir, checkpoints, chip_dir_for, chip_list, size, min_instance_size,
          use_ocm_masks, score_thresh, iou_thresh, json_out):
     parsed = []
     for spec in checkpoints:
@@ -126,6 +134,18 @@ def main(chip_dir, checkpoints, chip_list, size, min_instance_size,
         if not os.path.exists(path):
             raise click.ClickException(f'no such checkpoint: {path}')
         parsed.append((label, path))
+
+    overrides = []
+    for spec in chip_dir_for:
+        prefix, d = spec.split('=', 1) if '=' in spec else (None, None)
+        if not prefix or not os.path.isdir(d):
+            raise click.ClickException(
+                f'--chip-dir-for must be PREFIX=existing_dir, got {spec!r}')
+        overrides.append((prefix, d))
+    overrides.sort(key=lambda o: -len(o[0]))
+
+    def dir_for(label):
+        return next((d for p, d in overrides if label.startswith(p)), chip_dir)
 
     chip_names = None
     if chip_list:
@@ -143,14 +163,18 @@ def main(chip_dir, checkpoints, chip_list, size, min_instance_size,
         # Channel layout is a property of the trained model, so read it from
         # the checkpoint rather than assuming RGB.
         channel_kinds = params.get('channel_kinds', ('red', 'green', 'blue'))
+        run_dir = dir_for(label)
         dataset, used = build_subset(
-            chip_dir, chip_names, size, min_instance_size, use_ocm_masks,
+            run_dir, chip_names, size, min_instance_size, use_ocm_masks,
             channel_kinds, stretch=params.get('stretch'),
         )
         if n_eval is None:
             n_eval = len(used)
             print(f'Evaluating on {n_eval} chip(s) from {chip_dir} '
                   f'(right/test crops)\n')
+        elif len(used) != n_eval:
+            raise click.ClickException(
+                f'{label}: {len(used)} chips in {run_dir}, expected {n_eval}')
         loader = DataLoader(
             dataset, batch_size=1, shuffle=False, collate_fn=collate_fn,
         )
@@ -160,7 +184,8 @@ def main(chip_dir, checkpoints, chip_list, size, min_instance_size,
             use_ocm_masks=use_ocm_masks,
         )
         row = {'checkpoint': path, 'epoch': epoch, 'n_chips': len(used),
-               'test_iou': iou, 'channel_kinds': list(channel_kinds)}
+               'test_iou': iou, 'channel_kinds': list(channel_kinds),
+               'chip_dir': run_dir, 'stretch': params.get('stretch')}
         for k, v in test_map.items():
             if isinstance(v, torch.Tensor) and v.numel() == 1:
                 row[f'test_map/{k}'] = v.item()
@@ -193,7 +218,8 @@ def main(chip_dir, checkpoints, chip_list, size, min_instance_size,
 
     if json_out:
         with open(json_out, 'w') as fh:
-            json.dump({'chip_dir': chip_dir, 'n_chips': n_eval,
+            json.dump({'chip_dir': chip_dir, 'chip_dir_for': dict(overrides),
+                       'n_chips': n_eval,
                        'use_ocm_masks': use_ocm_masks,
                        'min_instance_size': min_instance_size,
                        'results': results}, fh, indent=2)

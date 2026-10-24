@@ -246,6 +246,11 @@ def run(model_path, planetdir, ocmdir, coreg_json, outdir, grid_like,
         if os.path.exists(crown_csv) and not overwrite:
             continue
         planetfile = os.path.join(planetdir, rec['planet_rel'])
+        if not os.path.exists(planetfile):
+            # e.g. the 6 Dove Classic scenes with no SR product are absent
+            # from planet_clipped_calfill, though coregistered on TOA
+            tqdm.write(f'skipping {scene}: {planetfile} not found')
+            continue
         pimg = load_chip(planetfile, grid)
         arr = pimg.values.transpose(1, 2, 0).astype(np.float32)
         nodata = pimg.rio.nodata
