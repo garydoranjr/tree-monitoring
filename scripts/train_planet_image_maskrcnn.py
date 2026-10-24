@@ -29,7 +29,7 @@ from torchvision.models.detection.roi_heads import RoIHeads
 import torchmetrics
 from torchmetrics.detection import MeanAveragePrecision
 
-from util import select_device
+from util import load_config, select_device
 
 
 def _split_window(h, w, split, size):
@@ -187,22 +187,49 @@ def _compute_ndvi(arr):
     return (nir - red) / denom
 
 
-def build_input_channels(arr, channel_kinds):
+def load_stretch(path):
+    """The fixed input stretch written by derive_planet_fixed_stretch.py, as a
+    plain dict {'scale', 'lo', 'hi'} (lo/hi per Blue, Green, Red, NIR band)
+    suitable for a checkpoint's params; None when `path` is None."""
+    if path is None:
+        return None
+    cfg = load_config(path)
+    return {'scale': float(cfg['scale']), 'lo': [float(v) for v in cfg['lo']],
+            'hi': [float(v) for v in cfg['hi']], 'source': str(path)}
+
+
+def build_input_channels(arr, channel_kinds, stretch=None):
     """Assemble the (H, W, C) model-input array from a (H, W, 4) (Blue, Green,
-    Red, NIR) float array per `channel_kinds`. Color/IR channels get a per-band
-    0-99.9 percentile stretch to [0, 1]; the NDVI channel is left raw in
-    [-1, 1] (it is normalized downstream with dataset stats). Shared by the
-    training dataset and the deploy scripts so the input recipe stays in sync."""
+    Red, NIR) float array per `channel_kinds`. The NDVI channel is left raw in
+    [-1, 1] (it is normalized downstream with dataset stats). Color/IR
+    channels are stretched to [0, 1]:
+
+    - `stretch=None` (default): per image and band, from the 0th to the 99.9th
+      percentile. Chips contain nodata (0) pixels, so in practice each band is
+      divided by its own 99.9th percentile.
+    - `stretch` a dict from `load_stretch`: one fixed stretch for every image,
+      (value * scale - lo) / (hi - lo) per band, for calibrated reflectance
+      chips (uint16 reflectance x 10^4). Nodata pixels stay 0.
+
+    Shared by the training dataset and the deploy scripts so the input recipe
+    stays in sync."""
     ndvi = _compute_ndvi(arr) if 'ndvi' in channel_kinds else None
+    nodata = (arr == 0).all(axis=-1) if stretch is not None else None
     channels = []
     for kind in channel_kinds:
         if kind == 'ndvi':
             channels.append(ndvi)
-        else:
-            band = arr[..., _KIND_SOURCE_IDX[kind]]
+            continue
+        i = _KIND_SOURCE_IDX[kind]
+        band = arr[..., i]
+        if stretch is None:
             p_low, p_high = np.percentile(band, (0, 99.9))
             band = np.clip((band - p_low) / (p_high - p_low + 1e-8), 0, 1)
-            channels.append(band)
+        else:
+            lo, hi = stretch['lo'][i], stretch['hi'][i]
+            band = np.clip((band * stretch['scale'] - lo) / (hi - lo), 0, 1)
+            band[nodata] = 0
+        channels.append(band)
     return np.stack(channels, axis=-1).astype(np.float32)
 
 
@@ -277,7 +304,7 @@ def _local_background(img, crown_mask, box, exclude=None):
 
 
 def build_instance_bank(dir_splits, size, channel_kinds, min_instance_size,
-                        use_ocm_masks=False):
+                        use_ocm_masks=False, stretch=None):
     """Extract every ground-truth crown into a tight-cropped donor patch for
     copy-paste augmentation. `dir_splits` is a sequence of (img_dir, split)
     or (img_dir, split, chip_names) tuples, where split may be a tuple of
@@ -303,7 +330,7 @@ def build_instance_bank(dir_splits, size, channel_kinds, min_instance_size,
             with rasterio.open(img_file) as src:
                 data = src.read()
             arr = data.transpose(1, 2, 0).astype(np.float32)
-            img = build_input_channels(arr, channel_kinds)
+            img = build_input_channels(arr, channel_kinds, stretch)
             mask = (np.array(Image.open(mask_file)) == 255).astype(np.uint8)
             if use_ocm_masks:
                 clear = _load_clear_mask(img_file, mask.shape)
@@ -565,8 +592,10 @@ class PlanetMaskRCNNDataset(Dataset):
     def __init__(self, img_dir, split, size=512, color_jitter=False,
                  min_instance_size=4, use_ocm_masks=False,
                  channel_kinds=('red', 'green', 'blue'), instance_bank=None,
-                 copy_paste_count=0, copy_paste_prob=0.0, chip_names=None):
+                 copy_paste_count=0, copy_paste_prob=0.0, chip_names=None,
+                 stretch=None):
         self.channel_kinds = list(channel_kinds)
+        self.stretch = stretch
         # All chips are uint16 GeoTIFFs with band order (Blue, Green, Red, NIR)
         # produced by apply_drone_labels_coreg.py; the model input channels are
         # assembled from them per `channel_kinds`. `chip_names` (tif
@@ -646,14 +675,15 @@ class PlanetMaskRCNNDataset(Dataset):
 
     def __getitem__(self, idx):
         # Read the 4-band tif (Blue, Green, Red, NIR) and assemble the model
-        # input channels per self.channel_kinds. Color/IR channels get a
-        # per-band 0-99.9 percentile stretch to [0, 1]; the NDVI channel is
-        # left raw in [-1, 1] (it is normalized later with dataset stats).
+        # input channels per self.channel_kinds. Color/IR channels are
+        # stretched to [0, 1] (per image, or with self.stretch's fixed lo/hi);
+        # the NDVI channel is left raw in [-1, 1] (normalized later with
+        # dataset stats).
         file_idx, split = self.items[idx]
         with rasterio.open(self.img_files[file_idx]) as src:
             data = src.read()  # (4, H, W) uint16
         arr = data.transpose(1, 2, 0).astype(np.float32)
-        img = build_input_channels(arr, self.channel_kinds)  # (H, W, C)
+        img = build_input_channels(arr, self.channel_kinds, self.stretch)  # (H, W, C)
         mask = np.array(Image.open(self.mask_files[file_idx]))
         mask = (mask == 255).astype(np.uint8)
 
@@ -1168,13 +1198,19 @@ def evaluate(model, dataloader, device, iou_metric, map_metric,
               help="With --folds: an integer K trains on the chips of every "
                    "other fold and tests on fold K; 'all' trains on every "
                    'chip with no test set (the final full-record model).')
+@click.option('--fixed-stretch', type=click.Path(exists=True, dir_okay=False),
+              default=None,
+              help='YAML from derive_planet_fixed_stretch.py: stretch every '
+                   'colour/IR channel with one fixed per-band lo/hi instead of '
+                   'the per-image percentile stretch. For calibrated '
+                   'reflectance chips (build_calibrated_chips.py).')
 @click.option('--wandb/--no-wandb', 'use_wandb', default=True)
 def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
          min_instance_size, nms_thresh, score_thresh, detections_per_img,
          use_ocm_masks, fourth_band, replace, nir_init, extra_train_dirs,
          use_copy_paste, copy_paste_count, copy_paste_prob,
          lr_schedule, warmup_epochs, select_metric, save_every_epoch,
-         save_epochs, folds_csv, fold, use_wandb):
+         save_epochs, folds_csv, fold, fixed_stretch, use_wandb):
 
     if (folds_csv is None) != (fold is None):
         raise click.UsageError('--folds and --fold must be given together')
@@ -1201,6 +1237,7 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
 
     channel_kinds = resolve_channels(fourth_band, replace)
     n_channels = len(channel_kinds)
+    stretch = load_stretch(fixed_stretch)
 
     # Per-channel normalization. NDVI is fed raw and normalized with stats
     # derived from the training split; the other kinds use fixed stats.
@@ -1236,7 +1273,7 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
             [(imagedir, train_split, train_chips)]
             + [(d, 'whole') for d in extra_train_dirs],
             size, channel_kinds, min_instance_size,
-            use_ocm_masks=use_ocm_masks,
+            use_ocm_masks=use_ocm_masks, stretch=stretch,
         )
         if not instance_bank:
             raise ValueError(
@@ -1261,6 +1298,7 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
         'replace': replace,
         'channel_kinds': channel_kinds,
         'n_channels': n_channels,
+        'stretch': stretch,
         'image_mean': image_mean,
         'image_std': image_std,
         'ndvi_mean': ndvi_mean,
@@ -1298,6 +1336,7 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
         use_ocm_masks=use_ocm_masks, channel_kinds=channel_kinds,
         instance_bank=instance_bank, copy_paste_count=copy_paste_count,
         copy_paste_prob=copy_paste_prob, chip_names=train_chips,
+        stretch=stretch,
     )
     # Append any extra whole-image chip dirs to the *training* set only,
     # leaving the left/right validation split on imagedir untouched.
@@ -1310,7 +1349,7 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
                 use_ocm_masks=use_ocm_masks, channel_kinds=channel_kinds,
                 instance_bank=instance_bank,
                 copy_paste_count=copy_paste_count,
-                copy_paste_prob=copy_paste_prob,
+                copy_paste_prob=copy_paste_prob, stretch=stretch,
             )
             print(f"Adding {len(extra_ds)} whole-image train chips from {extra_dir}")
             datasets.append(extra_ds)
@@ -1325,7 +1364,7 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
             imagedir, split=test_split, size=size, color_jitter=False,
             min_instance_size=min_instance_size,
             use_ocm_masks=use_ocm_masks, channel_kinds=channel_kinds,
-            chip_names=test_chips,
+            chip_names=test_chips, stretch=stretch,
         )
         test_loader = DataLoader(
             test_dataset, batch_size=1, shuffle=False, collate_fn=collate_fn,

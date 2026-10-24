@@ -65,7 +65,7 @@ def load_checkpoint(path, device):
 
 
 def build_subset(chip_dir, chip_names, size, min_instance_size,
-                 use_ocm_masks, channel_kinds):
+                 use_ocm_masks, channel_kinds, stretch=None):
     """Test-split dataset over chip_dir restricted to `chip_names`.
 
     Restricting by basename (rather than by index) keeps the evaluation set
@@ -74,7 +74,7 @@ def build_subset(chip_dir, chip_names, size, min_instance_size,
     ds = PlanetMaskRCNNDataset(
         chip_dir, split='right', size=size, color_jitter=False,
         min_instance_size=min_instance_size, use_ocm_masks=use_ocm_masks,
-        channel_kinds=channel_kinds,
+        channel_kinds=channel_kinds, stretch=stretch,
     )
     if chip_names is None:
         return ds, [os.path.basename(f) for f in ds.img_files]
@@ -145,7 +145,7 @@ def main(chip_dir, checkpoints, chip_list, size, min_instance_size,
         channel_kinds = params.get('channel_kinds', ('red', 'green', 'blue'))
         dataset, used = build_subset(
             chip_dir, chip_names, size, min_instance_size, use_ocm_masks,
-            channel_kinds,
+            channel_kinds, stretch=params.get('stretch'),
         )
         if n_eval is None:
             n_eval = len(used)

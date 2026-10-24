@@ -167,7 +167,7 @@ def main(modelfile, imagedir, outputfile, split, size, mask_thresh,
     dataset = PlanetMaskRCNNDataset(
         imagedir, split=split, size=size, color_jitter=False,
         min_instance_size=min_instance_size, use_ocm_masks=use_ocm_masks,
-        channel_kinds=params['channel_kinds'],
+        channel_kinds=params['channel_kinds'], stretch=params.get('stretch'),
     )
     print(f"Evaluating {len(dataset)} chips from {imagedir} (split={split})")
     loader = DataLoader(

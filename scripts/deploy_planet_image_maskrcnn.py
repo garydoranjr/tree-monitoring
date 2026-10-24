@@ -24,7 +24,7 @@ from util import select_device
 
 
 def load_image_and_gt(imagefile, split, size=512, min_instance_size=4,
-                      load_ocm_mask=False, channel_kinds=None):
+                      load_ocm_mask=False, channel_kinds=None, stretch=None):
     """Load a chip's model input, ground-truth instances, and an RGB display
     image for the requested split.
 
@@ -64,8 +64,8 @@ def load_image_and_gt(imagefile, split, size=512, min_instance_size=4,
     mask = np.array(Image.open(maskfile))
     mask = (mask == 255).astype(np.uint8)
 
-    img_model = build_input_channels(arr, channel_kinds)        # (H, W, C)
-    img_disp = build_input_channels(arr, ['red', 'green', 'blue'])  # RGB [0,1]
+    img_model = build_input_channels(arr, channel_kinds, stretch)          # (H, W, C)
+    img_disp = build_input_channels(arr, ['red', 'green', 'blue'], stretch)  # RGB [0,1]
 
     extras = [img_disp]
     if load_ocm_mask:
@@ -164,6 +164,7 @@ def main(modelfile, imagedir, outputdir, score_thresh, mask_thresh, split,
     model = ckpt['model']
     min_instance_size = ckpt['params']['min_instance_size']
     channel_kinds = ckpt['params'].get('channel_kinds')
+    stretch = ckpt['params'].get('stretch')
     model.eval()
     model.to(device)
 
@@ -181,7 +182,7 @@ def main(modelfile, imagedir, outputdir, score_thresh, mask_thresh, split,
         img_np, gt_masks, img_tensor = load_image_and_gt(
             imgfile, split=split, size=size,
             min_instance_size=min_instance_size,
-            channel_kinds=channel_kinds,
+            channel_kinds=channel_kinds, stretch=stretch,
         )
 
         with torch.no_grad():

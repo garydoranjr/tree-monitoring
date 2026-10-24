@@ -230,7 +230,7 @@ def main(chip_dir, folds_csv, run_template, epochs, min_instance_size,
                 use_ocm_masks=settings['use_ocm_masks'],
                 channel_kinds=params.get('channel_kinds',
                                          ('red', 'green', 'blue')),
-                chip_names=held_out,
+                chip_names=held_out, stretch=params.get('stretch'),
             )
             rows = score_fold(model, dataset, chip_info, device,
                               settings['use_ocm_masks'], score_thresh,

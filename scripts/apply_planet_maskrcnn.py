@@ -256,7 +256,7 @@ def run(model_path, planetdir, ocmdir, coreg_json, outdir, grid_like,
             raise click.ClickException(f'no OCM mask for {planetfile}')
         clear = (reproject_ocm_to_grid(ocm_path, pimg).values == 0) & valid
 
-        img = build_input_channels(arr, channel_kinds)
+        img = build_input_channels(arr, channel_kinds, params.get('stretch'))
         masks, scores = predict_tiled(model, img, clear, device, tile, stride)
         ids, best = instance_rasters(masks, scores, clear.shape)
 

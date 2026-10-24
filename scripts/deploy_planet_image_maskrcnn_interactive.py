@@ -91,7 +91,7 @@ class InferenceWorker(threading.Thread):
 
     def __init__(self, model, device, cache, image_paths, split, size,
                  score_thresh, mask_thresh, iou_thresh, min_instance_size,
-                 use_ocm_masks=False, channel_kinds=None):
+                 use_ocm_masks=False, channel_kinds=None, stretch=None):
         super().__init__(daemon=True)
         self.model = model
         self.device = device
@@ -105,6 +105,7 @@ class InferenceWorker(threading.Thread):
         self.min_instance_size = min_instance_size
         self.use_ocm_masks = use_ocm_masks
         self.channel_kinds = channel_kinds
+        self.stretch = stretch
 
         self._queue = queue.PriorityQueue()
         self._bump_counter = itertools.count(0, -1)
@@ -143,12 +144,13 @@ class InferenceWorker(threading.Thread):
                 path, split=self.split, size=self.size,
                 min_instance_size=self.min_instance_size,
                 load_ocm_mask=True, channel_kinds=self.channel_kinds,
+                stretch=self.stretch,
             )
         else:
             _, gt_masks, img_tensor = load_image_and_gt(
                 path, split=self.split, size=self.size,
                 min_instance_size=self.min_instance_size,
-                channel_kinds=self.channel_kinds,
+                channel_kinds=self.channel_kinds, stretch=self.stretch,
             )
             clear_crop = None
 
@@ -1057,6 +1059,7 @@ def main(imagedir, modelfile, score_thresh, mask_thresh, split,
         min_instance_size = ckpt['params']['min_instance_size']
         use_ocm_masks = ckpt['params'].get('use_ocm_masks', False)
         channel_kinds = ckpt['params'].get('channel_kinds')
+        stretch = ckpt['params'].get('stretch')
 
         cache = PredictionCache()
         worker = InferenceWorker(
@@ -1065,6 +1068,7 @@ def main(imagedir, modelfile, score_thresh, mask_thresh, split,
             score_thresh=score_thresh, mask_thresh=mask_thresh,
             iou_thresh=iou_thresh, min_instance_size=min_instance_size,
             use_ocm_masks=use_ocm_masks, channel_kinds=channel_kinds,
+            stretch=stretch,
         )
         worker.start()
         atexit.register(worker.stop)
