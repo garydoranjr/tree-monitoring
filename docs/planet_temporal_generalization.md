@@ -861,6 +861,32 @@ percentile; full range 0.95–1.11). Per-band correlation is at least 0.976
 (blue) and 0.989 (green, red, NIR) on every chip. The calibrated chips differ
 from the TOA chips only radiometrically.
 
+### Augmentation ablation and repeat run (H1, H8; pending on gattaca2)
+
+`train_planet_image_maskrcnn.py --no-color-jitter` turns off the training
+ColorJitter, and `--seed N` seeds Python, NumPy and torch. Both are stored in
+`params`. Their defaults (jitter on, no seed) reproduce every earlier run.
+There are three CV-only configs, which unset the apply settings so they cannot
+overwrite the parent runs' output:
+
+| Config | Run | Tests |
+|---|---|---|
+| `config/temporal_cv_20261012_nojit.sh` | TOA, no jitter | H1: if TOA drops clearly more than calibrated without jitter, jitter was standing in for calibration |
+| `config/temporal_cv_20261012_cal_nojit.sh` | Calibrated, no jitter | H1 |
+| `config/temporal_cv_20261012_seed1.sh` | TOA, `--seed 1` | H8: the run-to-run spread the other differences are judged against |
+
+```bash
+for C in nojit cal_nojit seed1; do
+  source config/temporal_cv_20261012_$C.sh
+  CV=$(sbatch --parsable -A tree-monitoring scripts/slurm/planet_temporal_cv.sh)
+  sbatch -A tree-monitoring --dependency=afterok:$CV scripts/slurm/planet_temporal_eval.sh
+done
+```
+
+Each run takes about 2–3 h within the 2-GPU limit, so the three take about a
+day if run one after another. Compare them with `compare_temporal_cv.py`
+(`--run` and `--windows` for each).
+
 ## Caveats
 
 - **The epoch choice is slightly optimistic.** E* is chosen on the same pooled

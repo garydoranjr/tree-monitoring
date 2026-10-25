@@ -3,6 +3,7 @@ import os
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")  # must precede torch import
 import glob
 import json
+import random
 import warnings
 import wandb
 import click
@@ -593,9 +594,12 @@ class PlanetMaskRCNNDataset(Dataset):
                  min_instance_size=4, use_ocm_masks=False,
                  channel_kinds=('red', 'green', 'blue'), instance_bank=None,
                  copy_paste_count=0, copy_paste_prob=0.0, chip_names=None,
-                 stretch=None):
+                 stretch=None, raw_transform=None):
         self.channel_kinds = list(channel_kinds)
         self.stretch = stretch
+        # Optional f(arr, img_path) -> arr on the raw (H, W, 4) float chip
+        # before the stretch, e.g. radiometric perturbations at test time.
+        self.raw_transform = raw_transform
         # All chips are uint16 GeoTIFFs with band order (Blue, Green, Red, NIR)
         # produced by apply_drone_labels_coreg.py; the model input channels are
         # assembled from them per `channel_kinds`. `chip_names` (tif
@@ -621,7 +625,8 @@ class PlanetMaskRCNNDataset(Dataset):
         self.copy_paste_prob = copy_paste_prob
         self.copy_paste = bool(instance_bank) and copy_paste_count > 0
         self.overlay = A.OverlayElements(p=1.0) if self.copy_paste else None
-        self.rng = np.random.default_rng()
+        # Drawn from NumPy's global state so that --seed also fixes it.
+        self.rng = np.random.default_rng(np.random.randint(2**31))
 
     def __len__(self):
         return len(self.items)
@@ -683,6 +688,8 @@ class PlanetMaskRCNNDataset(Dataset):
         with rasterio.open(self.img_files[file_idx]) as src:
             data = src.read()  # (4, H, W) uint16
         arr = data.transpose(1, 2, 0).astype(np.float32)
+        if self.raw_transform is not None:
+            arr = self.raw_transform(arr, self.img_files[file_idx])
         img = build_input_channels(arr, self.channel_kinds, self.stretch)  # (H, W, C)
         mask = np.array(Image.open(self.mask_files[file_idx]))
         mask = (mask == 255).astype(np.uint8)
@@ -1204,17 +1211,31 @@ def evaluate(model, dataloader, device, iou_metric, map_metric,
                    'colour/IR channel with one fixed per-band lo/hi instead of '
                    'the per-image percentile stretch. For calibrated '
                    'reflectance chips (build_calibrated_chips.py).')
+@click.option('--color-jitter/--no-color-jitter', 'color_jitter', default=True,
+              help='ColorJitter(brightness=0.2, contrast=0.2) on the stretched '
+                   'colour/IR channels of training chips (default on, as in '
+                   'every run before this flag existed).')
+@click.option('--seed', default=None, type=int,
+              help='Seed Python, NumPy and torch (initialisation, shuffling, '
+                   'jitter, copy-paste). Unset by default, as in earlier runs. '
+                   'cuDNN kernels stay non-deterministic, so seeded runs are '
+                   'repeatable only approximately.')
 @click.option('--wandb/--no-wandb', 'use_wandb', default=True)
 def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
          min_instance_size, nms_thresh, score_thresh, detections_per_img,
          use_ocm_masks, fourth_band, replace, nir_init, extra_train_dirs,
          use_copy_paste, copy_paste_count, copy_paste_prob,
          lr_schedule, warmup_epochs, select_metric, save_every_epoch,
-         save_epochs, folds_csv, fold, fixed_stretch, use_wandb):
+         save_epochs, folds_csv, fold, fixed_stretch, color_jitter, seed,
+         use_wandb):
 
     if (folds_csv is None) != (fold is None):
         raise click.UsageError('--folds and --fold must be given together')
     os.makedirs(outputdir, exist_ok=True)
+    if seed is not None:
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
     # One JSON line of logged metrics per epoch, appended as training runs.
     open(os.path.join(outputdir, 'metrics.jsonl'), 'w').close()
 
@@ -1315,6 +1336,8 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
         'test_split': list(as_splits(test_split)),
         'train_chips': train_chips,
         'test_chips': test_chips,
+        'color_jitter': color_jitter,
+        'seed': seed,
     }
 
     run = None
@@ -1331,7 +1354,7 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
     device = select_device()
 
     train_dataset = PlanetMaskRCNNDataset(
-        imagedir, split=train_split, size=size, color_jitter=True,
+        imagedir, split=train_split, size=size, color_jitter=color_jitter,
         min_instance_size=min_instance_size,
         use_ocm_masks=use_ocm_masks, channel_kinds=channel_kinds,
         instance_bank=instance_bank, copy_paste_count=copy_paste_count,
@@ -1344,7 +1367,7 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
         datasets = [train_dataset]
         for extra_dir in extra_train_dirs:
             extra_ds = PlanetMaskRCNNDataset(
-                extra_dir, split='whole', size=size, color_jitter=True,
+                extra_dir, split='whole', size=size, color_jitter=color_jitter,
                 min_instance_size=min_instance_size,
                 use_ocm_masks=use_ocm_masks, channel_kinds=channel_kinds,
                 instance_bank=instance_bank,
