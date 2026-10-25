@@ -36,7 +36,7 @@ from torchmetrics.detection import MeanAveragePrecision
 
 # Importing compare_maskrcnn_runs also re-exports the custom model classes
 # into __main__, which unpickling the checkpoints needs.
-from compare_maskrcnn_runs import load_checkpoint
+import compare_maskrcnn_runs  # noqa: F401
 from train_planet_image_maskrcnn import (
     PlanetMaskRCNNDataset,
     classify_instances_torch,
@@ -49,6 +49,21 @@ from train_planet_image_maskrcnn import (
 # inclusive. Beyond 30 days is outside the interpolation envelope.
 DAY_BINS = (('0-3', 0, 3), ('4-7', 4, 7), ('8-14', 8, 14),
             ('15-30', 15, 30), ('>30', 31, 10**6))
+
+
+def load_fold_model(path, device):
+    """(model, params, predict) for a fold checkpoint of either kind: a pickled
+    Mask R-CNN from train_planet_image_maskrcnn.py, scored with
+    filtered_predictions, or a DINOv3 segmenter from
+    train_planet_image_dinov3.py ('kind': 'dinov3'), scored with its
+    predict_instances (connected components, same output format)."""
+    ckpt = torch.load(path, map_location=device, weights_only=False)
+    if ckpt.get('kind') == 'dinov3':
+        from train_planet_image_dinov3 import model_from_checkpoint, predict_instances
+        return model_from_checkpoint(ckpt, device), ckpt['params'], predict_instances
+    model = ckpt['model'].to(device)
+    model.eval()
+    return model, ckpt.get('params', {}), filtered_predictions
 
 
 def day_bin(days):
@@ -95,7 +110,8 @@ class Accumulator:
 
 @torch.no_grad()
 def score_fold(model, dataset, chip_info, device, use_ocm_masks,
-               score_thresh, iou_thresh, accumulators):
+               score_thresh, iou_thresh, accumulators,
+               predict=filtered_predictions):
     """Score one fold's held-out windows, updating every accumulator that
     the window belongs to, and return one row per window."""
     loader = DataLoader(dataset, batch_size=1, shuffle=False,
@@ -106,7 +122,7 @@ def score_fold(model, dataset, chip_info, device, use_ocm_masks,
         chip = os.path.basename(dataset.img_files[file_idx])
         info = chip_info[chip]
         imgs = [img.to(device) for img in imgs]
-        pred = filtered_predictions(
+        pred = predict(
             model, imgs, targets, device, score_thresh=score_thresh,
             use_ocm_masks=use_ocm_masks,
         )[0]
@@ -198,7 +214,7 @@ def main(chip_dir, folds_csv, run_template, epochs, min_instance_size,
         accs.update({f'fold:{k}': Accumulator(device) for k in folds})
         accs.update({f'bin:{b}': Accumulator(device) for b, _, _ in DAY_BINS})
         for k in folds:
-            model, params, _ = load_checkpoint(paths[(k, e)], device)
+            model, params, predict = load_fold_model(paths[(k, e)], device)
             if params.get('folds') is None or str(params.get('fold')) != str(k):
                 raise click.ClickException(
                     f'{paths[(k, e)]} was not trained as fold {k} '
@@ -234,7 +250,7 @@ def main(chip_dir, folds_csv, run_template, epochs, min_instance_size,
             )
             rows = score_fold(model, dataset, chip_info, device,
                               settings['use_ocm_masks'], score_thresh,
-                              iou_thresh, accs)
+                              iou_thresh, accs, predict=predict)
             all_rows.extend({'epoch': e, **r} for r in rows)
             del model
             if device.type == 'cuda':

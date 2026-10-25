@@ -861,6 +861,51 @@ percentile; full range 0.95–1.11). Per-band correlation is at least 0.976
 (blue) and 0.989 (green, red, NIR) on every chip. The calibrated chips differ
 from the TOA chips only radiometrically.
 
+### Test-time offset sensitivity (H4, H1)
+
+`radiometric_sensitivity.py` re-scores each fold's epoch-12 checkpoint on its
+held-out chips with an offset added to the raw chip before the model's own
+stretch. The offset is k times the across-scene SD of the fitted
+Planet–MODIS offsets (blue / green / red 0.0158 / 0.0149 / 0.0158 in
+reflectance), with the same sign in every band, as haze would add. This is the
+size of the scene-to-scene error that calibration removes. The TOA chips store
+radiance counts, so each band's offset is converted per chip with the slope of
+the TOA band against the calibrated copy over clear pixels.
+
+The run took about 2 h on the Mac CPU. MPS hit GPU command-buffer errors and a
+float64 failure, so use `--device cpu` there; CUDA is much faster.
+
+```bash
+python scripts/radiometric_sensitivity.py \
+  --chip-dir /Volumes/Earth03/flower/20261012_full_label_extended2_mkl_x4_coreg_4band_stretch_stats_curated \
+  --cal-chip-dir /Volumes/Earth03/flower/20261012_full_label_extended2_mkl_x4_coreg_4band_cal_curated \
+  --folds config/temporal_folds_20261012.csv \
+  --run-template '/Volumes/Earth03/flower/202610_temporal/fold{fold}' \
+  --units toa --device cpu --k=-1,0,1 --out-csv sensitivity_toa.csv
+```
+
+At k = 0 it reproduces `temporal_cv.json` (pooled IoU 0.3518, map_50 0.3544 vs
+0.3541).
+
+| TOA model, offset | Pooled `map_50` | IoU | Precision | Recall |
+|---|---|---|---|---|
+| −1 SD | 0.3515 | 0.3512 | 0.252 | 0.474 |
+| none | 0.3544 | 0.3518 | 0.242 | 0.478 |
+| +1 SD | 0.3491 | 0.3447 | 0.233 | 0.475 |
+
+**The TOA model hardly notices errors as large as those calibration removes.**
+Offsets of ±1 SD cost at most 0.005 in pooled `map_50` and 0.007 in pooled
+IoU. Within distance bins the largest IoU change is 0.011 (0–3 d, +1 SD). The per-image stretch and
+the training jitter already make the model close to invariant to scene-level
+offsets. So calibration could recover at most about this much, and the observed
+gain on own-fit chips (+0.012 IoU) is of that order. This confirms H4, and H1
+in its weak form. Whether jitter specifically is what buys the invariance is
+the question for the ablation below. The calibrated folds' checkpoints are only
+on gattaca2. Run the same command there with
+`--chip-dir <cal chips> --run-template '<202610_temporal_cal>/fold{fold}' --units reflectance`
+to see how much the fixed stretch passes offsets on, which is the
+borrowed-offset loss.
+
 ### Augmentation ablation and repeat run (H1, H8; pending on gattaca2)
 
 `train_planet_image_maskrcnn.py --no-color-jitter` turns off the training
