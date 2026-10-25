@@ -775,6 +775,64 @@ area Jaccard is 0.65 at 4–7 d, 0.54 at 8–14 d, 0.39 at 15–30 d and 0.25 at
   flight. A crown-level CV score (model calls per crown, as in the drone
   comparison) would allow a like-for-like comparison with persistence.
 
+### What drives per-chip skill (H5, H7)
+
+`temporal_cv_chip_drivers.py` joins the per-chip IoU of both runs at epoch 12 to
+properties of each chip and scene. It reports Spearman correlations, raw and
+partial on days to the nearest training chip, and IoU pooled by group. The
+persistence column comes from `persistence_baseline.py --out-prefix P`:
+
+```bash
+python scripts/persistence_baseline.py --folds config/temporal_folds_20261012.csv --out-prefix P
+python scripts/temporal_cv_chip_drivers.py \
+  --windows toa=/Volumes/Earth03/flower/202610_temporal/temporal_cv_windows.csv \
+  --windows cal=/Volumes/Earth03/flower/202610_temporal_cal/temporal_cv_windows.csv \
+  --persistence P_cv.csv
+```
+
+With 142 chips, |ρ| above about 0.17 is significant at 5 %.
+
+| Property | ρ with TOA IoU | partial | ρ with cal − TOA | partial |
+|---|---|---|---|---|
+| Days to nearest training chip | −0.66 | | +0.12 | |
+| Persistence area Jaccard | +0.64 | +0.12 | −0.09 | +0.03 |
+| Labelled crowns per chip | +0.62 | +0.48 | −0.02 | +0.04 |
+| Crown contrast-to-noise, TOA red input | +0.52 | +0.46 | −0.10 | −0.07 |
+| Day of year | −0.42 | −0.18 | +0.14 | +0.09 |
+| Clear fraction | +0.28 | +0.25 | −0.01 | +0.01 |
+| Sun elevation | −0.25 | −0.14 | +0.16 | +0.14 |
+| TOA red input median (haze) | −0.13 | −0.06 | +0.08 | +0.06 |
+| Scene calibration offset, mean abs RGB | −0.05 | −0.03 | +0.16 | +0.15 |
+| Saturated share, fixed stretch | +0.07 | −0.01 | +0.05 | +0.06 |
+| View angle | −0.09 | −0.13 | −0.08 | −0.08 |
+| Coregistration shift | −0.07 | +0.05 | +0.05 | +0.04 |
+
+| Group | Chips | IoU TOA | IoU cal |
+|---|---|---|---|
+| Dry season (Jan–Apr) | 101 | 0.385 | 0.391 |
+| Wet season (May–Dec) | 41 | 0.202 | 0.211 |
+| PSB.SD | 133 | 0.357 | 0.368 |
+| PS2 | 7 | 0.214 | 0.216 |
+| phantom labels | 72 | 0.372 | 0.377 |
+| mavic labels | 70 | 0.325 | 0.339 |
+
+- **The scene's radiometric state does not predict TOA skill.** Haze (TOA input
+  level), the size of the calibration correction, and saturation all have
+  |ρ| ≤ 0.13 with TOA IoU. If radiometric differences between scenes were
+  limiting the TOA model, its worst chips would be the hazy or strongly
+  corrected ones. They are not, so there was little for calibration to fix.
+- **Skill follows the crowns' contrast in the image and the label content.**
+  Crown contrast-to-noise (ρ +0.46 after removing distance) and the number of
+  labelled crowns (+0.48) are the strongest predictors after distance and
+  persistence. Contrast-to-noise is unchanged by a per-scene linear correction
+  (H4). Chips with few events score low IoU partly because IoU is unstable with
+  small denominators.
+- **The calibration gain is only weakly patterned.** It is a little larger
+  where the correction was larger (ρ +0.16) and where the sun is higher
+  (+0.16), both at the edge of significance. It is about the same in both
+  seasons (+0.006 dry, +0.009 wet), so calibration does not fix the
+  wet-season weakness.
+
 ## Caveats
 
 - **The epoch choice is slightly optimistic.** E* is chosen on the same pooled
