@@ -833,6 +833,34 @@ With 142 chips, |ρ| above about 0.17 is significant at 5 %.
   seasons (+0.006 dry, +0.009 wet), so calibration does not fix the
   wet-season weakness.
 
+### Calibrated vs TOA chip geometry (H9)
+
+The calibrated chips are SR-product clips resampled onto the TOA chip grids,
+while the labels were coregistered on TOA. `compare_chip_sets.py` checks each
+pair for a shift, extra blur and per-band agreement over valid, OCM-clear pixels
+(`results/chip_sets_toa_vs_cal.csv`, about 5 min on the Mac):
+
+```bash
+python scripts/compare_chip_sets.py \
+  /Volumes/Earth03/flower/20261012_full_label_extended2_mkl_x4_coreg_4band_stretch_stats_curated \
+  /Volumes/Earth03/flower/20261012_full_label_extended2_mkl_x4_coreg_4band_cal_curated \
+  results/chip_sets_toa_vs_cal.csv
+```
+
+The shift is an integer phase-correlation start refined by masked
+Lucas–Kanade. Plain phase correlation underestimated a known shift: on the
+`--self-test 1.6` check (1.2 m per axis), it returned 1.05 m. The cause is that
+nodata and cloud pixels sit at the same place in both copies. The refined
+estimate recovers 1.200 m on every chip.
+
+**There is no geometric confound.** The median red-band shift is 0.005 m
+(90th percentile 0.25 m, maximum 0.51 m, below one 0.75 m chip pixel and a
+sixth of a Planet pixel). The mean shift is 0.01 m in each axis. The sharpness
+ratio (Tenengrad over variance, calibrated over TOA) is 0.99–1.03 (10th–90th
+percentile; full range 0.95–1.11). Per-band correlation is at least 0.976
+(blue) and 0.989 (green, red, NIR) on every chip. The calibrated chips differ
+from the TOA chips only radiometrically.
+
 ## Caveats
 
 - **The epoch choice is slightly optimistic.** E* is chosen on the same pooled
