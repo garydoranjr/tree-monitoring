@@ -180,15 +180,62 @@ To re-run the whole mavic series on the HPC:
 ```bash
 ./run_crown_pipeline.sh config/pipeline_mavic_mkl.sh
 ```
-This writes to `/scratch/tree-monitoring/results/globus_mkl`, so the per-band
-results in `results/globus` stay in place. The per-band classifications on
-Earth03 have been moved to
-`/Volumes/Earth03/flower/results/older/classifications_mavic_perband/`. While
-the re-run is in progress,
-[`docs/handoff_mavic_mkl_rerun.md`](handoff_mavic_mkl_rerun.md) gives the
-gattaca2 steps. The file names match the old run's
-(`<stem>_classifications.tif`), so keep the two runs in separate directories
-when copying them back to Earth03.
+This writes to `/scratch/tree-monitoring/results/globus_mkl`.
+
+### Full-series re-run
+
+All 96 mavic mosaics (2024-03-06 to 2026-01-20) were re-classified with
+this config on gattaca2 on 2026-10-11. The output is in
+`/Volumes/Earth03/flower/results/classifications/` (`*_M3M_*_classifications.tif`)
+and `results/crown_classifications_mavic.nc4`.
+
+The per-band results are archived under the same file names:
+- Earth03: `results/older/classifications_mavic_perband/` and
+  `results/older/crown_classifications_mavic_perband.nc4`;
+- gattaca2: `/scratch/tree-monitoring/results/older/globus_perband/`.
+
+`config/pipeline_mavic.sh` still writes to the old `results/globus` path, so
+run it only to reproduce the per-band results. The `same-date` figures are in
+`figs/202610_updates/` (per-band) and `figs/20261013_updates/` (colour
+transfer).
+
+**Same-day flights.** These are all 2,279 crowns of the 2022-09-29 crown map,
+by mean P(flowering) on the production rasters read at 1/16 resolution
+(`plot_update_figures.py same-date`). They compare phantom (C3KW2X, local
+alignment) with mavic:
+
+| | Per-band | Colour transfer |
+|---|---|---|
+| mavic-only crowns (mavic > 0.5, phantom < 0.2), both dates | 42 | 3 |
+| crowns > 0.5 on both cameras | 16 | 11 |
+| phantom-only crowns (phantom > 0.5, mavic < 0.2) | 1 | 2 |
+| mavic crowns > 0.5, 2024-03-06 / 03-18 (phantom 0.5 % / 0.4 %) | 2.3 % / 1.4 % | 0.3 % / 0.5 % |
+| Spearman ρ, P(flowering), 2024-03-06 / 03-18 | 0.53 / 0.59 | 0.61 / 0.67 |
+| Spearman ρ, P(deciduous), 2024-03-06 / 03-18 | 0.73 / 0.80 | 0.72 / 0.80 |
+
+Of the original 42 mavic-only crowns, 3 remain above 0.5, and their median
+mavic P(flowering) falls from 0.58 to 0.14. Of the original 16 crowns that
+flower on both cameras, 11 remain. The production run therefore removes more
+mavic-only calls than the 121-crown test (3 left against 6), but it also
+loses more shared ones (11 kept against 14). The deciduous model was already
+in line with phantom and does not change.
+
+**Whole series.** Across all 96 dates, the share of crowns with
+P(flowering) > 0.5 falls from 3.87 % to 0.80 %. Phantom gives 0.96 % over its
+106 dates, from 2018 to 2024. The two cameras cover different years, so the
+comparison below is by calendar month, all years pooled:
+
+| Month | J | F | M | A | M | J | J | A | S | O | N | D |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| phantom (%) | 0.64 | 1.40 | 1.73 | 1.45 | 0.97 | 1.54 | 1.21 | 0.50 | 0.90 | 0.46 | 0.08 | 0.17 |
+| mavic per-band (%) | 2.52 | 3.40 | 3.93 | 5.00 | 3.72 | 4.60 | 4.46 | 3.72 | 4.44 | 4.34 | 3.10 | 2.74 |
+| mavic colour transfer (%) | 0.30 | 1.00 | 1.16 | 1.23 | 0.57 | 1.01 | 1.18 | 0.58 | 1.27 | 0.96 | 0.20 | 0.20 |
+
+The per-band mavic was 2.5–5 % in every month, which flattened the seasonal
+cycle. With the colour transfer, mavic is within 0.6 percentage points of
+phantom in every month and follows its seasonal cycle: low in November to
+January, highest from February to April. The deciduous share hardly moves
+(2.13 % → 2.02 %).
 
 ## Caveats and next steps
 
@@ -196,11 +243,14 @@ when copying them back to Earth03.
   model was trained on 24782016 phantom chips, and phantom on 2024-03-18 is hazy.
   For production, refit `mkl` or `histmatch` against a pooled 24782016 sample;
   this extends the current p2/p98 match in the config to the full distribution
-  and covariance. Then re-run the full mavic time series and check whether the
-  flowering fraction falls to phantom levels.
-- **Only disagreement and control crowns were re-run.** A full-plot run (2,280
-  crowns × 2 dates) would give the corrected crown fractions and Spearman ρ for
-  the whole plot.
+  and covariance. The current C3KW2X-fitted transform already brings the
+  full-series mavic flowering share to phantom levels
+  ([Full-series re-run](#full-series-re-run)), so this refit is a refinement
+  and not a fix.
+- **Some shared flowering is lost.** On the same-day flights, 5 of the 16
+  crowns that flower on both cameras drop below 0.5 on mavic. The transform
+  may be slightly conservative for true flowering, or phantom's haze on
+  2024-03-18 may inflate it there.
 - **Environment:** the checkpoints are pickled whole models and need
   `transformers<5`, which is now pinned in `environment.yml`. They are stored
   locally under `/Volumes/Earth03/flower/results/models/drone_{flower,decid}_geo_models/`.
