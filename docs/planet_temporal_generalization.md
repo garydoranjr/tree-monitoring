@@ -663,6 +663,65 @@ So the TOA apply output stays the reference. Calibration could only help if
 offsets were fitted for more scenes, or if borrowed-offset scenes fell back
 to a per-image stretch.
 
+## Why calibration did not help
+
+Candidate explanations for the null temporal-CV result, tested cheapest first:
+
+| | Explanation | Test |
+|---|---|---|
+| H1 | The training augmentation already covers the radiometric variation. Every run applies `ColorJitter(brightness=0.2, contrast=0.2)` to the RGB channels, hard-coded on. There are no flips or rotations, copy-paste is off, and the input is RGB only. | Jitter ablation |
+| H2 | Too few scenes are calibrated directly (39 % of date-satellite groups) | CV split by offset source |
+| H3 | The architecture is the limit | DINOv3 satellite backbone |
+| H4 | The model uses within-chip contrast, which a per-scene linear correction leaves unchanged | Test-time offset sensitivity |
+| H5 | Calibration removes little of the input variation. What remains is seasonal canopy change, PS2 colour casts, local haze, and sun and view geometry. | Per-chip skill drivers |
+| H6 | Skill comes partly from the persistence of the same trees' state on nearby dates | Persistence baseline from the drone labels |
+| H7 | Label noise caps both runs equally | Per-chip skill by label source and grade |
+| H8 | Training run-to-run variance is unmeasured; each arm was run once with no seed | Chip bootstrap; repeat run |
+| H9 | The calibrated chips (from the SR product) are shifted or blurred relative to the TOA chips the labels were coregistered to | Chip-pair shift and sharpness |
+| H10 | ImageNet normalization and hyperparameters were set on TOA inputs | Conditional retrain |
+
+### CV split by offset source, with a chip bootstrap (H2, H8)
+
+`compare_temporal_cv.py --windows ... --chip-meta` pools the per-window counts
+of each run (`temporal_cv_windows.csv`) at epoch 12 over strata of chips. It
+also gives a paired chip-bootstrap 95 % interval (2,000 resamples) of
+calibrated minus TOA. The interval covers chip sampling only, not training
+variance. mAP cannot be pooled from window counts, so the strata report IoU and
+crown precision and recall only. The pooled and per-bin values reproduce
+`temporal_cv.json` exactly.
+
+```bash
+python scripts/compare_temporal_cv.py \
+  --run toa=/Volumes/Earth03/flower/202610_temporal/temporal_cv.json \
+  --run cal=/Volumes/Earth03/flower/202610_temporal_cal/temporal_cv.json \
+  --windows toa=/Volumes/Earth03/flower/202610_temporal/temporal_cv_windows.csv \
+  --windows cal=/Volumes/Earth03/flower/202610_temporal_cal/temporal_cv_windows.csv \
+  --chip-meta /Volumes/Earth03/flower/20261012_full_label_extended2_mkl_x4_coreg_4band_cal_curated/chips.csv
+```
+
+| Chips | n | IoU, TOA → cal | Δ IoU 95 % | Precision, TOA → cal | Δ precision 95 % | Recall, TOA → cal | Δ recall 95 % |
+|---|---|---|---|---|---|---|---|
+| All | 142 | 0.352 → 0.361 | +0.002 to +0.018 | 0.242 → 0.263 | +0.010 to +0.031 | 0.477 → 0.462 | −0.031 to −0.000 |
+| Own MODIS fit | 130 | 0.356 → 0.368 | +0.004 to +0.020 | 0.245 → 0.269 | +0.015 to +0.035 | 0.484 → 0.471 | −0.028 to +0.004 |
+| Borrowed, same instrument | 10 | 0.266 → 0.253 | −0.033 to +0.010 | 0.189 → 0.157 | −0.065 to +0.008 | 0.370 → 0.302 | −0.109 to −0.032 |
+| Borrowed, same satellite | 2 | 0.324 → 0.276 | −0.056 to −0.014 | 0.241 → 0.159 | −0.119 to −0.021 | 0.369 → 0.282 | −0.232 to +0.085 |
+| 0–3 d | 7 | 0.416 → 0.410 | −0.029 to +0.016 | 0.305 → 0.320 | −0.018 to +0.042 | 0.600 → 0.614 | −0.009 to +0.035 |
+| 4–7 d | 27 | 0.419 → 0.419 | −0.015 to +0.011 | 0.298 → 0.318 | −0.002 to +0.038 | 0.549 → 0.516 | −0.052 to −0.014 |
+| 8–14 d | 51 | 0.384 → 0.391 | −0.005 to +0.022 | 0.278 → 0.289 | −0.005 to +0.027 | 0.496 → 0.494 | −0.030 to +0.031 |
+| 15–30 d | 35 | 0.271 → 0.292 | +0.004 to +0.039 | 0.185 → 0.205 | −0.005 to +0.049 | 0.386 → 0.356 | −0.061 to +0.003 |
+| >30 d | 22 | 0.217 → 0.226 | −0.004 to +0.020 | 0.124 → 0.147 | +0.010 to +0.037 | 0.347 → 0.327 | −0.034 to −0.008 |
+
+- **On chips with their own fit, calibration gives a small gain that chip
+  sampling resolves.** IoU rises by 0.012 and precision by 0.024, and recall
+  falls by 0.013 (not resolved). It is the same precision-for-recall trade as in
+  the pooled numbers.
+- **The 12 borrowed-offset chips go the other way.** Recall falls by 0.07–0.09,
+  as on the borrowed scenes in the drone comparison. They are 8 % of the chips,
+  and they pull the pooled gain down to +0.009 IoU.
+- So coverage (H2) does matter, but full coverage would add only about 0.003 to
+  the pooled IoU gain. The own-fit gain is small either way, and whether it
+  exceeds training noise (H8) needs a repeat run.
+
 ## Caveats
 
 - **The epoch choice is slightly optimistic.** E* is chosen on the same pooled
