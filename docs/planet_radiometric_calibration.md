@@ -188,6 +188,12 @@ where they can be quantified; the rest are known but not yet quantified.
    the fixed classifier stretch such chips saturate: 4 of the 142 training
    chips (3 borrowed, 1 own fit) have 45–99% of clear pixels at the upper
    limit, with plot blue ≈ 0.05 against 0.016 for clear forest.
+13. **SR vs TOA chip geometry.** The calibrated chips are SR-product clips
+   resampled onto the TOA chip grids, and the drone labels were coregistered
+   on TOA. The two copies agree to within a median 0.005 m (90th percentile
+   0.25 m, maximum 0.51 m), with sharpness ratios of 0.95–1.11
+   (`compare_chip_sets.py`, `results/chip_sets_toa_vs_cal.csv`). This
+   source is negligible.
 
 ## Data locations
 
@@ -456,6 +462,23 @@ to 0.542 / 0.368
 The borrowed offset leaves the day-to-day atmospheric error in place (item 11
 above), and the fixed stretch then passes that error to the model, where the
 TOA per-image stretch would have absorbed it.
+
+**Why calibration did not help more** (2026-10-25,
+[planet_temporal_generalization.md](planet_temporal_generalization.md#why-calibration-did-not-help)).
+- On the 130 CV chips with their own fit, calibration does give a small gain
+  that chip sampling resolves: IoU 0.356 → 0.368 (95 % +0.004 to +0.020) and
+  precision +0.024. The 12 borrowed-offset chips lose recall, which cancels
+  most of it, so full coverage would add only about 0.003 to the pooled IoU
+  gain.
+- The TOA model's per-chip skill does not depend on the scene's radiometric
+  state: haze, offset size and saturation all have |ρ| ≤ 0.13. It tracks crown
+  contrast-to-noise, which a per-scene linear correction does not change.
+- A persistence baseline from the drone labels alone (each crown's state on
+  the nearest training date) beats the model out to 30 days. Part of the
+  temporal-CV skill is therefore the model recognizing the same crowns' recent
+  state, which does not depend on radiometry.
+- The calibrated chips match the TOA chips geometrically (item 13), so a data
+  confound is ruled out.
 
 ### Figures (`figs/planet_calibration/`, continued)
 
