@@ -722,6 +722,59 @@ python scripts/compare_temporal_cv.py \
   the pooled IoU gain. The own-fit gain is small either way, and whether it
   exceeds training noise (H8) needs a repeat run.
 
+### Persistence baseline (H6)
+
+`persistence_baseline.py` uses no imagery. It predicts one drone flight's crown
+events from another flight's labels, with the labelling rule and the 64 px crown
+minimum of `plot_crown_species_comparison.py` (2,000 crowns, 200 flights). It
+runs in about a minute on the Mac:
+
+```bash
+python scripts/persistence_baseline.py --folds config/temporal_folds_20261012.csv \
+  --cv-json /Volumes/Earth03/flower/202610_temporal/temporal_cv.json
+```
+
+The CV analogue predicts each chip's flight from the flight of the
+nearest-dated chip in the other folds, which is the training data that fold's
+model saw. "Area Jaccard" weights crowns by their area (crown pixels that are
+events on both dates over those that are events on either), as an
+approximation of the CV's binary IoU.
+
+| Days to nearest training chip | Chips | Persistence precision | Persistence recall | Persistence area Jaccard | CV IoU, TOA e12 |
+|---|---|---|---|---|---|
+| 0–3 | 7 | 0.804 | 0.810 | 0.740 | 0.416 |
+| 4–7 | 27 | 0.791 | 0.785 | 0.686 | 0.419 |
+| 8–14 | 51 | 0.667 | 0.699 | 0.597 | 0.384 |
+| 15–30 | 35 | 0.479 | 0.487 | 0.376 | 0.271 |
+| >30 | 22 | 0.274 | 0.232 | 0.161 | 0.217 |
+| Pooled | 142 | 0.644 | 0.650 | 0.539 | 0.352 |
+
+Over all flight pairs up to 60 days apart, persistence falls in the same way:
+area Jaccard is 0.65 at 4–7 d, 0.54 at 8–14 d, 0.39 at 15–30 d and 0.25 at
+31–60 d.
+
+- **A crown's state on the nearest training date predicts its state on the
+  held-out date better than the model does,** out to 30 days. The comparison
+  flatters persistence. It is scored on drone crowns with exact geometry, while
+  the CV is scored on 3 m Planet pixels with coregistration error. So
+  persistence is an upper bound on what remembering the same crowns could give,
+  not a like-for-like competitor.
+- **The CV's decline with distance has the same shape as persistence.** A model
+  that reads events from the image alone would have no reason to lose skill
+  with distance from the training dates, apart from seasonal shift. So part of
+  the temporal-CV skill is probably the model recognizing the same crowns and
+  their recent state (H6). Beyond 30 days, the model beats persistence (0.217
+  vs 0.161), so it does read some events from the imagery.
+- **The spatial benchmark points the same way.** On new ground at seen dates,
+  the TOA model peaks at IoU 0.293. On seen ground at new dates, the temporal
+  CV pooled IoU is 0.352 (0.42 within a week). The test chips and label sources
+  differ, so this is indicative only.
+- Skill that comes from memory of the same crowns does not depend on input
+  radiometry, which helps explain why calibration changes the temporal CV so
+  little. The temporal CV therefore overstates skill on dates far from any
+  flight. A crown-level CV score (model calls per crown, as in the drone
+  comparison) would allow a like-for-like comparison with persistence.
+
 ## Caveats
 
 - **The epoch choice is slightly optimistic.** E* is chosen on the same pooled
