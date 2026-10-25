@@ -476,9 +476,10 @@ calibrated model returns more confident detections than the TOA one in
 
 (The TOA medians are over all of that year's scenes, including the 6 the
 calibrated run skips.) The temporal CV found no skill difference between the
-two models, so neither apply output is preferred on accuracy. The calibrated
-one is more consistent in input across dates, but it lacks the 6 Dove Classic
-scenes.
+two models. Against the drone labels the calibrated output is slightly worse,
+entirely on scenes with a borrowed offset
+([below](#calibrated-apply-run-against-the-drone-labels)), and it also lacks
+the 6 Dove Classic scenes. So the TOA apply output stays the reference.
 
 ## Crown-level comparison with the drone classifications
 
@@ -596,6 +597,71 @@ python scripts/make_crown_timeseries_html.py \
 - Before 2021 and after 2026-01, almost every Planet scene is outside the
   envelope (grey in the time series). There the Planet shares still rise
   with the drone in season, but they are not validated.
+
+### Calibrated apply run against the drone labels
+
+The same comparison was run on the calibrated apply output (2026-10-25).
+Its viewer is in the same directory:
+
+```bash
+python scripts/plot_crown_species_comparison.py \
+  /Volumes/Earth03/flower/202610_temporal_apply_cal/crown_species \
+  --apply-dir /Volumes/Earth03/flower/202610_temporal_apply_cal
+python scripts/make_crown_timeseries_html.py \
+  /Volumes/Earth03/flower/202610_temporal_apply_cal/crown_timeseries_viewer.html \
+  --apply-dir /Volumes/Earth03/flower/202610_temporal_apply_cal
+python scripts/compare_crown_agreement.py \
+  /Volumes/Earth03/flower/202610_temporal_apply_cal/crown_agreement_toa_vs_cal
+```
+
+`compare_crown_agreement.py` scores both runs on the same crown-scenes. A
+crown-scene enters only if it passes the filters in both runs, which drops the
+6 Dove Classic scenes. A few tags are shared by several polygons, so crowns
+are paired polygon by polygon. Scenes 3 to 7 days from their coregistered
+flight form two strata, in the 30-day envelope and outside it. The script
+writes `crown_agreement_toa_vs_cal.{csv,png,pdf}` and `_rules.csv`, and
+prints the breakdowns below. The bootstrap intervals resample scenes
+(2,000 draws).
+
+| Stratum | Scenes | Drone events | Precision, TOA → cal | Recall, TOA → cal | 95 % interval, Δ precision | Δ recall |
+|---|---|---|---|---|---|---|
+| In envelope | 202 | 14,478 | 0.561 → 0.542 | 0.392 → 0.368 | −0.033 to −0.005 | −0.046 to 0.000 |
+| — own MODIS fit | 148 | 12,199 | 0.562 → 0.552 | 0.409 → 0.398 | −0.024 to +0.002 | −0.031 to +0.012 |
+| — borrowed offset | 54 | 2,279 | 0.553 → 0.459 | 0.299 → 0.209 | −0.159 to −0.030 | −0.160 to −0.003 |
+| Outside envelope | 48 | 2,228 | 0.489 → 0.436 | 0.349 → 0.342 | −0.096 to −0.014 | −0.042 to +0.028 |
+| — own MODIS fit | 33 | 1,842 | 0.502 → 0.466 | 0.403 → 0.385 | −0.081 to +0.007 | −0.054 to +0.019 |
+| — borrowed offset | 15 | 386 | 0.319 → 0.237 | 0.093 → 0.140 | −0.209 to +0.020 | −0.040 to +0.126 |
+
+The in-envelope TOA row is the [table above](#crown-level-comparison-with-the-drone-classifications)
+restricted to the shared scenes. The 18 flights outside the envelope are
+mostly in 2020 (26 scenes) and 2022 (16).
+
+- **On scenes with their own MODIS fit, the two models agree with the drone
+  equally well.** The differences are about 0.01 and within noise.
+- **The loss comes from scenes that borrow an offset.** Precision drops by
+  about 0.09 and recall by 0.09 in the envelope. A borrowed offset removes
+  the sensor and seasonal bias but not that day's atmosphere
+  ([planet_radiometric_calibration.md](planet_radiometric_calibration.md),
+  caveat 11). The fixed stretch passes that residual on to the model, whereas
+  the TOA per-image stretch absorbs it.
+- **Calibration does not help outside the envelope either.** This was the
+  case the temporal CV could not test. Precision falls (0.489 → 0.436) and
+  recall is flat, and the 2020 scenes account for most of the drop
+  (precision 0.488 → 0.415).
+- **The two models disagree on few calls.** Their calls differ on 3.0 % of
+  in-envelope crown-scenes (Cohen's κ 0.53). Planet calls 3.3 % and 3.2 % of
+  crown-scenes events, against 4.8 % for the drone. By species, the largest
+  in-envelope drops are *Zanthoxylum* precision (0.51 → 0.43) and
+  *Cavanillesia* and *Tabebuia* recall (0.61 → 0.55, 0.41 → 0.35). *Ceiba*
+  recall rises (0.59 → 0.65).
+- **The Planet rule still holds.** For the calibrated run, `pos_frac ≥ 0.25`
+  gives precision 0.54 and recall 0.37, and `max_score ≥ 0.5` gives
+  0.33 / 0.40. AUROC is 0.69 for `pos_frac` and 0.76 for `max_score`, as for
+  TOA (0.70, 0.75).
+
+So the TOA apply output stays the reference. Calibration could only help if
+offsets were fitted for more scenes, or if borrowed-offset scenes fell back
+to a per-image stretch.
 
 ## Caveats
 
@@ -780,3 +846,26 @@ python scripts/make_crown_timeseries_html.py \
 > twelve species with the most drone event crown-dates are shown above the
 > rule, with the remaining species and all species pooled below it. The
 > number of drone events for each row is given next to its name.
+
+`crown_agreement_toa_vs_cal.png`:
+
+> Crown-level agreement with the drone classifications of the epoch-12
+> temporal Planet Mask R-CNN trained and applied on TOA scenes with a
+> per-image 0th–99.9th percentile stretch per band (blue), and on the same
+> scenes as MODIS-calibrated surface reflectance with one fixed per-band
+> stretch (green), by species. Both runs are scored on the same crown-scenes:
+> coregistered Planet scenes 3 to 7 days from the drone flight they were
+> coregistered to, matched to that flight, 2020-2026. Top row: scenes 30 days
+> or less from a training chip (202 scenes, 74 flights). Bottom row: scenes
+> more than 30 days from one (48 scenes, 18 flights, mostly 2020 and 2022).
+> Left: precision (share of Planet event calls that the drone also calls an
+> event). Middle: recall (share of drone events that Planet calls). Right:
+> the share of crown-scenes called an event by the drone label (black) and by
+> each model. A drone event is 1 − (1 − p_flowering)(1 − p_deciduous) > 0.5
+> on the crown's mean classification probabilities. A Planet event is at
+> least 25 % of the crown's clear pixels under a detection scoring 0.5 or
+> more. Only crowns of at least 64 Planet pixels (0.75 m) and at least 50 %
+> clear in both runs are used. The twelve species with the most drone event
+> crown-dates are shown above the rule, with the remaining species and all
+> species pooled below it. The number of drone events in each row is given
+> next to its name.

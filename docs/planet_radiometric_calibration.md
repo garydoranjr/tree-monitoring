@@ -446,6 +446,17 @@ So the date-to-date atmospheric differences that calibration removes are not
 what limits transfer to new dates; seasonal change in the canopy and the
 sparse wet-season training data remain the main candidates.
 
+Against the drone crown classifications (2026-10-25), the calibrated apply run
+matches the TOA one on scenes with their own MODIS fit, but loses precision
+and recall on the 54 matched scenes that borrow an offset. In the envelope,
+precision falls from 0.553 to 0.459 and recall from 0.299 to 0.209 on those
+scenes, and the paired all-species result drops slightly, from 0.561 / 0.392
+to 0.542 / 0.368
+([planet_temporal_generalization.md](planet_temporal_generalization.md#calibrated-apply-run-against-the-drone-labels)).
+The borrowed offset leaves the day-to-day atmospheric error in place (item 11
+above), and the fixed stretch then passes that error to the model, where the
+TOA per-image stretch would have absorbed it.
+
 ### Figures (`figs/planet_calibration/`, continued)
 
 9. `training_inputs_current_vs_fixed.png` — The model input for 8 training
