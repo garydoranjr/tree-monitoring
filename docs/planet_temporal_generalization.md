@@ -932,6 +932,110 @@ Each run takes about 2–3 h within the 2-GPU limit, so the three take about a
 day if run one after another. Compare them with `compare_temporal_cv.py`
 (`--run` and `--windows` for each).
 
+### DINOv3 backbone (H3; pending on gattaca2)
+
+H3 asks whether a backbone pretrained on satellite imagery would do better
+than the COCO-pretrained Mask R-CNN. `scripts/train_planet_image_dinov3.py`
+trains a semantic segmenter on a DINOv3 ViT-L/16. The default backbone is
+`facebook/dinov3-vitl16-pretrain-sat493m`, pretrained on 493 M Maxar RGB tiles
+at 0.6 m. The control, `facebook/dinov3-vitl16-pretrain-lvd1689m`, is the same
+architecture pretrained on web images, so the pair separates satellite
+pretraining from DINOv3 itself.
+
+- **Inputs and labels are those of the Mask R-CNN runs.** It uses the
+  `PlanetMaskRCNNDataset` TOA chips with the per-image stretch, the same
+  ColorJitter, both windows of each chip, the same folds, OCM cloud handling
+  and the `--min-instance-size 64` rule. The input is normalized with each
+  backbone's own mean and std.
+- **Model.** Patch tokens from layers 6, 12, 18 and 24 are projected and
+  resampled to 3 m, which is Planet's native pixel and 1/4 of the 0.75 m chip
+  grid. A small conv stem on the image is concatenated at the same resolution,
+  then two GroupNorm conv blocks produce a per-pixel event logit. By default
+  the backbone is frozen and only the decoder (about 4 M parameters) trains.
+  `--finetune-blocks N` also trains the last N blocks, at `--backbone-lr`.
+- **Loss and instances.** The loss is BCE plus soft Dice on the union of the
+  kept crowns. Dropped crowns and cloudy pixels are ignored. Instances for
+  scoring are the 8-connected components of probability ≥ 0.5, scored by mean
+  probability, with the cloudy-centre rule of `filtered_predictions`.
+  `eval_temporal_cv.py` recognizes the checkpoints (`'kind': 'dinov3'`) and
+  scores them through the same path as the Mask R-CNN. Fed the ground truth,
+  that path returns 1.0 on every metric.
+
+**Overfit check (Mac, 3 TOA chips, 6 windows, batch 2, no jitter).** The test
+was whether the model can fit its own training chips:
+
+| Run | Epochs (steps) | Training IoU, mean of last 10 epochs | Best |
+|---|---|---|---|
+| Frozen, no image stem, BatchNorm decoder | 60 (180) | 0.53 | 0.56 |
+| Frozen, stem, GroupNorm decoder | 60 (180) | 0.46 | 0.50 |
+| Last 4 blocks fine-tuned, stem, GroupNorm | 60 (180) | 0.51 | 0.53 |
+| Frozen, stem, GroupNorm (the cluster setting) | 300 (900) | 0.74 | 0.76 |
+
+The early plateau near 0.5 was under-training, not a capacity limit of the
+frozen features. Over 300 epochs IoU rose steadily (0.46, 0.55, 0.62, 0.64,
+0.71 and 0.74 at epochs 60, 100, 150, 200, 250 and 300), and loss fell from
+0.55 to 0.23. At 60 epochs, fine-tuning 4 blocks added little (0.51 vs
+0.46). The run without the image stem was ahead at 60 epochs, but it also
+used a BatchNorm decoder, which was replaced because its IoU drifted down
+late in a run. So the stem's effect is confounded with the norm change and
+remains untested. The cluster runs use the setting that was carried to 300
+epochs: frozen backbone, stem, GroupNorm decoder. This is the cheaper phase
+C1. One temporal-CV
+fold gets about 59 steps per epoch at batch 4, so about 2,400 steps by epoch
+40, which is 2.6 times what the overfit needed. A Mask R-CNN control on the
+same 3 chips (`train_planet_image_maskrcnn.py --chips`) reached only 0.17 by
+epoch 12 and crashed at epoch 24 on MPS (below). It is not a usable
+comparison, because 3 steps per epoch under-trains it too.
+
+**Weights on gattaca2.** Both backbones are gated on Hugging Face (account
+`garydoranjr` has access). They were downloaded on the Mac and copied to
+Earth03 `flower/hf_hub` as a hub cache with plain files (`refs/` and
+`snapshots/`, no symlinks, 1.1 GB each). Sync that to
+`/scratch/tree-monitoring/hf_hub`. The DINOv3 configs set
+`HF_HUB_CACHE=/scratch/tree-monitoring/hf_hub HF_HUB_OFFLINE=1`, so the
+training and eval jobs need no login or network. The checkpoints hold only the
+decoder (15 MB), and the backbone is reloaded from that cache at eval.
+
+```bash
+rsync -aL /Volumes/Earth03/flower/hf_hub/ gattaca2:/scratch/tree-monitoring/hf_hub/   # Mac
+
+for C in dinov3sat dinov3web; do                                                      # gattaca2
+  source config/temporal_cv_20261012_$C.sh
+  CV=$(sbatch --parsable -A tree-monitoring scripts/slurm/planet_temporal_cv.sh)
+  sbatch -A tree-monitoring --dependency=afterok:$CV scripts/slurm/planet_temporal_eval.sh
+done
+```
+
+`scripts/slurm/planet_temporal_cv.sh` runs `$TEMPORAL_TRAIN_SCRIPT`, which
+defaults to the Mask R-CNN trainer. The configs keep the parent's epoch grid
+(1–40) and write to `202610_temporal_dinov3{sat,web}`. GPU time per fold has
+not been measured. These runs share the 2-GPU limit with the ablations above.
+Compare against the TOA Mask R-CNN with `compare_temporal_cv.py`. The best
+epoch for DINOv3 need not be 12, so read the whole grid. If the frozen
+backbone is competitive, the next step (C2) is `--finetune-blocks 4` in
+`TEMPORAL_TRAIN_ARGS`.
+
+**Mac pitfalls found on the way.**
+- *Exit hang with DataLoader workers on MPS.* Twice, a run wrote its last
+  checkpoint and then slept at 0 % CPU for hours. On macOS torch shares
+  tensors only through the `file_system` strategy, so each DataLoader worker
+  starts a `torch_shm_manager` daemon. Non-persistent workers left 240 of them
+  (60 epochs × 2 loaders × 2 workers), each holding the multiprocessing
+  resource tracker's pipe open. At exit, `ResourceTracker.__del__` waits for
+  the tracker, the tracker waits for that pipe to close, and the daemons wait
+  for the main process to exit. A `sample` stack showed the main thread in
+  `os.waitpid` under `Py_FinalizeEx`, and `lsof` showed the daemons holding
+  the pipe. The DINOv3 trainer now uses loader workers only on CUDA, which
+  also made Mac epochs about 5 times faster. The Mask R-CNN trainer loads data
+  in the main process and is not affected. Linux uses the `file_descriptor`
+  strategy, which starts no daemons.
+- *MPS float64 error in the Mask R-CNN mask head.* `Cannot convert a MPS
+  Tensor to float64` is raised from the mask head's BatchNorm during
+  evaluation. It hit the 3-chip Mask R-CNN run at epoch 24 and
+  `radiometric_sensitivity.py` at fold 2. It is probably an MPS bug on an
+  empty ROI batch (a window with no detections), but this is unconfirmed. Use
+  CPU or CUDA for Mask R-CNN evaluation.
+
 ## Caveats
 
 - **The epoch choice is slightly optimistic.** E* is chosen on the same pooled

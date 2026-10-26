@@ -12,7 +12,9 @@
 # One temporal CV fold per array task: train on the chips of every other fold
 # (both windows) and test on fold $SLURM_ARRAY_TASK_ID, saving checkpoints on
 # the epoch grid. Settings come from config/temporal_cv_20261012.sh. Pass the
-# account on the sbatch command line if needed.
+# account on the sbatch command line if needed. $TEMPORAL_TRAIN_SCRIPT picks
+# the trainer (default: the Mask R-CNN; the DINOv3 configs set
+# scripts/train_planet_image_dinov3.py, which takes the same fold options).
 
 set -euo pipefail
 
@@ -39,7 +41,7 @@ echo "Chips:       $CHIPS"
 echo "Output:      $OUT"
 
 # shellcheck disable=SC2086
-python scripts/train_planet_image_maskrcnn.py "$CHIPS" "$OUT" \
+python "${TEMPORAL_TRAIN_SCRIPT:-scripts/train_planet_image_maskrcnn.py}" "$CHIPS" "$OUT" \
     --folds "$TEMPORAL_FOLDS" --fold "$FOLD" \
     --num-epochs "$MAX_EPOCH" --save-epochs "$TEMPORAL_EPOCH_GRID" \
     $TEMPORAL_TRAIN_ARGS
