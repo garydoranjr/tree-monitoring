@@ -1205,6 +1205,11 @@ def evaluate(model, dataloader, device, iou_metric, map_metric,
               help="With --folds: an integer K trains on the chips of every "
                    "other fold and tests on fold K; 'all' trains on every "
                    'chip with no test set (the final full-record model).')
+@click.option('--chips', 'chip_list', default=None,
+              type=click.Path(exists=True, dir_okay=False),
+              help='Train and test on both windows of only the chips listed in '
+                   'this file, one per line, without --folds; for overfitting '
+                   'checks.')
 @click.option('--fixed-stretch', type=click.Path(exists=True, dir_okay=False),
               default=None,
               help='YAML from derive_planet_fixed_stretch.py: stretch every '
@@ -1226,11 +1231,13 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
          use_ocm_masks, fourth_band, replace, nir_init, extra_train_dirs,
          use_copy_paste, copy_paste_count, copy_paste_prob,
          lr_schedule, warmup_epochs, select_metric, save_every_epoch,
-         save_epochs, folds_csv, fold, fixed_stretch, color_jitter, seed,
-         use_wandb):
+         save_epochs, folds_csv, fold, chip_list, fixed_stretch, color_jitter,
+         seed, use_wandb):
 
     if (folds_csv is None) != (fold is None):
         raise click.UsageError('--folds and --fold must be given together')
+    if chip_list is not None and folds_csv is not None:
+        raise click.UsageError('--chips and --folds are exclusive')
     os.makedirs(outputdir, exist_ok=True)
     if seed is not None:
         random.seed(seed)
@@ -1243,7 +1250,11 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
     # and tests on the right. A temporal fold instead splits chips by date
     # and uses both windows of each, so held-out chips are new dates over
     # the same ground.
-    if folds_csv is None:
+    if chip_list is not None:
+        with open(chip_list) as fh:
+            train_chips = test_chips = [l.strip() for l in fh if l.strip()]
+        train_split = test_split = ('left', 'right')
+    elif folds_csv is None:
         train_split, test_split = 'left', 'right'
         train_chips, test_chips = None, None
     else:
