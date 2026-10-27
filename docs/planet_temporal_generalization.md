@@ -665,6 +665,10 @@ to a per-image stretch.
 
 ## Why calibration did not help
 
+The pending gattaca2 runs for this section (jitter ablation, seed repeat,
+DINOv3, and the calibrated offset sensitivity) are collected, ready to paste,
+in [handoff_gattaca2_calibration_followups.md](handoff_gattaca2_calibration_followups.md).
+
 Candidate explanations for the null temporal-CV result, tested cheapest first:
 
 | | Explanation | Test |
