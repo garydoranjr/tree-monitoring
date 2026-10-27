@@ -14,6 +14,9 @@ export TEMPORAL_FOLDS=config/temporal_folds_20261012.csv
 # $TEMPORAL_RUNS/final_e<E>.
 export TEMPORAL_RUNS=$HOME/Documents/tree-flowering/202610_temporal
 export TEMPORAL_EPOCH_GRID=1,2,3,5,8,12,17,25,40
+# Set explicitly so that sourcing this after a DINOv3 config (which overrides
+# it) does not leave the DINOv3 trainer in the shell.
+export TEMPORAL_TRAIN_SCRIPT=scripts/train_planet_image_maskrcnn.py
 export TEMPORAL_TRAIN_ARGS="--ocm-masks --min-instance-size 64 --lr 1e-4 --no-wandb"
 
 # Coregistration and apply steps. Drone ortho dirs are space-separated; where
