@@ -4,7 +4,7 @@
 Re-scores each fold's held-out chips (both windows, as eval_temporal_cv.py)
 with an additive per-band offset applied to the raw chip before the model's
 own input stretch. The offset is k times the across-scene SD of the fitted
-Planet-MODIS offsets (results/planet_scene_offsets.csv, own-fit scenes), i.e.
+Planet-MODIS offsets (results/planet_calibration/planet_scene_offsets.csv, own-fit scenes), i.e.
 the size of the per-scene error that calibration removes, with the same sign
 in every band (haze-like). k = 0 is the unperturbed score.
 
@@ -40,9 +40,9 @@ import torch
 
 from eval_temporal_cv import DAY_BINS, Accumulator, day_bin, load_fold_model, score_fold
 from train_planet_image_maskrcnn import PlanetMaskRCNNDataset, _load_clear_mask
-from util import select_device
+from util import calibration_results, select_device
 
-REPO = Path(__file__).resolve().parent.parent
+CAL = calibration_results()
 BANDS = ('blue', 'green', 'red', 'nir')  # chip band order
 
 
@@ -99,7 +99,7 @@ class Perturb:
               help='Calibrated copy of the chips, for --units toa gains.')
 @click.option('--k', 'ks', default='-1,-0.5,0,0.5,1', show_default=True,
               help='Offset multiples of the across-scene offset SD.')
-@click.option('--offsets-csv', default=str(REPO / 'results/planet_scene_offsets.csv'),
+@click.option('--offsets-csv', default=str(CAL / 'planet_scene_offsets.csv'),
               show_default=True)
 @click.option('--score-thresh', default=0.5, type=float)
 @click.option('--iou-thresh', default=0.5, type=float)

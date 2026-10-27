@@ -71,14 +71,20 @@ output directory.
 ## 3. Test-time offset sensitivity of the calibrated Mask R-CNN
 
 This needs the epoch-12 checkpoints of the existing calibrated CV
-(`202610_temporal_cal/fold*`), which exist only on gattaca2. The offsets CSV
-is gitignored, so copy it first (Mac):
+(`202610_temporal_cal/fold*`), which exist only on gattaca2. It also needs the
+scene offsets, which live outside the repo with the other calibration tables,
+so sync that directory first (Mac):
 
 ```bash
-rsync results/planet_scene_offsets.csv gattaca2:Documents/tree-flowering/results/
+rsync -a /Volumes/Earth03/flower/results/planet_calibration/ \
+  gattaca2:/scratch/tree-monitoring/results/planet_calibration/
 ```
 
-Then submit on gattaca2. It takes a GPU slot, so it queues behind the runs in
+`radiometric_sensitivity.py` reads
+`/scratch/tree-monitoring/results/planet_calibration/planet_scene_offsets.csv`
+by default on gattaca2 (`util.calibration_results()`), so the command below
+needs no `--offsets-csv`. Pull 2026-10-27's commit first, which made that the
+default. Then submit on gattaca2. It takes a GPU slot, so it queues behind the runs in
 step 2. Use CUDA: on MPS it hits a float64 error in the mask head.
 
 ```bash

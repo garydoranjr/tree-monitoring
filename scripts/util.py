@@ -48,3 +48,32 @@ def is_readable_raster(path):
             return src.count > 0
     except Exception:
         return False
+
+
+# Data roots, in order of preference: the Earth03 drive on the Mac, then
+# gattaca2's /scratch/tree-monitoring, which mirrors it (synced by rsync).
+DATA_ROOTS = ('/Volumes/Earth03/flower', '/scratch/tree-monitoring')
+
+
+def data_root():
+    """Path of the project data root on this machine.
+
+    $TREE_DATA_ROOT wins if set; otherwise the first of DATA_ROOTS that
+    exists, falling back to the Earth03 path so that --help still works on a
+    machine with neither.
+    """
+    import os
+    from pathlib import Path
+    if os.environ.get('TREE_DATA_ROOT'):
+        return Path(os.environ['TREE_DATA_ROOT'])
+    for root in DATA_ROOTS:
+        if os.path.isdir(root):
+            return Path(root)
+    return Path(DATA_ROOTS[0])
+
+
+def calibration_results():
+    """Directory of the Planet-MODIS calibration tables (scene offsets, fits,
+    evaluation, fixed-stretch metrics): results/planet_calibration under the
+    data root."""
+    return data_root() / 'results' / 'planet_calibration'

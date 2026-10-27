@@ -45,9 +45,10 @@ from tqdm import tqdm
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from calibrate_planet_modis import write_calibrated  # noqa: E402
+from util import calibration_results  # noqa: E402
 
 FLOWER = Path('/Volumes/Earth03/flower')
-REPO = Path(__file__).resolve().parent.parent
+CAL = calibration_results()
 BANDS = ['blue', 'green', 'red', 'nir']
 
 
@@ -79,7 +80,7 @@ def borrow(target: pd.Series, donors: pd.DataFrame, sat_days: int, inst_days: in
 
 @click.command()
 @click.option('--calibration', type=click.Path(path_type=Path, exists=True),
-              default=REPO / 'results/planet_modis_calibration.csv', show_default=True)
+              default=CAL / 'planet_modis_calibration.csv', show_default=True)
 @click.option('--sr-root', type=click.Path(path_type=Path, exists=True),
               default=FLOWER / 'planet_clipped_sr', show_default=True)
 @click.option('--cal-root', type=click.Path(path_type=Path, exists=True),
@@ -89,9 +90,9 @@ def borrow(target: pd.Series, donors: pd.DataFrame, sat_days: int, inst_days: in
 @click.option('--sat-days', type=int, default=30, show_default=True)
 @click.option('--inst-days', type=int, default=15, show_default=True)
 @click.option('--output', type=click.Path(path_type=Path),
-              default=REPO / 'results/planet_scene_offsets.csv', show_default=True)
+              default=CAL / 'planet_scene_offsets.csv', show_default=True)
 @click.option('--validation', type=click.Path(path_type=Path),
-              default=REPO / 'results/planet_offset_borrow_validation.csv', show_default=True)
+              default=CAL / 'planet_offset_borrow_validation.csv', show_default=True)
 @click.option('--no-clips', is_flag=True, help='Write the tables only.')
 def main(calibration, sr_root, cal_root, fill_root, sat_days, inst_days, output,
          validation, no_clips):

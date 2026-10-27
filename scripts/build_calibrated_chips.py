@@ -43,9 +43,11 @@ from apply_planet_maskrcnn import load_chip  # noqa: E402
 from train_planet_image_maskrcnn import (  # noqa: E402
     _load_clear_mask, build_input_channels, load_stretch,
 )
+from util import calibration_results  # noqa: E402
 
 FLOWER = Path('/Volumes/Earth03/flower')
 REPO = Path(__file__).resolve().parent.parent
+CAL = calibration_results()
 SIDECARS = ('.mask.png', '.drone.png', '.ocm.png')
 DATASET_FILES = ('coreg_log.json',)  # copied as-is: same scenes, same shifts
 
@@ -56,7 +58,7 @@ DATASET_FILES = ('coreg_log.json',)  # copied as-is: same scenes, same shifts
 @click.option('--fill-root', type=click.Path(path_type=Path, exists=True),
               default=FLOWER / 'planet_clipped_calfill', show_default=True)
 @click.option('--offsets', type=click.Path(path_type=Path, exists=True),
-              default=REPO / 'results/planet_scene_offsets.csv', show_default=True)
+              default=CAL / 'planet_scene_offsets.csv', show_default=True)
 @click.option('--stretch', 'stretch_path', type=click.Path(path_type=Path, exists=True),
               default=REPO / 'config/planet_fixed_stretch.yml', show_default=True)
 def main(src_dir, out_dir, fill_root, offsets, stretch_path):

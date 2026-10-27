@@ -29,7 +29,7 @@ Typical usage:
     python scripts/compare_chip_sets.py \\
         /Volumes/Earth03/flower/20261012_full_label_extended2_mkl_x4_coreg_4band_stretch_stats_curated \\
         /Volumes/Earth03/flower/20261012_full_label_extended2_mkl_x4_coreg_4band_cal_curated \\
-        results/chip_sets_toa_vs_cal.csv
+        /Volumes/Earth03/flower/results/planet_calibration/chip_sets_toa_vs_cal.csv
 
 ``--self-test SHIFT_PX`` instead shifts each chip of set A by a known amount
 (SHIFT_PX south and SHIFT_PX west) and compares it with itself, to check that

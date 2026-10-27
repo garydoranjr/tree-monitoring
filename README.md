@@ -139,7 +139,7 @@ scripts/          Python analysis scripts (100+ files)
 config/           YAML configs for workflows
 data/             Input data (radiation, crown maps, labels)
 example/          Example images
-results/          Analysis outputs (generated)
+results/          Observability outputs (generated); Planet calibration tables are under the data root, see docs/planet_radiometric_calibration.md
 drone_out/        Drone processing outputs
 planet_out_*/     Planet processing outputs
 ```

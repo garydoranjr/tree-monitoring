@@ -11,7 +11,7 @@ clip with at least --min-clear OCM-clear plot coverage, the plot means of blue,
 green, red, NIR, NDVI and EVI are computed from clear pixels, then averaged per
 date and satellite so adjacent scenes of one strip count as one observation.
 
-Metrics (results/planet_calibration_eval.csv), per version and variable:
+Metrics (results/planet_calibration/planet_calibration_eval.csv), per version and variable:
   jitter     median |difference| between consecutive observations <= 3 days apart
   resid_sd   SD of residuals from a centred 31-day rolling median
   rel_*      the above divided by the series median
@@ -53,10 +53,11 @@ from tqdm import tqdm  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from calculate_ndvi import get_coeff  # noqa: E402
 from calibrate_planet_modis import MODIS_SINU, modis_grid  # noqa: E402
-from util import load_config  # noqa: E402
+from util import calibration_results, load_config  # noqa: E402
 
 FLOWER = Path('/Volumes/Earth03/flower')
 REPO = Path(__file__).resolve().parent.parent
+CAL = calibration_results()
 BANDS = ['blue', 'green', 'red', 'nir']
 VARS = BANDS + ['ndvi', 'evi']
 VERSIONS = ['TOA', 'SR', 'CAL']
@@ -176,9 +177,9 @@ def style(ax):
 @click.option('--cal-root', type=click.Path(path_type=Path),
               default=FLOWER / 'planet_clipped_cal', show_default=True)
 @click.option('--calibration', type=click.Path(path_type=Path, exists=True),
-              default=REPO / 'results/planet_modis_calibration.csv', show_default=True)
+              default=CAL / 'planet_modis_calibration.csv', show_default=True)
 @click.option('--pixels-dir', type=click.Path(path_type=Path),
-              default=REPO / 'results/planet_modis_calibration_pixels', show_default=True)
+              default=CAL / 'planet_modis_calibration_pixels', show_default=True)
 @click.option('--reference', type=click.Path(path_type=Path, exists=True),
               default=FLOWER / 'modis/mcd43a1_bcnm/reference_nadir_sza45.nc',
               show_default=True)
@@ -187,7 +188,7 @@ def style(ax):
 @click.option('--fig-dir', type=click.Path(path_type=Path),
               default=REPO / 'figs/planet_calibration', show_default=True)
 @click.option('--output', type=click.Path(path_type=Path),
-              default=REPO / 'results/planet_calibration_eval.csv', show_default=True)
+              default=CAL / 'planet_calibration_eval.csv', show_default=True)
 @click.option('--min-clear', type=float, default=0.8, show_default=True)
 def main(inventory, index, ocm_root, sr_root, cal_root, calibration, pixels_dir,
          reference, clip_config, fig_dir, output, min_clear):

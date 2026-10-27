@@ -50,6 +50,7 @@ from sklearn.metrics import roc_auc_score
 from plot_crown_species_comparison import (APPLY, CROWN_COLS, DRONE, GRID,
                                            INK, NC4S, agreement, load_drone,
                                            save)
+from util import calibration_results
 
 RUNS = ('toa', 'cal')
 LABELS = {'toa': 'TOA, per-image stretch',
@@ -57,8 +58,7 @@ LABELS = {'toa': 'TOA, per-image stretch',
 COLORS = {'toa': '#2a78d6', 'cal': '#1baf7a'}  # as in temporal_cv_toa_vs_cal.png
 STRATA = {'in': 'in envelope (30 d or less from a training chip)',
           'out': 'outside envelope (more than 30 d from a training chip)'}
-OFFSETS = os.path.join(os.path.dirname(__file__), '..', 'results',
-                       'planet_scene_offsets.csv')
+OFFSETS = str(calibration_results() / 'planet_scene_offsets.csv')
 RULES = (('pos_frac', 0.10), ('pos_frac', 0.25), ('pos_frac', 0.50),
          ('max_score', 0.50))
 

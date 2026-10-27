@@ -67,6 +67,7 @@ from tqdm import tqdm
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from build_planet_clipped_50ha import _clip_to  # noqa: E402
 from planet_box_grid import UTM, box_grid, warp_to_box  # noqa: E402
+from util import calibration_results  # noqa: E402
 from util import load_config  # noqa: E402
 
 BANDS = ['blue', 'green', 'red', 'nir']
@@ -80,6 +81,7 @@ MODIS_SINU = CRS.from_proj4('+proj=sinu +lon_0=0 +x_0=0 +y_0=0 +R=6371007.181 '
                             '+units=m +no_defs')
 FLOWER = Path('/Volumes/Earth03/flower')
 REPO = Path(__file__).resolve().parent.parent
+CAL = calibration_results()
 
 
 def modis_grid(ref: xr.Dataset):
@@ -167,7 +169,7 @@ def write_calibrated(raw_clip: Path, out: Path, gains, offsets):
 @click.option('--cal-root', type=click.Path(path_type=Path),
               default=FLOWER / 'planet_clipped_cal', show_default=True)
 @click.option('--output', type=click.Path(path_type=Path),
-              default=REPO / 'results/planet_modis_calibration.csv', show_default=True)
+              default=CAL / 'planet_modis_calibration.csv', show_default=True)
 @click.option('--start', default=None, help='YYYY-MM-DD (inclusive)')
 @click.option('--end', default=None, help='YYYY-MM-DD (inclusive)')
 @click.option('--min-land', type=float, default=0.99, show_default=True)
@@ -177,7 +179,7 @@ def write_calibrated(raw_clip: Path, out: Path, gains, offsets):
 @click.option('--dilate', type=int, default=2, show_default=True,
               help='Cloud/shadow dilation in 3 m pixels.')
 @click.option('--pixels-dir', type=click.Path(path_type=Path),
-              default=REPO / 'results/planet_modis_calibration_pixels', show_default=True,
+              default=CAL / 'planet_modis_calibration_pixels', show_default=True,
               help='Per-group npz of the matched 500 m Planet/MODIS values.')
 @click.option('--no-clips', is_flag=True, help='Fit only; do not write 50ha clips.')
 @click.option('--gain-mode', type=click.Choice(['fixed', 'sd']), default='fixed',

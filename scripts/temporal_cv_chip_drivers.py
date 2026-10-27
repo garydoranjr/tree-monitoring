@@ -31,7 +31,6 @@ Typical usage:
         --persistence persistence_cv.csv
 """
 import json
-from pathlib import Path
 
 import click
 import numpy as np
@@ -39,9 +38,10 @@ import pandas as pd
 from scipy import stats
 
 from plot_temporal_cv_detail import chip_table
+from util import calibration_results
 
 FLOWER = '/Volumes/Earth03/flower'
-REPO = Path(__file__).resolve().parent.parent
+CAL = calibration_results()
 CAL_CHIPS = f'{FLOWER}/20261012_full_label_extended2_mkl_x4_coreg_4band_cal_curated'
 TOA_CHIPS = f'{FLOWER}/20261012_full_label_extended2_mkl_x4_coreg_4band_stretch_stats_curated'
 NUMERIC = ['days_to_nearest_train', 'doy', 'sun_elevation', 'view_angle', 'clear_frac',
@@ -85,9 +85,9 @@ def rank_resid(y, x):
               help='persistence_baseline.py <prefix>_cv.csv.')
 @click.option('--chips-csv', default=f'{CAL_CHIPS}/chips.csv', show_default=True)
 @click.option('--index-csv', default=f'{FLOWER}/planet_bcnm_sr/index.csv', show_default=True)
-@click.option('--metrics-csv', default=str(REPO / 'results/planet_fixed_stretch_metrics.csv'),
+@click.option('--metrics-csv', default=str(CAL / 'planet_fixed_stretch_metrics.csv'),
               show_default=True)
-@click.option('--offsets-csv', default=str(REPO / 'results/planet_scene_offsets.csv'),
+@click.option('--offsets-csv', default=str(CAL / 'planet_scene_offsets.csv'),
               show_default=True)
 @click.option('--coreg-json', default=f'{TOA_CHIPS}/coreg_log.json', show_default=True)
 @click.option('--out-csv', default=None, help='Write the joined per-chip table.')

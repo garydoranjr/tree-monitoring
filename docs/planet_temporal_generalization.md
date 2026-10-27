@@ -842,13 +842,13 @@ With 142 chips, |ρ| above about 0.17 is significant at 5 %.
 The calibrated chips are SR-product clips resampled onto the TOA chip grids,
 while the labels were coregistered on TOA. `compare_chip_sets.py` checks each
 pair for a shift, extra blur and per-band agreement over valid, OCM-clear pixels
-(`results/chip_sets_toa_vs_cal.csv`, about 5 min on the Mac):
+(`results/planet_calibration/chip_sets_toa_vs_cal.csv`, about 5 min on the Mac):
 
 ```bash
 python scripts/compare_chip_sets.py \
   /Volumes/Earth03/flower/20261012_full_label_extended2_mkl_x4_coreg_4band_stretch_stats_curated \
   /Volumes/Earth03/flower/20261012_full_label_extended2_mkl_x4_coreg_4band_cal_curated \
-  results/chip_sets_toa_vs_cal.csv
+  /Volumes/Earth03/flower/results/planet_calibration/chip_sets_toa_vs_cal.csv
 ```
 
 The shift is an integer phase-correlation start refined by masked

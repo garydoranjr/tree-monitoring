@@ -2,7 +2,7 @@
 """Render example 50ha clips before (raw SR) and after MODIS cross-calibration.
 
 Picks pairs of clear clips from different instruments acquired a few days apart
-(from results/planet_calibration_plot_means.csv, written by
+(from results/planet_calibration/planet_calibration_plot_means.csv, written by
 evaluate_planet_calibration.py), ranked by the raw-SR plot-mean NIR difference
 between the two. Two renderings:
 
@@ -41,7 +41,7 @@ import pandas as pd  # noqa: E402
 import rasterio as rio  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from evaluate_planet_calibration import FLOWER, INK, REPO  # noqa: E402
+from evaluate_planet_calibration import CAL, FLOWER, INK, REPO  # noqa: E402
 from train_planet_image_maskrcnn import build_input_channels  # noqa: E402
 
 SCHEMES = {'true colour': (2, 1, 0), 'false colour': (3, 2, 1)}  # band indices B,G,R,N
@@ -103,7 +103,7 @@ def model_panels(imgs: dict) -> dict:
 
 @click.command()
 @click.option('--plot-means', type=click.Path(path_type=Path, exists=True),
-              default=REPO / 'results/planet_calibration_plot_means.csv', show_default=True)
+              default=CAL / 'planet_calibration_plot_means.csv', show_default=True)
 @click.option('--toa-root', type=click.Path(path_type=Path),
               default=FLOWER / 'planet_clipped', show_default=True)
 @click.option('--sr-root', type=click.Path(path_type=Path),

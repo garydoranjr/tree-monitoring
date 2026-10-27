@@ -15,7 +15,7 @@ Writes to figs/planet_calibration/:
 and prints per-channel consistency metrics across chips (SD of the clear-pixel
 median input) and crown contrast (crown minus background mean input, and the
 same divided by the background SD), also saved to
-results/planet_fixed_stretch_metrics.csv.
+results/planet_calibration/planet_fixed_stretch_metrics.csv.
 
 Typical usage:
     python scripts/plot_planet_fixed_stretch_examples.py
@@ -37,12 +37,14 @@ from tqdm import tqdm  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from evaluate_planet_calibration import INK, MUTED  # noqa: E402
+from util import calibration_results  # noqa: E402
 from train_planet_image_maskrcnn import (  # noqa: E402
     _load_clear_mask, build_input_channels, load_stretch,
 )
 
 FLOWER = Path('/Volumes/Earth03/flower')
 REPO = Path(__file__).resolve().parent.parent
+CAL = calibration_results()
 RGB = ['red', 'green', 'blue']
 BORROWED, HAZY = '#eb6834', '#d03b3b'
 
@@ -108,7 +110,7 @@ def contact_sheet(chips, imgs, out, title_fn, flags, ncol=10):
 @click.option('--fig-dir', type=click.Path(path_type=Path),
               default=REPO / 'figs/planet_calibration', show_default=True)
 @click.option('--metrics', type=click.Path(path_type=Path),
-              default=REPO / 'results/planet_fixed_stretch_metrics.csv', show_default=True)
+              default=CAL / 'planet_fixed_stretch_metrics.csv', show_default=True)
 def main(current_dir, fixed_dir, stretch_path, index, crop, hazy, fig_dir, metrics):
     stretch = load_stretch(stretch_path)
     info = pd.read_csv(fixed_dir / 'chips.csv').set_index('chip')

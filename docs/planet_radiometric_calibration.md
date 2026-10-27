@@ -89,7 +89,7 @@ Wu's group at HKU:
 
 ## Sources of uncertainty
 
-Tracked per date-satellite group and band in `results/planet_modis_calibration.csv`
+Tracked per date-satellite group and band in `results/planet_calibration/planet_modis_calibration.csv`
 where they can be quantified; the rest are known but not yet quantified.
 
 1. **Gain (σ ratio) — not applied.** The box's usable land is nearly uniform
@@ -192,10 +192,17 @@ where they can be quantified; the rest are known but not yet quantified.
    resampled onto the TOA chip grids, and the drone labels were coregistered
    on TOA. The two copies agree to within a median 0.005 m (90th percentile
    0.25 m, maximum 0.51 m), with sharpness ratios of 0.95–1.11
-   (`compare_chip_sets.py`, `results/chip_sets_toa_vs_cal.csv`). This
+   (`compare_chip_sets.py`, `results/planet_calibration/chip_sets_toa_vs_cal.csv`). This
    source is negligible.
 
 ## Data locations
+
+The calibration tables (`results/planet_calibration/` below and in the text)
+live under the data root, not in the repo: `/Volumes/Earth03/flower` on the
+Mac, and `/scratch/tree-monitoring` on gattaca2, where they are synced. The
+scripts find them with `util.calibration_results()`, which takes the first of
+the two roots that exists; set `TREE_DATA_ROOT` to override. They moved there
+from the repo's untracked `results/` on 2026-10-27.
 
 | What | Where |
 |---|---|
@@ -205,9 +212,9 @@ where they can be quantified; the rest are known but not yet quantified.
 | MODIS reference | `/Volumes/Earth03/flower/modis/mcd43a1_bcnm/reference_nadir_sza45.nc` |
 | 50ha clips, raw SR | `/Volumes/Earth03/flower/planet_clipped_sr/4band/<YYYY>/` |
 | 50ha clips, calibrated | `/Volumes/Earth03/flower/planet_clipped_cal/4band/<YYYY>/` (uint16 reflectance × 10⁴, nodata 0; same grid as `planet_clipped/ocm`) |
-| Fit table, matched pixels | `results/planet_modis_calibration.csv`, `results/planet_modis_calibration_pixels/` |
-| Evaluation | `results/planet_calibration_eval.csv`, `figs/planet_calibration/` |
-| Per-scene offsets (fit or borrowed), validation | `results/planet_scene_offsets.csv`, `results/planet_offset_borrow_validation.csv` |
+| Fit table, matched pixels | `/Volumes/Earth03/flower/results/planet_calibration/planet_modis_calibration.csv`, `/Volumes/Earth03/flower/results/planet_calibration/planet_modis_calibration_pixels/` |
+| Evaluation | `/Volumes/Earth03/flower/results/planet_calibration/planet_calibration_eval.csv`, `figs/planet_calibration/` |
+| Per-scene offsets (fit or borrowed), validation | `/Volumes/Earth03/flower/results/planet_calibration/planet_scene_offsets.csv`, `/Volumes/Earth03/flower/results/planet_calibration/planet_offset_borrow_validation.csv` |
 | 50ha clips, calibrated or borrowed offset | `/Volumes/Earth03/flower/planet_clipped_calfill/4band/<YYYY>/` (symlinks into `planet_clipped_cal` for calibrated scenes) |
 | Fixed classifier stretch | `config/planet_fixed_stretch.yml` |
 | Calibrated training chips | `/Volumes/Earth03/flower/20261012_full_label_extended2_mkl_x4_coreg_4band_cal_curated/` (`chips.csv`: offset source, saturation) |
@@ -251,7 +258,7 @@ python scripts/plot_planet_fixed_stretch_examples.py               # Figs. 9-11
 
 ## Results
 
-Full run, 2020-01 to 2026-08 (`results/planet_modis_calibration.csv`, reference
+Full run, 2020-01 to 2026-08 (`results/planet_calibration/planet_modis_calibration.csv`, reference
 rebuilt after the `uniform_filter` fix; the first run on the earlier reference
 calibrated the same groups and its offsets differ by at most 0.017 NIR, median 0).
 
@@ -424,7 +431,7 @@ To give the model the same input for the same reflectance on every date:
    repeats the east/west `full_mkl` run and scores it on the 56-chip
    benchmark. Both ran on 2026-10-24; see *Training results* below.
 
-**Effect on the inputs** (`results/planet_fixed_stretch_metrics_summary.csv`).
+**Effect on the inputs** (`results/planet_calibration/planet_fixed_stretch_metrics_summary.csv`).
 The p10–p90 range across chips of the clear-pixel median input shrinks from
 0.28–0.77 to 0.21–0.44 (red), 0.41–0.87 to 0.30–0.56 (green) and 0.45–0.91 to
 0.18–0.39 (blue); the SD across chips, which the hazy chips inflate, drops
