@@ -910,11 +910,13 @@ python scripts/radiometric_sensitivity.py \
   --cal-chip-dir /Volumes/Earth03/flower/20261012_full_label_extended2_mkl_x4_coreg_4band_cal_curated \
   --folds config/temporal_folds_20261012.csv \
   --run-template '/Volumes/Earth03/flower/202610_temporal/fold{fold}' \
-  --units toa --device cpu --k=-1,0,1 --out-csv sensitivity_toa.csv
+  --units toa --device cpu --k=-1,0,1 \
+  --out-csv /Volumes/Earth03/flower/202610_temporal/sensitivity_toa.csv
 ```
 
 At k = 0 it reproduces `temporal_cv.json` (pooled IoU 0.3518, map_50 0.3544 vs
-0.3541).
+0.3541). The CSV of the first run was not kept. A re-run on 2026-10-27, written
+to the path above, reproduced every pooled value below to four decimals.
 
 | TOA model, offset | Pooled `map_50` | IoU | Precision | Recall |
 |---|---|---|---|---|
@@ -924,7 +926,7 @@ At k = 0 it reproduces `temporal_cv.json` (pooled IoU 0.3518, map_50 0.3544 vs
 
 **The TOA model hardly notices errors as large as those calibration removes.**
 Offsets of ±1 SD cost at most 0.005 in pooled `map_50` and 0.007 in pooled
-IoU. Within distance bins the largest IoU change is 0.011 (0–3 d, +1 SD). The per-image stretch and
+IoU. Within distance bins the largest IoU change is 0.012 (15–30 d, +1 SD). The per-image stretch and
 the training jitter already make the model close to invariant to scene-level
 offsets. So calibration could recover at most about this much, and the observed
 gain on own-fit chips (+0.012 IoU) is of that order. This confirms H4, and H1
@@ -946,7 +948,16 @@ python scripts/radiometric_sensitivity.py \
 ```
 
 At k = 0 it reproduces `temporal_cv.json` (pooled map_50 0.346, IoU 0.361).
-The output is `202610_temporal_cal/sensitivity_cal.csv` on Earth03.
+The output is `202610_temporal_cal/sensitivity_cal.csv` on Earth03. Both
+models are plotted in `figs/planet_temporal/radiometric_sensitivity.png`:
+
+```bash
+F=/Volumes/Earth03/flower
+python scripts/plot_radiometric_sensitivity.py \
+  --run TOA=$F/202610_temporal/sensitivity_toa.csv \
+  --run calibrated=$F/202610_temporal_cal/sensitivity_cal.csv \
+  --plot figs/planet_temporal/radiometric_sensitivity.png
+```
 
 | Calibrated model, offset | Pooled `map_50` | IoU | Precision | Recall |
 |---|---|---|---|---|
@@ -1415,6 +1426,29 @@ results are in
 > runs). The right panel gives mAP@50 at that epoch, by the number of days
 > between a held-out chip's Planet acquisition and the nearest training
 > chip's acquisition.
+
+`figs/planet_temporal/radiometric_sensitivity.png`:
+
+> Response of the Planet Mask R-CNN's held-out skill to an offset added to
+> every band of the input at test time. The offset is k times the
+> across-scene SD of the fitted Planet–MODIS offsets (blue / green / red
+> 0.0158 / 0.0149 / 0.0158 in surface reflectance), with the same sign in
+> every band, and is added before the model's own input stretch. Two models
+> are shown, each the epoch-12 checkpoints of the six folds of the blocked
+> temporal cross-validation of `temporal_cv.png` (142 chips of the 20261012
+> curated set, 2021-01 to 2026-01). One was trained on TOA chips with a
+> per-image 0th–99.9th percentile stretch (blue); its offset is converted to
+> radiance counts per chip with the slope of each TOA band against its
+> calibrated copy. The other was trained on MODIS-calibrated surface
+> reflectance with one fixed per-band stretch (green). The first four panels
+> show, against k, mask mAP at IoU 0.5, binary IoU of the union of predicted
+> and labelled crown masks over clear pixels, crown precision and crown recall
+> (a match is a mask IoU of at least 0.5). Each is pooled over both 512 × 512
+> windows of the held-out chips of all six folds (crowns of at least 64 px,
+> cloud-centred predictions removed, score threshold 0.5). The right panel
+> gives the change in pooled binary IoU from k = 0 at k = −1 (solid) and
+> k = +1 (hatched), by the number of days between a held-out chip's Planet
+> acquisition and the nearest training chip's acquisition.
 
 `crown_species_timeseries.png`:
 
