@@ -99,6 +99,10 @@ def strata_table(windows, meta, epoch, n_boot, seed=0):
 @click.option('--run', 'runs', multiple=True, required=True, metavar='LABEL=JSON',
               help='A temporal_cv.json, as label=path. Repeatable.')
 @click.option('--plot', type=click.Path(dir_okay=False), default=None)
+@click.option('--style', 'styles', multiple=True, metavar='LABEL=COLOR[:LINESTYLE]',
+              help='Colour and matplotlib line style (solid, dashed, dotted) of a '
+                   'run in --plot, e.g. nojit=#2a78d6:dashed; non-solid runs get '
+                   'hatched bars. Default: the categorical order, solid. Repeatable.')
 @click.option('--windows', 'window_csvs', multiple=True, metavar='LABEL=CSV',
               help="A run's temporal_cv_windows.csv, as label=path, with the "
                    'same labels as --run. Repeatable.')
@@ -110,7 +114,7 @@ def strata_table(windows, meta, epoch, n_boot, seed=0):
                    'selected epoch).')
 @click.option('--n-boot', default=2000, show_default=True,
               help='Paired chip-bootstrap resamples for the strata intervals.')
-def main(runs, plot, window_csvs, chip_meta, cmp_epoch, n_boot):
+def main(runs, plot, styles, window_csvs, chip_meta, cmp_epoch, n_boot):
     cv = {}
     for spec in runs:
         label, path = spec.split('=', 1)
@@ -157,11 +161,21 @@ def main(runs, plot, window_csvs, chip_meta, cmp_epoch, n_boot):
             click.echo(t.to_string(index=False))
 
     if plot:
+        style = {label: (c, 'solid') for label, c in zip(cv, COLORS)}
+        for spec in styles:
+            label, val = spec.split('=', 1)
+            color, _, ls = val.partition(':')
+            style[label] = (color, ls or 'solid')
+        missing = [label for label in cv if label not in style]
+        if missing:
+            raise click.ClickException(f'no colour for {missing}; pass --style')
+        hatch = {'solid': None, 'dashed': '///', 'dotted': '...'}
         fig, axes = plt.subplots(1, len(METRICS) + 1, figsize=(4 * (len(METRICS) + 1), 3.4))
         for ax, (k, name) in zip(axes, METRICS.items()):
-            for (label, d), c in zip(cv.items(), COLORS):
+            for label, d in cv.items():
+                c, ls = style[label]
                 s = pooled[pooled.run == label]
-                ax.plot(s.epoch, s[k], marker='o', ms=4, lw=2, color=c, label=label)
+                ax.plot(s.epoch, s[k], marker='o', ms=4, lw=2, color=c, ls=ls, label=label)
                 ax.plot(d['best_epoch'], s.set_index('epoch').loc[d['best_epoch'], k],
                         marker='o', ms=9, mfc='none', mec=c)
             ax.set_xscale('log')
@@ -171,11 +185,13 @@ def main(runs, plot, window_csvs, chip_meta, cmp_epoch, n_boot):
         ax = axes[-1]
         bins = [b[0] for b in first['day_bins']]
         w = 0.8 / len(cv)
-        for i, ((label, d), c) in enumerate(zip(cv.items(), COLORS)):
+        for i, (label, d) in enumerate(cv.items()):
+            c, ls = style[label]
             sel = d['per_epoch'][str(d['best_epoch'])]['by_day_bin']
             vals = [sel[b][first['select_metric']] for b in bins]
             ax.bar([j + (i - (len(cv) - 1) / 2) * w for j in range(len(bins))], vals,
-                   width=w, color=c, label=f'{label} (e{d["best_epoch"]})')
+                   width=w, color=c, hatch=hatch.get(ls), edgecolor='white', lw=0,
+                   label=f'{label} (e{d["best_epoch"]})')
         ax.set_xticks(range(len(bins)), bins)
         ax.set_xlabel('days to nearest training chip', color=INK)
         ax.set_title(f'{METRICS.get(first["select_metric"], first["select_metric"])} '
