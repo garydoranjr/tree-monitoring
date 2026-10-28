@@ -432,7 +432,9 @@ again peaks at **epoch 12**, so both runs are compared there
 | Calibrated, epoch 12 | 0.361 | 0.410 | 0.419 | 0.392 | 0.292 | 0.226 |
 
 **Calibration does not improve temporal transfer.** Pooled `map_50` falls by
-0.008 and IoU rises by 0.009, both within noise. The far bins, where a
+0.008 and IoU rises by 0.009, both within noise. A second TOA seed differs from
+the first by 0.022 in both metrics at epoch 12
+([repeat run](#augmentation-ablation-and-repeat-run-h1-h8)). The far bins, where a
 different atmosphere should matter most, do not improve either: at 15–30 days
 `map_50` falls by 0.019 while IoU rises by 0.020, and beyond 30 days both are
 flat. Fold 1 (the sparse 2021 flights) drops from 0.292 to 0.268 in `map_50`;
@@ -665,10 +667,6 @@ to a per-image stretch.
 
 ## Why calibration did not help
 
-The pending gattaca2 runs for this section (jitter ablation, seed repeat,
-DINOv3, and the calibrated offset sensitivity) are collected, ready to paste,
-in [handoff_gattaca2_calibration_followups.md](handoff_gattaca2_calibration_followups.md).
-
 Candidate explanations for the null temporal-CV result, tested cheapest first:
 
 | | Explanation | Test |
@@ -683,6 +681,26 @@ Candidate explanations for the null temporal-CV result, tested cheapest first:
 | H8 | Training run-to-run variance is unmeasured; each arm was run once with no seed | Chip bootstrap; repeat run |
 | H9 | The calibrated chips (from the SR product) are shifted or blurred relative to the TOA chips the labels were coregistered to | Chip-pair shift and sharpness |
 | H10 | ImageNet normalization and hyperparameters were set on TOA inputs | Conditional retrain |
+
+Where they stand (2026-10-27; details in the subsections below):
+
+- **Supported: H4, H6 and H1.** The TOA model is nearly blind to scene-level
+  offsets (H4). Much of its skill is memory of the same crowns (H6). Without
+  training ColorJitter, the TOA run loses more `map_50` than the calibrated
+  run, so jitter was doing part of calibration's job (H1).
+- **Measured: H8.** A second TOA seed moves pooled `map_50` and IoU by up to
+  0.022 at epoch 12, and by 0.001–0.017 at the other epochs from 8 on. That is
+  larger than calibration's `map_50` change. Calibration's IoU and precision
+  gain is consistent across epochs, so it is probably real but small.
+- **Not supported: H3, H9.** A frozen DINOv3 backbone is far behind in
+  `map_50`, and satellite pretraining does worse than web pretraining. The
+  calibrated chips match the TOA chips geometrically.
+- **Partly supported: H2, H5.** Borrowed-offset chips lose skill. The
+  calibrated model loses about 17 times as much pooled IoU from an offset
+  error as the TOA model, so any offset left after calibration costs it skill
+  directly. Skill follows crown contrast and label content, not the scene's
+  radiometric state (H5, H7).
+- **Untested: H10.**
 
 ### CV split by offset source, with a chip bootstrap (H2, H8)
 
@@ -723,8 +741,15 @@ python scripts/compare_temporal_cv.py \
   as on the borrowed scenes in the drone comparison. They are 8 % of the chips,
   and they pull the pooled gain down to +0.009 IoU.
 - So coverage (H2) does matter, but full coverage would add only about 0.003 to
-  the pooled IoU gain. The own-fit gain is small either way, and whether it
-  exceeds training noise (H8) needs a repeat run.
+  the pooled IoU gain. The own-fit gain is small either way.
+- **The chip bootstrap understates the uncertainty.** A TOA repeat with another
+  seed ([below](#augmentation-ablation-and-repeat-run-h1-h8)) differs from the
+  first TOA run by −0.022 pooled IoU at epoch 12. Its bootstrap interval
+  (−0.028 to −0.017) excludes zero, although the two runs differ only in
+  training randomness. So an interval that excludes zero here does not, on its
+  own, show a real effect. Calibration's IoU gain is positive at every epoch
+  from 5 on (+0.009 to +0.026). The seed spread at those epochs is 0.003–0.006,
+  except 0.022 at epoch 12. That makes the gain probably real but small.
 
 ### Persistence baseline (H6)
 
@@ -904,13 +929,56 @@ the training jitter already make the model close to invariant to scene-level
 offsets. So calibration could recover at most about this much, and the observed
 gain on own-fit chips (+0.012 IoU) is of that order. This confirms H4, and H1
 in its weak form. Whether jitter specifically is what buys the invariance is
-the question for the ablation below. The calibrated folds' checkpoints are only
-on gattaca2. Run the same command there with
-`--chip-dir <cal chips> --run-template '<202610_temporal_cal>/fold{fold}' --units reflectance`
-to see how much the fixed stretch passes offsets on, which is the
-borrowed-offset loss.
+the question for the ablation below.
 
-### Augmentation ablation and repeat run (H1, H8; pending on gattaca2)
+**Calibrated model** (2026-10-27, gattaca2, CUDA). The calibrated folds'
+checkpoints are only on gattaca2, so this run used them there. It adds the
+same offsets in reflectance to the calibrated chips, ahead of the fixed
+stretch:
+
+```bash
+python scripts/radiometric_sensitivity.py \
+  --chip-dir /scratch/tree-monitoring/20261012_full_label_extended2_mkl_x4_coreg_4band_cal_curated \
+  --folds config/temporal_folds_20261012.csv \
+  --run-template '$HOME/Documents/tree-flowering/202610_temporal_cal/fold{fold}' \
+  --units reflectance --device cuda --k -1,0,1 \
+  --out-csv $HOME/Documents/tree-flowering/202610_temporal_cal/sensitivity_cal.csv
+```
+
+At k = 0 it reproduces `temporal_cv.json` (pooled map_50 0.346, IoU 0.361).
+The output is `202610_temporal_cal/sensitivity_cal.csv` on Earth03.
+
+| Calibrated model, offset | Pooled `map_50` | IoU | Precision | Recall |
+|---|---|---|---|---|
+| −1 SD | 0.194 | 0.239 | 0.166 | 0.274 |
+| none | 0.346 | 0.361 | 0.263 | 0.462 |
+| +1 SD | 0.278 | 0.313 | 0.203 | 0.410 |
+
+**Under the fixed stretch, an offset error goes straight into the model.** At
+−1 SD the calibrated model loses 0.152 pooled `map_50` and 0.122 IoU. At +1 SD
+it loses 0.068 and 0.048. That is 17 times the TOA model's largest IoU loss,
+and 30 times its `map_50` loss. Every fold loses IoU at both signs, by 0.07
+to 0.17 at −1 SD and 0.03 to 0.07 at +1 SD. So does every distance bin, by
+0.03 to 0.14. Two things explain it:
+
+- The fixed stretch spans only 0.041–0.046 in reflectance in the visible
+  bands (`config/planet_fixed_stretch.yml`). A 1 SD offset (0.015–0.016) is
+  therefore about a third of the input range.
+- ColorJitter's brightness factor (±20 %) is multiplicative, so it does not
+  imitate an additive offset of that size. The per-image stretch of the TOA
+  input removes such an offset before the model sees it.
+
+The borrowed offsets have an RMSE of 0.013–0.015 in the visible bands
+([planet_radiometric_calibration.md](planet_radiometric_calibration.md#sources-of-uncertainty),
+item 11), which is about 1 SD. That fits the recall loss on the
+borrowed-offset chips and scenes. Calibration thus trades the TOA model's
+invariance for a dependence on the offset being right. Where the offset is
+fit, that roughly breaks even. Where it is borrowed, it loses. A fixed stretch
+with offset augmentation in training (a random additive shift of about 1 SD
+per band), or a per-image stretch on the calibrated chips, would remove this
+dependence.
+
+### Augmentation ablation and repeat run (H1, H8)
 
 `train_planet_image_maskrcnn.py --no-color-jitter` turns off the training
 ColorJitter, and `--seed N` seeds Python, NumPy and torch. Both are stored in
@@ -932,11 +1000,75 @@ for C in nojit cal_nojit seed1; do
 done
 ```
 
-Each run takes about 2–3 h within the 2-GPU limit, so the three take about a
-day if run one after another. Compare them with `compare_temporal_cv.py`
-(`--run` and `--windows` for each).
+The three runs finished on gattaca2 on 2026-10-27. Their `temporal_cv.json` and
+`temporal_cv_windows.csv` are in `202610_temporal_{nojit,cal_nojit,seed1}/` on
+Earth03. Each pair was compared with `compare_temporal_cv.py`, with `--run` and
+`--windows` for both runs, `--chip-meta` and `--epoch 12`, for example:
 
-### DINOv3 backbone (H3; pending on gattaca2)
+```bash
+F=/Volumes/Earth03/flower
+python scripts/compare_temporal_cv.py \
+  --run toa=$F/202610_temporal/temporal_cv.json \
+  --run seed1=$F/202610_temporal_seed1/temporal_cv.json \
+  --windows toa=$F/202610_temporal/temporal_cv_windows.csv \
+  --windows seed1=$F/202610_temporal_seed1/temporal_cv_windows.csv \
+  --chip-meta $F/20261012_full_label_extended2_mkl_x4_coreg_4band_cal_curated/chips.csv \
+  --epoch 12
+```
+
+Pooled held-out `map_50` by epoch (the selection metric):
+
+| Run | 3 | 5 | 8 | 12 | 17 | 25 | 40 | Peak |
+|---|---|---|---|---|---|---|---|---|
+| TOA | 0.269 | 0.303 | 0.335 | **0.354** | 0.337 | 0.340 | 0.336 | 0.354 (e12) |
+| TOA, seed 1 | 0.283 | 0.309 | 0.333 | 0.332 | **0.354** | 0.342 | 0.328 | 0.354 (e17) |
+| TOA, no jitter | 0.299 | 0.301 | **0.329** | 0.320 | 0.319 | 0.315 | 0.317 | 0.329 (e8) |
+| Calibrated | 0.308 | 0.330 | 0.340 | **0.346** | 0.344 | 0.335 | 0.336 | 0.346 (e12) |
+| Calibrated, no jitter | 0.303 | 0.316 | 0.329 | 0.335 | **0.338** | 0.331 | 0.321 | 0.338 (e17) |
+
+Pooled IoU and crown recall:
+
+| Run | IoU e12 | IoU e17 | IoU e40 | Recall e12 | Recall e17 | Recall e40 |
+|---|---|---|---|---|---|---|
+| TOA | 0.352 | 0.381 | 0.421 | 0.477 | 0.450 | 0.417 |
+| TOA, seed 1 | 0.330 | 0.387 | 0.416 | 0.458 | 0.451 | 0.406 |
+| TOA, no jitter | 0.349 | 0.388 | 0.410 | 0.432 | 0.419 | 0.382 |
+| Calibrated | 0.361 | 0.397 | 0.431 | 0.462 | 0.445 | 0.408 |
+| Calibrated, no jitter | 0.373 | 0.404 | 0.419 | 0.448 | 0.428 | 0.380 |
+
+**Run-to-run spread (H8).** The two TOA seeds reach the same peak `map_50`
+(0.354), but at different epochs. Epoch 12 happened to be a good checkpoint for
+the first seed, so the two runs differ there by 0.022 in both `map_50` and IoU.
+At the other epochs from 8 on they differ by 0.001–0.017 in `map_50` and
+0.003–0.006 in IoU.
+- **The chip bootstrap does not cover this.** Its interval for seed 1 minus
+  TOA at epoch 12 is −0.028 to −0.017 in IoU, so it would call a pure seed
+  change significant.
+- **Calibration's `map_50` difference is inside the seed spread.** It ranges
+  from −0.008 to +0.007 from epoch 8 on.
+- **Calibration's IoU and precision gain probably is not.** It is positive at
+  every epoch from 5 on (IoU +0.009 to +0.026, precision +0.020 to +0.056).
+- **The selected epoch is itself noisy.** The epoch-12 choice for the final
+  model rests on a peak that a second seed puts at epoch 17.
+
+**Jitter ablation (H1).** Turning off ColorJitter costs the TOA run more than
+the calibrated run.
+- **`map_50` falls further for TOA.** From epoch 12 on, the TOA run loses
+  0.018–0.034 (mean 0.024) and the calibrated run 0.004–0.015 (mean 0.009). The
+  seed spread over the same epochs averages 0.012.
+- **So does recall.** The TOA run loses 0.031–0.046 and the calibrated run
+  0.014–0.028. In both runs precision rises, and IoU changes by no more than the
+  seed spread.
+- **Calibration's `map_50` gain appears only without jitter.** With jitter,
+  calibrated minus TOA is −0.008 to +0.007 from epoch 8 on. Without jitter, it
+  is 0.000 to +0.019 (peak 0.338 vs 0.329).
+- **So the jitter was standing in for part of what calibration does (H1).**
+  Jitter does more than calibration, though. The best run of all is still
+  TOA with jitter, and dropping jitter hurts even the calibrated run.
+- **Caveat.** This rests on one seed per arm. The two effects (0.024 and 0.009)
+  differ by about one seed spread.
+
+### DINOv3 backbone (H3)
 
 H3 asks whether a backbone pretrained on satellite imagery would do better
 than the COCO-pretrained Mask R-CNN. `scripts/train_planet_image_dinov3.py`
@@ -1012,12 +1144,48 @@ done
 
 `scripts/slurm/planet_temporal_cv.sh` runs `$TEMPORAL_TRAIN_SCRIPT`, which
 defaults to the Mask R-CNN trainer. The configs keep the parent's epoch grid
-(1–40) and write to `202610_temporal_dinov3{sat,web}`. GPU time per fold has
-not been measured. These runs share the 2-GPU limit with the ablations above.
-Compare against the TOA Mask R-CNN with `compare_temporal_cv.py`. The best
-epoch for DINOv3 need not be 12, so read the whole grid. If the frozen
-backbone is competitive, the next step (C2) is `--finetune-blocks 4` in
-`TEMPORAL_TRAIN_ARGS`.
+(1–40) and write to `202610_temporal_dinov3{sat,web}`. GPU time per fold was
+not recorded.
+
+**Results (phase C1, frozen backbone; 2026-10-27).** The `temporal_cv.json` and
+`temporal_cv_windows.csv` of both runs are on Earth03. They were compared
+against the TOA Mask R-CNN with `compare_temporal_cv.py`, using
+`--run toa=… --run web=… --run sat=…`, the TOA and SAT-493M windows, and
+`--chip-meta` at `--epoch 40`. Pooled held-out metrics:
+
+| Run | `map_50` e12 | `map_50` e40 | IoU e1 | IoU e12 | IoU e40 | Precision e40 | Recall e40 |
+|---|---|---|---|---|---|---|---|
+| Mask R-CNN, TOA | **0.354** | 0.336 | 0.199 | 0.352 | 0.421 | 0.548 | 0.417 |
+| DINOv3, SAT-493M | 0.201 | 0.235 | 0.329 | 0.386 | 0.404 | 0.388 | 0.303 |
+| DINOv3, LVD-1689M (web) | 0.226 | 0.260 | 0.331 | 0.402 | 0.421 | 0.395 | 0.324 |
+
+Both DINOv3 runs select epoch 40, the last on the grid, and `map_50` is still
+rising slowly there (0.221 → 0.235 and 0.246 → 0.260 from epoch 25).
+
+- **The frozen DINOv3 segmenter finds the event pixels about as well as Mask
+  R-CNN, but not the crowns.** Its pixel IoU is 0.33 after one epoch and
+  matches or beats Mask R-CNN up to epoch 17. At epoch 40 the web backbone
+  ties (0.421) and the SAT-493M backbone is 0.017 behind. Its `map_50` stays
+  0.09–0.12 below Mask R-CNN's peak, and crown recall is 0.30–0.32 against
+  0.42–0.48. Instances here are connected components of the probability map.
+  These merge touching crowns and split patchy ones, so a crown-level match at
+  IoU 0.5 fails even where the pixels are right. The gap is in instance
+  separation, not in the features.
+- **Satellite pretraining does not help.** The web-image backbone is ahead of
+  SAT-493M in `map_50` at every epoch from 5 on (by 0.014–0.026), and in IoU at
+  every epoch. One likely reason is a scale mismatch: SAT-493M was trained on
+  0.6 m Maxar tiles, while these are 3 m Planet pixels resampled to 0.75 m.
+  On the strata at epoch 40, SAT-493M minus TOA Mask R-CNN is −0.028 to
+  −0.005 in IoU (paired chip bootstrap). Within distance bins, the interval
+  excludes zero only at 0–3 and 4–7 days, where SAT-493M is behind by 0.03–0.10.
+  Farther from training data, the two are level.
+- **So H3 is not supported in the form tested.** A satellite-pretrained
+  backbone does not lift temporal transfer, and the architecture is not what
+  holds back calibration. Fine-tuning blocks (phase C2,
+  `--finetune-blocks 4`) would not answer H3, because web already beats
+  SAT-493M frozen. It is worth running only to pursue a pixel-level model
+  (for example with crown polygons from the drone segmentation as instances),
+  which is a separate question.
 
 **Mac pitfalls found on the way.**
 - *Exit hang with DataLoader workers on MPS.* Twice, a run wrote its last

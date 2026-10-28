@@ -182,7 +182,12 @@ where they can be quantified; the rest are known but not yet quantified.
    0.001. It removes the sensor and seasonal part of the offset but not
    the day-to-day atmospheric error, which neighbouring dates do not
    predict. Same-satellite (±30 days) and same-instrument (±15 days)
-   donors score alike (RMSE 0.0144 vs 0.0151 in blue).
+   donors score alike (RMSE 0.0144 vs 0.0151 in blue). That residual is
+   about the size of the 1 SD offset in the classifier sensitivity test
+   (0.015–0.016). There, under the fixed stretch, a 1 SD error costs the
+   calibrated Mask R-CNN 0.05–0.12 pooled IoU, against at most 0.007 for the
+   TOA model with its per-image stretch
+   ([planet_temporal_generalization.md](planet_temporal_generalization.md#test-time-offset-sensitivity-h4-h1)).
 12. **Local haze.** The offset is a single box-wide value, so haze over the
    plot that differs from the box mean stays in the calibrated clip. Under
    the fixed classifier stretch such chips saturate: 4 of the 142 training
@@ -486,6 +491,19 @@ TOA per-image stretch would have absorbed it.
   state, which does not depend on radiometry.
 - The calibrated chips match the TOA chips geometrically (item 13), so a data
   confound is ruled out.
+- (2026-10-27) The calibrated model depends on the offset being right. Under
+  the fixed stretch, a 1 SD offset error (about a third of the visible-band
+  input range) costs it 0.05–0.12 pooled IoU, where the TOA model loses at
+  most 0.007. Borrowed offsets carry about that much error. Offset
+  augmentation in training, or a per-image stretch on the calibrated chips,
+  would remove the dependence.
+- (2026-10-27) The training ColorJitter was doing part of calibration's job.
+  Without it, the TOA run loses more `map_50` than the calibrated run (0.024
+  vs 0.009 on average from epoch 12), and calibration then gains up to 0.019.
+  A second TOA seed moves pooled `map_50` and IoU by up to 0.022, so
+  calibration's `map_50` change (−0.008 to +0.007) is inside training noise.
+  Its IoU and precision gain is consistent across epochs (IoU +0.009 to
+  +0.026).
 
 ### Figures (`figs/planet_calibration/`, continued)
 
