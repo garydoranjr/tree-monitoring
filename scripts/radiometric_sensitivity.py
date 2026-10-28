@@ -40,15 +40,10 @@ import torch
 
 from eval_temporal_cv import DAY_BINS, Accumulator, day_bin, load_fold_model, score_fold
 from train_planet_image_maskrcnn import PlanetMaskRCNNDataset, _load_clear_mask
-from util import calibration_results, select_device
+from util import calibration_results, offset_sd, select_device
 
 CAL = calibration_results()
 BANDS = ('blue', 'green', 'red', 'nir')  # chip band order
-
-
-def offset_sd(offsets_csv):
-    o = pd.read_csv(offsets_csv)
-    return o[o['source'] == 'fit'].groupby('band')['offset'].std().reindex(BANDS).to_numpy()
 
 
 def toa_gain(toa_path, cal_dir, n=20000, seed=0):

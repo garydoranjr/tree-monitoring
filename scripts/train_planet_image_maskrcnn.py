@@ -30,7 +30,7 @@ from torchvision.models.detection.roi_heads import RoIHeads
 import torchmetrics
 from torchmetrics.detection import MeanAveragePrecision
 
-from util import load_config, select_device
+from util import load_config, offset_sd, select_device
 
 
 def _split_window(h, w, split, size):
@@ -586,6 +586,28 @@ def _load_clear_mask(img_path, expected_shape):
             f"image shape {expected_shape}"
         )
     return (alpha == 0)
+
+
+class OffsetJitter:
+    """raw_transform for training on calibrated chips: add k * sd to every
+    band, with one k ~ N(0, scale) per sample shared by the bands (haze-like,
+    as in radiometric_sensitivity.py). `sd` is the across-scene SD of the
+    fitted Planet-MODIS offsets in reflectance and `unit` the chip value of
+    reflectance 1 (10^4). Valid pixels stay at least 1 so they never turn
+    into nodata."""
+
+    def __init__(self, sd, scale, unit):
+        self.offset = np.asarray(sd) * unit
+        self.scale = scale
+        # Drawn from NumPy's global state so that --seed also fixes it.
+        self.rng = np.random.default_rng(np.random.randint(2**31))
+
+    def __call__(self, arr, path):
+        valid = (arr > 0).all(axis=-1)
+        out = arr.copy()
+        k = self.rng.normal(0.0, self.scale)
+        out[valid] = np.maximum(out[valid] + k * self.offset, 1)
+        return out
 
 
 class PlanetMaskRCNNDataset(Dataset):
@@ -1220,6 +1242,12 @@ def evaluate(model, dataloader, device, iou_metric, map_metric,
               help='ColorJitter(brightness=0.2, contrast=0.2) on the stretched '
                    'colour/IR channels of training chips (default on, as in '
                    'every run before this flag existed).')
+@click.option('--offset-jitter', default=0.0, show_default=True, type=float,
+              help='With --fixed-stretch: add k times the across-scene SD of '
+                   'the fitted Planet-MODIS offsets to every band of each '
+                   'training sample, before the stretch, with k ~ N(0, this) '
+                   'drawn per sample. Teaches the model offset errors of the '
+                   'size calibration leaves (e.g. borrowed offsets). 0 is off.')
 @click.option('--seed', default=None, type=int,
               help='Seed Python, NumPy and torch (initialisation, shuffling, '
                    'jitter, copy-paste). Unset by default, as in earlier runs. '
@@ -1232,12 +1260,14 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
          use_copy_paste, copy_paste_count, copy_paste_prob,
          lr_schedule, warmup_epochs, select_metric, save_every_epoch,
          save_epochs, folds_csv, fold, chip_list, fixed_stretch, color_jitter,
-         seed, use_wandb):
+         offset_jitter, seed, use_wandb):
 
     if (folds_csv is None) != (fold is None):
         raise click.UsageError('--folds and --fold must be given together')
     if chip_list is not None and folds_csv is not None:
         raise click.UsageError('--chips and --folds are exclusive')
+    if offset_jitter and fixed_stretch is None:
+        raise click.UsageError('--offset-jitter needs --fixed-stretch (calibrated chips)')
     os.makedirs(outputdir, exist_ok=True)
     if seed is not None:
         random.seed(seed)
@@ -1270,6 +1300,9 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
     channel_kinds = resolve_channels(fourth_band, replace)
     n_channels = len(channel_kinds)
     stretch = load_stretch(fixed_stretch)
+    sd = offset_sd() if offset_jitter else None
+    raw_transform = (OffsetJitter(sd, offset_jitter, 1 / stretch['scale'])
+                     if offset_jitter else None)
 
     # Per-channel normalization. NDVI is fed raw and normalized with stats
     # derived from the training split; the other kinds use fixed stats.
@@ -1348,6 +1381,8 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
         'train_chips': train_chips,
         'test_chips': test_chips,
         'color_jitter': color_jitter,
+        'offset_jitter': offset_jitter,
+        'offset_sd': None if sd is None else [float(v) for v in sd],
         'seed': seed,
     }
 
@@ -1370,7 +1405,7 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
         use_ocm_masks=use_ocm_masks, channel_kinds=channel_kinds,
         instance_bank=instance_bank, copy_paste_count=copy_paste_count,
         copy_paste_prob=copy_paste_prob, chip_names=train_chips,
-        stretch=stretch,
+        stretch=stretch, raw_transform=raw_transform,
     )
     # Append any extra whole-image chip dirs to the *training* set only,
     # leaving the left/right validation split on imagedir untouched.
@@ -1384,6 +1419,7 @@ def main(imagedir, outputdir, num_epochs, batch_size, lr, size,
                 instance_bank=instance_bank,
                 copy_paste_count=copy_paste_count,
                 copy_paste_prob=copy_paste_prob, stretch=stretch,
+                raw_transform=raw_transform,
             )
             print(f"Adding {len(extra_ds)} whole-image train chips from {extra_dir}")
             datasets.append(extra_ds)

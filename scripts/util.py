@@ -77,3 +77,16 @@ def calibration_results():
     evaluation, fixed-stretch metrics): results/planet_calibration under the
     data root."""
     return data_root() / 'results' / 'planet_calibration'
+
+
+def offset_sd(offsets_csv=None):
+    """Across-scene SD of the fitted Planet-MODIS offsets per band (blue,
+    green, red, NIR; reflectance), over the own-fit scenes of
+    planet_scene_offsets.csv: the size of the per-scene error that
+    calibration removes."""
+    import pandas as pd
+    if offsets_csv is None:
+        offsets_csv = calibration_results() / 'planet_scene_offsets.csv'
+    o = pd.read_csv(offsets_csv)
+    return (o[o['source'] == 'fit'].groupby('band')['offset'].std()
+            .reindex(('blue', 'green', 'red', 'nir')).to_numpy())

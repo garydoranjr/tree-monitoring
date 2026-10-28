@@ -494,9 +494,11 @@ TOA per-image stretch would have absorbed it.
 - (2026-10-27) The calibrated model depends on the offset being right. Under
   the fixed stretch, a 1 SD offset error (about a third of the visible-band
   input range) costs it 0.05–0.12 pooled IoU, where the TOA model loses at
-  most 0.007. Borrowed offsets carry about that much error. Offset
-  augmentation in training, or a per-image stretch on the calibrated chips,
-  would remove the dependence.
+  most 0.007. Borrowed offsets carry about that much error. The training
+  ColorJitter is multiplicative. It covers an offset of that size on the TOA
+  input, whose content sits near the top of the per-image stretch, but not on
+  the fixed-stretch input, where clear forest sits near 0.3. Offset
+  augmentation in training (`--offset-jitter`) is the fix being tested.
 - (2026-10-27) The training ColorJitter was doing part of calibration's job.
   Without it, the TOA run loses more `map_50` than the calibrated run (0.024
   vs 0.009 on average from epoch 12), and calibration then gains up to 0.019.

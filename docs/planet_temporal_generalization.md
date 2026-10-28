@@ -959,24 +959,33 @@ The output is `202610_temporal_cal/sensitivity_cal.csv` on Earth03.
 it loses 0.068 and 0.048. That is 17 times the TOA model's largest IoU loss,
 and 30 times its `map_50` loss. Every fold loses IoU at both signs, by 0.07
 to 0.17 at −1 SD and 0.03 to 0.07 at +1 SD. So does every distance bin, by
-0.03 to 0.14. Two things explain it:
+0.03 to 0.14. The cause is where each input recipe puts the forest, and so
+what the training ColorJitter (brightness ±20 %, multiplicative) can imitate.
+These numbers come from 15 chips, every tenth of the set:
 
-- The fixed stretch spans only 0.041–0.046 in reflectance in the visible
-  bands (`config/planet_fixed_stretch.yml`). A 1 SD offset (0.015–0.016) is
-  therefore about a third of the input range.
-- ColorJitter's brightness factor (±20 %) is multiplicative, so it does not
-  imitate an additive offset of that size. The per-image stretch of the TOA
-  input removes such an offset before the model sees it.
+- **Fixed stretch.** The visible bands span only 0.041–0.046 in reflectance
+  (`config/planet_fixed_stretch.yml`), so a 1 SD offset (0.015–0.016) is
+  0.33–0.39 of the input range. Clear forest sits near 0.3 in stretched units,
+  where ±20 % brightness moves it by only about ±0.06. Training never shows the
+  model a shift of the size of an offset error.
+- **TOA per-image stretch.** This stretch does not remove an offset. Its lower
+  bound is the nodata 0, so it only divides each band by its 99.9th
+  percentile. But TOA content sits high in the range (the 1st percentile of
+  valid pixels is at 0.58–0.80), so ±20 % brightness moves it by about ±0.16.
+  A 1 SD offset is 0.12–0.19 of the range (blue / green / red medians 0.12 /
+  0.13 / 0.19, measured with the same per-chip TOA gain as the test). The
+  jitter therefore already covers it.
 
 The borrowed offsets have an RMSE of 0.013–0.015 in the visible bands
 ([planet_radiometric_calibration.md](planet_radiometric_calibration.md#sources-of-uncertainty),
 item 11), which is about 1 SD. That fits the recall loss on the
 borrowed-offset chips and scenes. Calibration thus trades the TOA model's
 invariance for a dependence on the offset being right. Where the offset is
-fit, that roughly breaks even. Where it is borrowed, it loses. A fixed stretch
-with offset augmentation in training (a random additive shift of about 1 SD
-per band), or a per-image stretch on the calibrated chips, would remove this
-dependence.
+fit, that roughly breaks even. Where it is borrowed, it loses. The direct fix
+is to keep the fixed stretch and add an additive offset of about 1 SD to the
+calibrated chips in training (`--offset-jitter`, below), so that the model
+sees errors of the size it meets. A per-image stretch on the calibrated chips
+would not help, because it divides but does not subtract.
 
 ### Augmentation ablation and repeat run (H1, H8)
 
@@ -1016,7 +1025,11 @@ python scripts/compare_temporal_cv.py \
   --epoch 12
 ```
 
-Pooled held-out `map_50` by epoch (the selection metric):
+The five runs are plotted in `figs/planet_temporal/temporal_cv_jitter_seed.png`
+(the same command with all five `--run`s, `--style toa=#2a78d6
+--style seed1=#2a78d6:dotted --style nojit=#2a78d6:dashed --style cal=#1baf7a
+--style cal_nojit=#1baf7a:dashed --plot ...`). Pooled held-out `map_50` by
+epoch (the selection metric):
 
 | Run | 3 | 5 | 8 | 12 | 17 | 25 | 40 | Peak |
 |---|---|---|---|---|---|---|---|---|
@@ -1151,7 +1164,8 @@ not recorded.
 `temporal_cv_windows.csv` of both runs are on Earth03. They were compared
 against the TOA Mask R-CNN with `compare_temporal_cv.py`, using
 `--run toa=… --run web=… --run sat=…`, the TOA and SAT-493M windows, and
-`--chip-meta` at `--epoch 40`. Pooled held-out metrics:
+`--chip-meta` at `--epoch 40`, with `--plot
+figs/planet_temporal/temporal_cv_dinov3.png`. Pooled held-out metrics:
 
 | Run | `map_50` e12 | `map_50` e40 | IoU e1 | IoU e12 | IoU e40 | Precision e40 | Recall e40 |
 |---|---|---|---|---|---|---|---|
@@ -1207,6 +1221,20 @@ rising slowly there (0.221 → 0.235 and 0.246 → 0.260 from epoch 25).
   `radiometric_sensitivity.py` at fold 2. It is probably an MPS bug on an
   empty ROI batch (a window with no detections), but this is unconfirmed. Use
   CPU or CUDA for Mask R-CNN evaluation.
+
+### Offset augmentation and a calibrated seed repeat (pending on gattaca2)
+
+`train_planet_image_maskrcnn.py --offset-jitter S` (with `--fixed-stretch`)
+adds k times the across-scene offset SD to every band of each training
+sample, with k ~ N(0, S) drawn per sample and shared by the bands. Its purpose
+is to remove the calibrated model's dependence on the offset being right.
+`config/temporal_cv_20261012_cal_offjit{1,05}.sh` run it at S = 1 and 0.5.
+`config/temporal_cv_20261012_cal_seed1.sh` repeats the calibrated run with
+`--seed 1` (H8 for that arm). `scripts/slurm/radiometric_sensitivity.sh`
+re-runs the offset test from −2 to +2 SD for these runs and for the TOA and
+calibrated references. The commands, expected costs and how to read the
+results are in
+[handoff_gattaca2_offset_jitter.md](handoff_gattaca2_offset_jitter.md).
 
 ## Caveats
 
@@ -1342,6 +1370,51 @@ rising slowly there (0.221 → 0.235 and 0.246 → 0.260 from epoch 25).
 > epoch selected by pooled mAP@50 (epoch 12 for both). The right panel gives
 > mAP@50 at that epoch by the number of days between a held-out chip's Planet
 > acquisition and the nearest training chip's acquisition.
+
+`figs/planet_temporal/temporal_cv_jitter_seed.png`:
+
+> Held-out performance of the Planet Mask R-CNN under the blocked temporal
+> cross-validation of `temporal_cv.png` (142 chips of the 20261012 curated
+> set, 2021-01 to 2026-01, 6 folds of contiguous blocks of at most 14 days)
+> for five training runs, each trained once. Three use TOA chips with a
+> per-image 0th–99.9th percentile stretch per band: the original run (blue
+> solid), a repeat with `--seed 1` (blue dotted), and a run without the
+> training ColorJitter, which scales brightness and contrast by up to ±20 %
+> (blue dashed). Two use the same chips as MODIS-calibrated surface
+> reflectance with one fixed per-band stretch, with ColorJitter (green solid)
+> and without it (green dashed). The first four panels show, against training
+> epoch (log scale), mask mAP at IoU 0.5, binary IoU of the union of predicted
+> and labelled crown masks over clear pixels, crown precision and crown recall
+> (a match is a mask IoU of at least 0.5). Each is pooled over the windows of
+> all six held-out folds (two 512 × 512 windows per chip, crowns of at least
+> 64 px, cloud-centred predictions removed). Circles mark each run's epoch
+> selected by pooled mAP@50 (12, 17, 8, 12 and 17 in the order above). The
+> right panel gives mAP@50 at that epoch, by the number of days between a
+> held-out chip's Planet acquisition and the nearest training chip's
+> acquisition. Its hatching repeats the line styles (dots for the seed repeat,
+> diagonals for no jitter).
+
+`figs/planet_temporal/temporal_cv_dinov3.png`:
+
+> Held-out performance under the blocked temporal cross-validation of
+> `temporal_cv.png` (142 chips of the 20261012 curated set, 2021-01 to
+> 2026-01, 6 folds of contiguous blocks of at most 14 days) for three models.
+> All use TOA chips with a per-image 0th–99.9th percentile stretch. The first
+> is the COCO-pretrained Mask R-CNN (blue). The other two are a semantic
+> segmenter with a frozen DINOv3 ViT-L/16 backbone, pretrained on web images
+> (LVD-1689M, orange) or on 0.6 m Maxar satellite tiles (SAT-493M, violet),
+> with only its decoder trained. Its instances are the 8-connected components
+> of event probability of at least 0.5, scored by their mean probability.
+> The first four panels show, against training epoch (log scale), mask mAP at
+> IoU 0.5, binary IoU of the union of predicted and labelled crown masks over
+> clear pixels, crown precision and crown recall (a match is a mask IoU of at
+> least 0.5). Each is pooled over the windows of all six held-out folds (two
+> 512 × 512 windows per chip, crowns of at least 64 px, cloud-centred
+> predictions removed). Circles mark each run's epoch selected by pooled
+> mAP@50 (12 for Mask R-CNN, 40, the last epoch trained, for both DINOv3
+> runs). The right panel gives mAP@50 at that epoch, by the number of days
+> between a held-out chip's Planet acquisition and the nearest training
+> chip's acquisition.
 
 `crown_species_timeseries.png`:
 
