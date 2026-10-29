@@ -481,7 +481,10 @@ TOA per-image stretch would have absorbed it.
   that chip sampling resolves: IoU 0.356 → 0.368 (95 % +0.004 to +0.020) and
   precision +0.024. The 12 borrowed-offset chips lose recall, which cancels
   most of it, so full coverage would add only about 0.003 to the pooled IoU
-  gain.
+  gain. (2026-10-28) Most of the IoU and precision gain is also a by-product
+  of the calibrated run emitting fewer detections at the same epoch. At
+  matched detection counts, and averaged over two seeds per arm, calibration
+  changes precision and recall by at most 0.003 and IoU by about +0.005.
 - The TOA model's per-chip skill does not depend on the scene's radiometric
   state: haze, offset size and saturation all have |ρ| ≤ 0.13. It tracks crown
   contrast-to-noise, which a per-scene linear correction does not change.
@@ -497,15 +500,27 @@ TOA per-image stretch would have absorbed it.
   most 0.007. Borrowed offsets carry about that much error. The training
   ColorJitter is multiplicative. It covers an offset of that size on the TOA
   input, whose content sits near the top of the per-image stretch, but not on
-  the fixed-stretch input, where clear forest sits near 0.3. Offset
-  augmentation in training (`--offset-jitter`) is the fix being tested.
-- (2026-10-27) The training ColorJitter was doing part of calibration's job.
-  Without it, the TOA run loses more `map_50` than the calibrated run (0.024
-  vs 0.009 on average from epoch 12), and calibration then gains up to 0.019.
-  A second TOA seed moves pooled `map_50` and IoU by up to 0.022, so
-  calibration's `map_50` change (−0.008 to +0.007) is inside training noise.
-  Its IoU and precision gain is consistent across epochs (IoU +0.009 to
-  +0.026).
+  the fixed-stretch input, where clear forest sits near 0.3.
+- (2026-10-28) Offset augmentation in training (`--offset-jitter 1`: a random
+  offset of k SDs, with k ~ N(0, 1), added to each training sample) largely
+  fixes the missed crowns.
+  - A 1 SD test-time offset then costs 0.035 / 0.011 in `map_50` instead of
+    0.152 / 0.068, and recall barely moves.
+  - The run has the highest CV `map_50` of any run from epoch 8 on, and the
+    best recall at matched detection counts.
+  - Recall on the 12 borrowed-offset chips recovers (0.41, against 0.30 and
+    0.35 for the two calibrated seeds).
+  - A negative offset still roughly doubles its detections, so its IoU and
+    precision fall about as much as before.
+  - The test that decides it is an apply run against the drone labels
+    ([planet_temporal_generalization.md](planet_temporal_generalization.md#offset-augmentation-2026-10-28)).
+- (2026-10-28, two seeds per arm) The training ColorJitter helps both arms.
+  - Without it, `map_50` from epoch 12 on falls by 0.021 for TOA and 0.014
+    for calibrated, on average. The first seed alone showed 0.024 against
+    0.009, which suggested jitter stood in for calibration. The second seed
+    shows no difference.
+  - Calibration's `map_50` change, −0.005 to +0.006, is inside training
+    noise. A second seed moves pooled `map_50` and IoU by up to 0.022.
 
 ### Figures (`figs/planet_calibration/`, continued)
 

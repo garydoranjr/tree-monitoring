@@ -682,25 +682,34 @@ Candidate explanations for the null temporal-CV result, tested cheapest first:
 | H9 | The calibrated chips (from the SR product) are shifted or blurred relative to the TOA chips the labels were coregistered to | Chip-pair shift and sharpness |
 | H10 | ImageNet normalization and hyperparameters were set on TOA inputs | Conditional retrain |
 
-Where they stand (2026-10-27; details in the subsections below):
+Where they stand (2026-10-28; details in the subsections below):
 
-- **Supported: H4, H6 and H1.** The TOA model is nearly blind to scene-level
-  offsets (H4). Much of its skill is memory of the same crowns (H6). Without
-  training ColorJitter, the TOA run loses more `map_50` than the calibrated
-  run, so jitter was doing part of calibration's job (H1).
-- **Measured: H8.** A second TOA seed moves pooled `map_50` and IoU by up to
-  0.022 at epoch 12, and by 0.001–0.017 at the other epochs from 8 on. That is
-  larger than calibration's `map_50` change. Calibration's IoU and precision
-  gain is consistent across epochs, so it is probably real but small.
+- **Supported: H4, H6.** The TOA model is nearly blind to scene-level
+  offsets (H4). Much of its skill is memory of the same crowns (H6).
+- **Measured: H8.** Every arm now has two seeds. They differ by up to 0.022
+  in pooled `map_50` and IoU at a single epoch. Calibration's `map_50` change
+  is inside that spread. Its IoU and precision gain at equal epochs is mostly
+  a by-product of emitting fewer detections. At matched detection counts,
+  calibrated and TOA runs agree to within 0.003 in precision and recall, and
+  to +0.005 in IoU ([below](#comparing-runs-at-matched-detection-counts)).
+- **Partly supported: H1, H2, H5.**
+  - H1: jitter helps both arms. It helps TOA slightly more, by about one seed
+    spread, so the first seed's clear difference was mostly noise.
+  - H2: borrowed-offset chips lose skill. The calibrated model loses about
+    17 times as much pooled IoU from an offset error as the TOA model, so any
+    offset left after calibration costs it skill directly.
+  - H5, H7: skill follows crown contrast and label content, not the scene's
+    radiometric state.
 - **Not supported: H3, H9.** A frozen DINOv3 backbone is far behind in
   `map_50`, and satellite pretraining does worse than web pretraining. The
   calibrated chips match the TOA chips geometrically.
-- **Partly supported: H2, H5.** Borrowed-offset chips lose skill. The
-  calibrated model loses about 17 times as much pooled IoU from an offset
-  error as the TOA model, so any offset left after calibration costs it skill
-  directly. Skill follows crown contrast and label content, not the scene's
-  radiometric state (H5, H7).
 - **Untested: H10.**
+- **Offset augmentation helps.** Training the calibrated model with random
+  offsets of about the size of calibration error (`--offset-jitter 1`) gives
+  the highest pooled `map_50` of any run at every epoch from 8 on. It also
+  gives the best recall at matched detection counts, and it cuts the `map_50`
+  loss from a 1 SD test-time offset by a factor of 4–6
+  ([below](#offset-augmentation-2026-10-28)).
 
 ### CV split by offset source, with a chip bootstrap (H2, H8)
 
@@ -750,6 +759,12 @@ python scripts/compare_temporal_cv.py \
   own, show a real effect. Calibration's IoU gain is positive at every epoch
   from 5 on (+0.009 to +0.026). The seed spread at those epochs is 0.003–0.006,
   except 0.022 at epoch 12. That makes the gain probably real but small.
+- **Most of that gain is fewer detections (2026-10-28).** At epoch 12, the
+  calibrated run emits 17,762 detections and the TOA run 19,930. IoU and
+  precision rise as a run emits fewer
+  ([below](#comparing-runs-at-matched-detection-counts)). Compared at the same
+  detection count and averaged over two seeds per arm, calibration changes
+  precision and recall by at most 0.003, and IoU by about +0.005.
 
 ### Persistence baseline (H6)
 
@@ -998,6 +1013,20 @@ calibrated chips in training (`--offset-jitter`, below), so that the model
 sees errors of the size it meets. A per-image stretch on the calibrated chips
 would not help, because it divides but does not subtract.
 
+**Seven-point grid (2026-10-28).** `scripts/slurm/radiometric_sensitivity.sh`
+re-ran both models on gattaca2 at k = −2, −1, −0.5, 0, 0.5, 1 and 2, with
+`SENS_EPOCH=12`. The results are in `sensitivity_e12.csv` in
+`202610_temporal/` and `202610_temporal_cal/` on Earth03. At k = −1, 0 and +1
+they reproduce the two tables above to four decimals. The full grid is in the
+table in [Offset augmentation](#offset-augmentation-2026-10-28).
+- **The TOA model barely moves even at ±2 SD.** It loses 0.033 / 0.013 in
+  `map_50` and 0.014 / 0.015 in IoU.
+- **The calibrated model collapses.** Its `map_50` falls to 0.010 at −2 SD
+  and 0.006 at +2 SD.
+- **Its loss is asymmetric.** Half an SD costs it 0.017 `map_50` on the
+  negative side and 0.016 on the positive side, but a full SD costs 0.152 and
+  0.068.
+
 ### Augmentation ablation and repeat run (H1, H8)
 
 `train_planet_image_maskrcnn.py --no-color-jitter` turns off the training
@@ -1036,7 +1065,12 @@ python scripts/compare_temporal_cv.py \
   --epoch 12
 ```
 
-The five runs are plotted in `figs/planet_temporal/temporal_cv_jitter_seed.png`
+Seed-1 repeats of the other three arms finished on 2026-10-28:
+`config/temporal_cv_20261012_{cal,nojit,cal_nojit}_seed1.sh`, with output in
+`202610_temporal_{cal,nojit,cal_nojit}_seed1/` on Earth03. Every arm now has
+two seeds. These repeats are in the tables below, but not in the figure.
+
+The five first runs are plotted in `figs/planet_temporal/temporal_cv_jitter_seed.png`
 (the same command with all five `--run`s, `--style toa=#2a78d6
 --style seed1=#2a78d6:dotted --style nojit=#2a78d6:dashed --style cal=#1baf7a
 --style cal_nojit=#1baf7a:dashed --plot ...`). Pooled held-out `map_50` by
@@ -1047,8 +1081,11 @@ epoch (the selection metric):
 | TOA | 0.269 | 0.303 | 0.335 | **0.354** | 0.337 | 0.340 | 0.336 | 0.354 (e12) |
 | TOA, seed 1 | 0.283 | 0.309 | 0.333 | 0.332 | **0.354** | 0.342 | 0.328 | 0.354 (e17) |
 | TOA, no jitter | 0.299 | 0.301 | **0.329** | 0.320 | 0.319 | 0.315 | 0.317 | 0.329 (e8) |
+| TOA, no jitter, seed 1 | 0.279 | 0.308 | 0.328 | 0.318 | **0.330** | 0.326 | 0.312 | 0.330 (e17) |
 | Calibrated | 0.308 | 0.330 | 0.340 | **0.346** | 0.344 | 0.335 | 0.336 | 0.346 (e12) |
+| Calibrated, seed 1 | 0.297 | 0.326 | 0.333 | **0.353** | 0.340 | 0.338 | 0.331 | 0.353 (e12) |
 | Calibrated, no jitter | 0.303 | 0.316 | 0.329 | 0.335 | **0.338** | 0.331 | 0.321 | 0.338 (e17) |
+| Calibrated, no jitter, seed 1 | 0.307 | 0.313 | 0.328 | **0.331** | 0.320 | 0.321 | 0.313 | 0.331 (e12) |
 
 Pooled IoU and crown recall:
 
@@ -1057,8 +1094,11 @@ Pooled IoU and crown recall:
 | TOA | 0.352 | 0.381 | 0.421 | 0.477 | 0.450 | 0.417 |
 | TOA, seed 1 | 0.330 | 0.387 | 0.416 | 0.458 | 0.451 | 0.406 |
 | TOA, no jitter | 0.349 | 0.388 | 0.410 | 0.432 | 0.419 | 0.382 |
+| TOA, no jitter, seed 1 | 0.350 | 0.379 | 0.413 | 0.434 | 0.435 | 0.379 |
 | Calibrated | 0.361 | 0.397 | 0.431 | 0.462 | 0.445 | 0.408 |
+| Calibrated, seed 1 | 0.350 | 0.397 | 0.424 | 0.472 | 0.440 | 0.398 |
 | Calibrated, no jitter | 0.373 | 0.404 | 0.419 | 0.448 | 0.428 | 0.380 |
+| Calibrated, no jitter, seed 1 | 0.369 | 0.391 | 0.417 | 0.442 | 0.420 | 0.374 |
 
 **Run-to-run spread (H8).** The two TOA seeds reach the same peak `map_50`
 (0.354), but at different epochs. Epoch 12 happened to be a good checkpoint for
@@ -1068,29 +1108,37 @@ At the other epochs from 8 on they differ by 0.001–0.017 in `map_50` and
 - **The chip bootstrap does not cover this.** Its interval for seed 1 minus
   TOA at epoch 12 is −0.028 to −0.017 in IoU, so it would call a pure seed
   change significant.
-- **Calibration's `map_50` difference is inside the seed spread.** It ranges
-  from −0.008 to +0.007 from epoch 8 on.
-- **Calibration's IoU and precision gain probably is not.** It is positive at
-  every epoch from 5 on (IoU +0.009 to +0.026, precision +0.020 to +0.056).
+- **The calibrated seeds agree more closely.** From epoch 8 on they differ by
+  0.003–0.007 in `map_50` and 0.000–0.011 in IoU. Both peak at epoch 12
+  (0.346 and 0.353).
+- **Calibration does not change `map_50`.** Averaged over the two seeds per
+  arm, calibrated minus TOA is −0.005 to +0.006 from epoch 8 on.
+- **At equal epochs, calibration raises IoU and precision.** Averaged over
+  seeds, IoU rises by +0.009 to +0.023 and precision by +0.018 to +0.054, and
+  19 of the 20 cross-seed pairs are positive. But the calibrated runs emit
+  fewer detections at the same epoch. At matched detection counts, the gain
+  shrinks to +0.005 IoU, and precision and recall differ by at most 0.003
+  ([below](#comparing-runs-at-matched-detection-counts)).
 - **The selected epoch is itself noisy.** The epoch-12 choice for the final
-  model rests on a peak that a second seed puts at epoch 17.
+  model rests on a peak that a second TOA seed puts at epoch 17.
 
-**Jitter ablation (H1).** Turning off ColorJitter costs the TOA run more than
-the calibrated run.
-- **`map_50` falls further for TOA.** From epoch 12 on, the TOA run loses
-  0.018–0.034 (mean 0.024) and the calibrated run 0.004–0.015 (mean 0.009). The
-  seed spread over the same epochs averages 0.012.
-- **So does recall.** The TOA run loses 0.031–0.046 and the calibrated run
-  0.014–0.028. In both runs precision rises, and IoU changes by no more than the
-  seed spread.
-- **Calibration's `map_50` gain appears only without jitter.** With jitter,
-  calibrated minus TOA is −0.008 to +0.007 from epoch 8 on. Without jitter, it
-  is 0.000 to +0.019 (peak 0.338 vs 0.329).
-- **So the jitter was standing in for part of what calibration does (H1).**
-  Jitter does more than calibration, though. The best run of all is still
-  TOA with jitter, and dropping jitter hurts even the calibrated run.
-- **Caveat.** This rests on one seed per arm. The two effects (0.024 and 0.009)
-  differ by about one seed spread.
+**Jitter ablation (H1).** With one seed, turning off ColorJitter cost the TOA
+run more than the calibrated run: 0.024 against 0.009 in mean `map_50` from
+epoch 12 on. The second seed does not repeat this.
+- **With seed 1, the two arms lose the same.** Over the same epochs, TOA loses
+  0.015–0.024 (mean 0.018) and calibrated 0.017–0.022 (mean 0.019).
+- **Averaged over seeds, TOA loses slightly more.** Its `map_50` falls by
+  0.018–0.024 (mean 0.021), against 0.011–0.016 (mean 0.014) for calibrated.
+- **The same holds for recall at matched detection counts.** TOA loses
+  0.020–0.026 and calibrated 0.012–0.016. Precision and IoU change by no more
+  than the seed spread.
+- **Without jitter, calibration still adds little.** Averaged over seeds,
+  calibrated minus TOA `map_50` is 0.000 to +0.014 (mean +0.005).
+- **So jitter helps both arms (H1, weak form).** It does slightly more for
+  TOA, but the difference is about one seed spread. The first seed's clear gap
+  was mostly noise. The TOA arm's offset invariance still owes much to the
+  jitter (see [the offset test](#test-time-offset-sensitivity-h4-h1)). But
+  dropping the jitter shows no sign that it was standing in for calibration.
 
 ### DINOv3 backbone (H3)
 
@@ -1233,19 +1281,175 @@ rising slowly there (0.221 → 0.235 and 0.246 → 0.260 from epoch 25).
   empty ROI batch (a window with no detections), but this is unconfirmed. Use
   CPU or CUDA for Mask R-CNN evaluation.
 
-### Offset augmentation and a calibrated seed repeat (pending on gattaca2)
+### Comparing runs at matched detection counts
+
+`eval_temporal_cv.py` keeps every detection the model returns, down to its
+own score floor of 0.05. The 0.5 in its settings binarizes masks; it is not a
+score cutoff. Pooled IoU and crown precision and recall therefore depend on
+how many detections a checkpoint emits, and that number falls steadily with
+training epoch. For the TOA run it falls from 44,932 at epoch 5 to 7,687 at
+epoch 40, against 10,107 labelled crowns. Over the same range, precision rises
+from 0.11 to 0.55, IoU from 0.23 to 0.42, and recall falls. A run that emits
+fewer detections at a given epoch thus looks better on IoU and precision,
+without ranking crowns any better. `map_50` ranks detections by score, so it
+does not have this problem.
+
+`scripts/plot_temporal_cv_detections.py` compares runs at the same detection
+count instead. It pools each run's `temporal_cv_windows.csv` per epoch, plots
+IoU, precision and recall against the number of detections, and interpolates
+each metric between epochs (linearly in log detections) at common counts:
+
+```bash
+F=/Volumes/Earth03/flower; W=temporal_cv_windows.csv
+python scripts/plot_temporal_cv_detections.py \
+  --windows toa=$F/202610_temporal/$W --windows seed1=$F/202610_temporal_seed1/$W \
+  --windows cal=$F/202610_temporal_cal/$W --windows cal_seed1=$F/202610_temporal_cal_seed1/$W \
+  --windows cal_offjit05=$F/202610_temporal_cal_offjit05/$W \
+  --windows cal_offjit1=$F/202610_temporal_cal_offjit1/$W \
+  --style toa=#2a78d6 --style seed1=#2a78d6:dotted \
+  --style cal=#1baf7a --style cal_seed1=#1baf7a:dotted \
+  --style cal_offjit05=#eb6834 --style cal_offjit1=#8a5bd6 \
+  --plot figs/planet_temporal/temporal_cv_detections.png
+```
+
+The TOA and calibrated rows below are means over the two seeds of each arm.
+The seeds differ by at most 0.007 at these counts, except TOA at 20,000
+(0.013 IoU, 0.021 recall). Blank cells lie outside the run's range of
+detection counts.
+
+| Run | IoU at 20k / 15k / 12k / 10k | Precision | Recall |
+|---|---|---|---|
+| TOA | 0.345 / 0.374 / 0.395 / 0.408 | 0.238 / 0.310 / 0.375 / 0.438 | 0.467 / 0.455 / 0.443 / 0.431 |
+| TOA, no jitter | 0.333 / 0.367 / 0.389 / 0.399 | 0.229 / 0.293 / 0.359 / 0.420 | 0.441 / 0.431 / 0.422 / 0.411 |
+| Calibrated | 0.349 / 0.378 / 0.400 / 0.413 | 0.239 / 0.310 / 0.372 / 0.436 | 0.469 / 0.453 / 0.440 / 0.428 |
+| Calibrated, no jitter | 0.344 / 0.376 / 0.394 / 0.405 | 0.236 / 0.299 / 0.362 / 0.424 | 0.453 / 0.441 / 0.426 / 0.415 |
+| Calibrated, offset jitter 0.5 | 0.347 / 0.381 / 0.408 / 0.422 | 0.245 / 0.318 / 0.391 / 0.455 | 0.480 / 0.470 / 0.461 / 0.448 |
+| Calibrated, offset jitter 1 | 0.344 / 0.384 / 0.407 / — | 0.250 / 0.323 / 0.395 / — | 0.486 / 0.476 / 0.466 / — |
+
+- **Precision and IoU follow detection count across every run.** In the
+  figure, the six runs fall on nearly one curve. Most of the IoU and precision
+  differences between runs at equal epochs come from how far each has thinned
+  its detections.
+- **Calibration matches TOA.** It changes precision and recall by at most
+  0.003, and adds +0.004 to +0.005 IoU, which may reflect slightly better mask
+  shapes.
+- **Jitter is worth recall.** Without it, recall is 0.020–0.026 lower for TOA
+  and 0.012–0.016 lower for calibrated.
+- **Offset jitter gives the most recall.** Both offset-jitter runs beat the
+  calibrated mean by 0.011–0.026 in recall and 0.006–0.023 in precision.
+  This is the only difference here that clearly exceeds the seed spread.
+
+### Offset augmentation (2026-10-28)
 
 `train_planet_image_maskrcnn.py --offset-jitter S` (with `--fixed-stretch`)
-adds k times the across-scene offset SD to every band of each training
-sample, with k ~ N(0, S) drawn per sample and shared by the bands. Its purpose
-is to remove the calibrated model's dependence on the offset being right.
-`config/temporal_cv_20261012_cal_offjit{1,05}.sh` run it at S = 1 and 0.5.
-`config/temporal_cv_20261012_cal_seed1.sh` repeats the calibrated run with
-`--seed 1` (H8 for that arm). `scripts/slurm/radiometric_sensitivity.sh`
-re-runs the offset test from −2 to +2 SD for these runs and for the TOA and
-calibrated references. The commands, expected costs and how to read the
-results are in
-[handoff_gattaca2_offset_jitter.md](handoff_gattaca2_offset_jitter.md).
+adds k times the across-scene SD of the fitted offsets (0.0158 / 0.0149 /
+0.0158 / 0.0355 in blue / green / red / NIR reflectance) to every band of each
+training sample. k ~ N(0, S) is drawn per sample and shared by the bands. It
+is stored in `params` as `offset_jitter` and `offset_sd`. The runs are
+`config/temporal_cv_20261012_cal_offjit1.sh` (S = 1) and
+`config/temporal_cv_20261012_cal_offjit05.sh` (S = 0.5), each the calibrated
+config plus the flag. After its eval, each run's
+`scripts/slurm/radiometric_sensitivity.sh` job re-ran the offset test at its
+own best epoch. Results are in `202610_temporal_cal_offjit{1,05}/` on Earth03.
+
+Pooled held-out `map_50` by epoch:
+
+| Run | 3 | 5 | 8 | 12 | 17 | 25 | 40 | Peak |
+|---|---|---|---|---|---|---|---|---|
+| Offset jitter 0.5 | 0.299 | 0.339 | 0.347 | **0.356** | 0.355 | 0.353 | 0.349 | 0.356 (e12) |
+| Offset jitter 1 | 0.286 | 0.313 | 0.355 | 0.355 | **0.361** | 0.357 | 0.357 | 0.361 (e17) |
+| Best of the eight other Mask R-CNN runs | 0.308 | 0.330 | 0.340 | 0.354 | 0.354 | 0.342 | 0.336 | 0.354 |
+
+**CV skill.** Both offset-jitter runs reach a higher pooled `map_50` than any
+of the eight other Mask R-CNN runs at every epoch from 8 on. The margin is
++0.001 to +0.020 for S = 1, with the largest gains at late epochs, where the
+other runs decline. Their peak is 0.007 above the best other peak. At equal
+epochs they emit more detections, for example 29,762 at epoch 12 for S = 1
+against 17,762 for the calibrated run. So their raw IoU and precision look
+worse: IoU 0.297 at epoch 12 against 0.361. At matched detection counts they
+have the best recall and precision of all runs (table above).
+
+**Test-time offset response.** Each run's own best epoch is used: epoch 12
+for TOA, calibrated and S = 0.5, and epoch 17 for S = 1. These are the
+pooled values. Detections are derived as recall × 10,107 crowns / precision.
+
+| Model | Metric | −2 SD | −1 | −0.5 | 0 | +0.5 | +1 | +2 SD |
+|---|---|---|---|---|---|---|---|---|
+| TOA | `map_50` | 0.321 | 0.352 | 0.356 | 0.354 | 0.353 | 0.349 | 0.341 |
+| Calibrated | `map_50` | 0.010 | 0.194 | 0.329 | 0.346 | 0.330 | 0.278 | 0.006 |
+| Offset jitter 0.5 | `map_50` | 0.031 | 0.297 | 0.350 | 0.356 | 0.356 | 0.332 | 0.031 |
+| Offset jitter 1 | `map_50` | 0.070 | 0.326 | 0.354 | 0.361 | 0.356 | 0.351 | 0.102 |
+| TOA | IoU | 0.338 | 0.351 | 0.353 | 0.352 | 0.349 | 0.345 | 0.337 |
+| Calibrated | IoU | 0.040 | 0.239 | 0.354 | 0.361 | 0.345 | 0.313 | 0.055 |
+| Offset jitter 0.5 | IoU | 0.090 | 0.235 | 0.318 | 0.339 | 0.326 | 0.302 | 0.089 |
+| Offset jitter 1 | IoU | 0.084 | 0.245 | 0.344 | 0.359 | 0.348 | 0.319 | 0.122 |
+| TOA | Recall | 0.432 | 0.474 | 0.476 | 0.478 | 0.476 | 0.475 | 0.465 |
+| Calibrated | Recall | 0.013 | 0.274 | 0.438 | 0.462 | 0.451 | 0.410 | 0.038 |
+| Offset jitter 0.5 | Recall | 0.068 | 0.424 | 0.482 | 0.482 | 0.484 | 0.468 | 0.153 |
+| Offset jitter 1 | Recall | 0.158 | 0.458 | 0.481 | 0.482 | 0.481 | 0.478 | 0.271 |
+| TOA | Detections | 17,309 | 19,048 | 19,591 | 19,930 | 20,199 | 20,635 | 21,289 |
+| Calibrated | Detections | 9,547 | 16,675 | 16,904 | 17,762 | 18,952 | 20,377 | 28,756 |
+| Offset jitter 0.5 | Detections | 21,423 | 34,210 | 24,166 | 21,391 | 23,014 | 25,682 | 61,779 |
+| Offset jitter 1 | Detections | 59,536 | 32,702 | 19,549 | 17,691 | 18,770 | 21,604 | 58,799 |
+
+```bash
+F=/Volumes/Earth03/flower
+python scripts/plot_radiometric_sensitivity.py \
+  --run TOA=$F/202610_temporal/sensitivity_e12.csv \
+  --run calibrated=$F/202610_temporal_cal/sensitivity_e12.csv \
+  --run "offset jitter 0.5=$F/202610_temporal_cal_offjit05/sensitivity_e12.csv" \
+  --run "offset jitter 1=$F/202610_temporal_cal_offjit1/sensitivity_e17.csv" \
+  --bar-k=-1,1 --plot figs/planet_temporal/radiometric_sensitivity_offjit.png
+```
+
+- **Offset jitter stops the model losing crowns at ±1 SD.** With S = 1, a
+  1 SD offset costs 0.035 (−1 SD) and 0.011 (+1 SD) in `map_50`, against
+  0.152 and 0.068 for the calibrated model. Recall falls by only 0.023 and
+  0.004, against 0.188 and 0.051. S = 0.5 sits in between. At −1 SD, every
+  fold and every distance bin loses `map_50`: −0.030 to −0.047 per fold for
+  S = 1, against −0.091 to −0.206 for the calibrated model.
+- **It does not stop the IoU loss, because a negative offset adds false
+  detections.**
+  - At −1 SD the S = 1 model's IoU drops from 0.359 to 0.245, about as much as
+    the calibrated model's (0.361 to 0.239). Its precision halves (0.275 to
+    0.142).
+  - The failure modes differ. The calibrated model emits fewer detections and
+    misses crowns. The S = 1 model nearly doubles its detections (17,691 to
+    32,702) and keeps its crowns.
+  - The same model's own epoch 8–12 checkpoints emit about as many
+    detections, and they reach an IoU of about 0.285. So roughly two-thirds of
+    the IoU drop goes with the extra detections. Most of those detections are
+    probably low-scoring, since `map_50` hardly moves. A score cutoff, as in
+    the crown comparison with the drone labels (score ≥ 0.5), would remove
+    them, but this is not tested.
+- **Neither size closes the gap to TOA at ±2 SD.** Every calibrated model
+  collapses there (`map_50` at most 0.10). The TOA model keeps 0.32–0.34.
+  Borrowed offsets have an RMSE of about 1 SD, so errors of 2 SD should be
+  rare, but some will occur.
+- **Borrowed-offset chips recover their recall.** The 12 borrowed-offset CV
+  chips reach a recall of 0.411 (S = 1) and 0.382 (S = 0.5) at epoch 12,
+  against 0.298 and 0.354 for the two calibrated seeds and 0.370 and 0.302 for
+  the two TOA seeds. With only 12 chips this is noisy: the calibrated seeds
+  alone differ by 0.056. On the 10 same-instrument chips, the paired chip
+  bootstrap of S = 1 minus calibrated recall at epoch 12 is +0.055 to +0.172.
+
+**Verdict.**
+- **The handoff's criteria are partly met.**
+  - Not met: the IoU loss at ±1 SD stays at 0.11 / 0.04, not the ≤ 0.02 asked
+    for.
+  - Met: CV skill improves, rather than staying within the seed spread.
+  - Met: borrowed-chip recall recovers.
+- **S = 1 is better than S = 0.5** on nearly every count. Its best epoch is
+  17, and its detections thin more slowly with training.
+- **The deciding test is the apply run against the drone labels.** It has 54
+  borrowed-offset scenes against 12 chips in the CV, and it uses a score
+  cutoff of 0.5. Train the final model with
+  `config/temporal_cv_20261012_cal_offjit1.sh` at epoch 17, with the apply
+  settings restored from `temporal_cv_20261012_cal.sh` and a new `APPLY_OUT`.
+  Then repeat [the calibrated apply run](#calibrated-apply-run-against-the-drone-labels).
+- **Worth adding to the sensitivity test:** the detection count and a
+  score-thresholded IoU, so that false-detection growth can be told apart
+  from lost crowns without deriving them.
 
 ## Caveats
 
@@ -1253,6 +1457,12 @@ results are in
   held-out score that is reported, so that score is mildly optimistic. With
   only nine grid epochs and a broad optimum the bias should be small, but the
   per-bin numbers carry it too.
+- **IoU and crown precision and recall depend on detection count.** The CV
+  evaluation keeps every detection down to the model's score floor of 0.05,
+  so these three metrics change with how many detections a checkpoint emits,
+  not only with how well it ranks them. Compare runs on `map_50`, or at
+  matched detection counts (`plot_temporal_cv_detections.py`), and not on raw
+  IoU or precision at equal epochs.
 - **The >30-day bin is outside the envelope.** The 22 chips more than 30 days
   from training data are mostly the sparse 2021 flights. Report them, but do
   not use them to judge interpolation.
@@ -1445,10 +1655,58 @@ results are in
 > and labelled crown masks over clear pixels, crown precision and crown recall
 > (a match is a mask IoU of at least 0.5). Each is pooled over both 512 × 512
 > windows of the held-out chips of all six folds (crowns of at least 64 px,
-> cloud-centred predictions removed, score threshold 0.5). The right panel
+> cloud-centred predictions removed, masks binarized at 0.5, every detection
+> scoring 0.05 or more kept). The right panel
 > gives the change in pooled binary IoU from k = 0 at k = −1 (solid) and
 > k = +1 (hatched), by the number of days between a held-out chip's Planet
 > acquisition and the nearest training chip's acquisition.
+
+`figs/planet_temporal/radiometric_sensitivity_offjit.png`:
+
+> Response of the held-out skill of four Planet Mask R-CNN models to an
+> offset added to every band of the input at test time. The offset is k times
+> the across-scene SD of the fitted Planet–MODIS offsets (blue / green / red /
+> NIR 0.0158 / 0.0149 / 0.0158 / 0.0355 in surface reflectance), with the same
+> sign in every band, and is added before the model's own input stretch. Each
+> model is the checkpoints of the six folds of the blocked temporal
+> cross-validation of `temporal_cv.png` (142 chips of the 20261012 curated
+> set, 2021-01 to 2026-01) at the epoch its pooled mAP@50 selects. The models
+> are: trained on TOA chips with a per-image 0th–99.9th percentile stretch (blue,
+> epoch 12), with the offset converted to radiance counts per chip by the
+> slope of each TOA band against its calibrated copy; trained on
+> MODIS-calibrated surface reflectance with one fixed per-band stretch (green,
+> epoch 12); and the same calibrated model trained with a random offset of k
+> SDs added to each training sample, k drawn from a normal distribution with
+> SD 0.5 (orange, epoch 12) or 1 (violet, epoch 17). The first four panels
+> show, against k, mask mAP at IoU 0.5, binary IoU of the union of predicted
+> and labelled crown masks over clear pixels, crown precision and crown
+> recall (a match is a mask IoU of at least 0.5). Each is pooled over both
+> 512 × 512 windows of the held-out chips of all six folds (crowns of at
+> least 64 px, cloud-centred predictions removed, masks binarized at 0.5,
+> every detection scoring 0.05 or more kept). The right panel gives the
+> change in pooled binary IoU from k = 0 at k = −1 (solid) and k = +1
+> (hatched), by the number of days between a held-out chip's Planet
+> acquisition and the nearest training chip's acquisition.
+
+`figs/planet_temporal/temporal_cv_detections.png`:
+
+> Held-out binary IoU (left, union of predicted and labelled crown masks over
+> clear pixels), crown precision (middle) and crown recall (right; a match is
+> a mask IoU of at least 0.5) of six Planet Mask R-CNN training runs, each
+> against its total number of detections (log scale) over the held-out
+> windows. The data are the blocked temporal cross-validation of
+> `temporal_cv.png` (142 chips of the 20261012 curated set, 2021-01 to
+> 2026-01, 6 folds, 10,107 labelled crowns). Each marker is one training epoch
+> (5, 8, 12, 17, 25 and 40, detections falling as training proceeds). Each
+> metric is pooled over both 512 × 512 windows of the held-out chips of all
+> six folds (crowns of at least 64 px, cloud-centred predictions removed,
+> masks binarized at 0.5, every detection scoring 0.05 or more kept). The
+> runs are: TOA chips with a per-image 0th–99.9th percentile stretch, seeds 0
+> (blue solid) and 1 (blue dotted); MODIS-calibrated surface reflectance with
+> one fixed per-band stretch, seeds 0 (green solid) and 1 (green dotted); and
+> the calibrated run trained with a random per-sample offset of k SDs of the
+> fitted Planet–MODIS offsets, k drawn from a normal distribution with SD 0.5
+> (orange) or 1 (violet).
 
 `crown_species_timeseries.png`:
 
