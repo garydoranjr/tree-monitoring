@@ -1067,7 +1067,9 @@ python scripts/compare_temporal_cv.py \
 
 Seed-1 repeats of the other three arms finished on 2026-10-28:
 `config/temporal_cv_20261012_{cal,nojit,cal_nojit}_seed1.sh`, with output in
-`202610_temporal_{cal,nojit,cal_nojit}_seed1/` on Earth03. Every arm now has
+`202610_temporal_{cal,nojit,cal_nojit}_seed1/` on Earth03. They were
+submitted with the loop above, using `for C in cal_seed1 nojit_seed1
+cal_nojit_seed1`. Every arm now has
 two seeds. These repeats are in the tables below, but not in the figure.
 
 The five first runs are plotted in `figs/planet_temporal/temporal_cv_jitter_seed.png`
@@ -1351,6 +1353,31 @@ is stored in `params` as `offset_jitter` and `offset_sd`. The runs are
 config plus the flag. After its eval, each run's
 `scripts/slurm/radiometric_sensitivity.sh` job re-ran the offset test at its
 own best epoch. Results are in `202610_temporal_cal_offjit{1,05}/` on Earth03.
+Each config exports its settings into the shell that sources it, so use a
+fresh shell. `radiometric_sensitivity.sh` takes its settings from the sourced
+config. It uses the run's `best_epoch` unless `SENS_EPOCH` is set, and the
+grid `SENS_K` (default −2, −1, −0.5, 0, 0.5, 1, 2). It writes
+`$TEMPORAL_RUNS/sensitivity_e<epoch>.csv`. TOA runs also need the
+calibrated copy of the chips in `SENS_CAL_CHIPS`, to convert the offsets.
+
+```bash
+for C in cal_offjit1 cal_offjit05; do
+  source config/temporal_cv_20261012_$C.sh
+  CV=$(sbatch --parsable -A tree-monitoring scripts/slurm/planet_temporal_cv.sh)
+  EV=$(sbatch --parsable -A tree-monitoring --dependency=afterok:$CV scripts/slurm/planet_temporal_eval.sh)
+  sbatch -A tree-monitoring --dependency=afterok:$EV scripts/slurm/radiometric_sensitivity.sh
+done
+# The reference models on the same grid, from their epoch-12 checkpoints:
+( source config/temporal_cv_20261012_cal.sh
+  SENS_EPOCH=12 sbatch -A tree-monitoring --export=ALL scripts/slurm/radiometric_sensitivity.sh )
+( source config/temporal_cv_20261012.sh
+  SENS_EPOCH=12 SENS_CAL_CHIPS=/scratch/tree-monitoring/20261012_full_label_extended2_mkl_x4_coreg_4band_cal_curated \
+    sbatch -A tree-monitoring --export=ALL scripts/slurm/radiometric_sensitivity.sh )
+```
+
+Each run took about 4 GPU-hours: six folds of 35–40 min, plus a 25-min eval.
+The results were copied back with `rsync` of `temporal_cv*` and
+`sensitivity_*` from `gattaca2:Documents/tree-flowering/202610_temporal_<run>/`.
 
 Pooled held-out `map_50` by epoch:
 
@@ -1443,10 +1470,13 @@ python scripts/plot_radiometric_sensitivity.py \
   17, and its detections thin more slowly with training.
 - **The deciding test is the apply run against the drone labels.** It has 54
   borrowed-offset scenes against 12 chips in the CV, and it uses a score
-  cutoff of 0.5. Train the final model with
-  `config/temporal_cv_20261012_cal_offjit1.sh` at epoch 17, with the apply
-  settings restored from `temporal_cv_20261012_cal.sh` and a new `APPLY_OUT`.
-  Then repeat [the calibrated apply run](#calibrated-apply-run-against-the-drone-labels).
+  cutoff of 0.5. It is pending on gattaca2. The final model uses
+  `config/temporal_cv_20261012_cal_offjit1.sh` at epoch 17. That config keeps
+  the calibrated apply settings and writes to
+  `202610_temporal_apply_cal_offjit1/`. Its result is compared with
+  [the calibrated apply run](#calibrated-apply-run-against-the-drone-labels).
+  The commands and how to read the result are in
+  [handoff_gattaca2_offjit_apply.md](handoff_gattaca2_offjit_apply.md).
 - **Worth adding to the sensitivity test:** the detection count and a
   score-thresholded IoU, so that false-detection growth can be told apart
   from lost crowns without deriving them.

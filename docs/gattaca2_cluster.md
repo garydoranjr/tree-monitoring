@@ -86,5 +86,5 @@ shows 1.4 GB + 0.4 GB here against 1.2 GB + 0.26 GB on the Mac.
 
 ## Data transfer
 
-Globus to gattaca2 has had outages; see `globus-gattaca2-sync-handoff.md` in the repo root (not committed).
+Globus to gattaca2 has had outages.
 `rsync` from the Mac (`gattaca2:/scratch/tree-monitoring/...`) works.

@@ -5,11 +5,13 @@
 # the calibrated model's sensitivity to offset errors (0.12 pooled IoU at
 # -1 SD) can be trained away. Same chips, folds, epochs and settings otherwise.
 # See docs/planet_temporal_generalization.md ("Test-time offset
-# sensitivity"). Source this, then sbatch planet_temporal_cv.sh and
-# planet_temporal_eval.sh from the repo root. CV only: the apply settings are
-# unset so that an apply job cannot overwrite the parent run's output.
+# sensitivity" and "Offset augmentation"). Source this, then sbatch
+# planet_temporal_cv.sh and planet_temporal_eval.sh from the repo root.
+#
+# Apply: the parent's settings (calibrated scenes, the TOA coregistration),
+# with this run's own APPLY_OUT so that the parent's output is untouched.
 
 source config/temporal_cv_20261012_cal.sh
 export TEMPORAL_RUNS=$HOME/Documents/tree-flowering/202610_temporal_cal_offjit1
 export TEMPORAL_TRAIN_ARGS="$TEMPORAL_TRAIN_ARGS --offset-jitter 1.0"
-unset APPLY_PLANETDIR APPLY_OCMDIR APPLY_COREG_JSON APPLY_CROWNS APPLY_OUT
+export APPLY_OUT=$F/202610_temporal_apply_cal_offjit1

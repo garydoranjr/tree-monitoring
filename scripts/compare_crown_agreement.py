@@ -26,6 +26,11 @@ Writes, with the given output prefix:
 - <prefix>.png/.pdf: precision, recall and event share by species for both
   runs, one row of panels per stratum.
 
+Any two apply runs can be compared (e.g. calibrated against an
+offset-jitter run): --toa-dir is always the first run and --cal-dir the
+second, and the column suffixes stay _toa and _cal. --toa-label, --cal-label,
+--toa-color and --cal-color set the plot legend and colours.
+
 It prints the same tables, the all-species results by year and by whether
 the scene's calibration offset was fitted or borrowed (--offsets), Cohen's kappa
 between the two runs' calls, and scene-bootstrap 95 % intervals of the
@@ -138,7 +143,7 @@ def kappa(a, b):
     return (po - pe) / (1 - pe)
 
 
-def plot(tables, prefix):
+def plot(tables, prefix, labels, colors):
     cols = (('precision', 'precision'), ('recall', 'recall'),
             ('share', 'share of crown-scenes called an event'))
     n = len(next(iter(tables.values())))
@@ -156,8 +161,8 @@ def plot(tables, prefix):
             ax.hlines(y, np.fmin(*vals), np.fmax(*vals), color=GRID, lw=2,
                       zorder=2)
             for run, v in zip(RUNS, vals):
-                ax.scatter(v, y, s=40, color=COLORS[run], edgecolor='white',
-                           lw=1, label=LABELS[run], zorder=3)
+                ax.scatter(v, y, s=40, color=colors[run], edgecolor='white',
+                           lw=1, label=labels[run], zorder=3)
             ax.set_xlim(0, 1 if col != 'share' else None)
             if col == 'share':
                 ax.set_xlim(left=0)
@@ -209,8 +214,18 @@ def plot(tables, prefix):
               help='Per-scene calibration offsets (fit or borrowed).')
 @click.option('--n-boot', default=2000, show_default=True,
               help='Scene-bootstrap resamples for the difference intervals.')
+@click.option('--toa-label', default=LABELS['toa'], show_default=True,
+              help='Legend label of the --toa-dir run.')
+@click.option('--cal-label', default=LABELS['cal'], show_default=True,
+              help='Legend label of the --cal-dir run.')
+@click.option('--toa-color', default=COLORS['toa'], show_default=True,
+              help='Colour of the --toa-dir run.')
+@click.option('--cal-color', default=COLORS['cal'], show_default=True,
+              help="Colour of the --cal-dir run, e.g. '#8a5bd6' for an "
+                   'offset-jitter run.')
 def main(outputprefix, toa_dir, cal_dir, nc4s, n_species, pos_frac, min_clear,
-         min_crown_px, match_days, offsets, n_boot):
+         min_crown_px, match_days, offsets, n_boot, toa_label, cal_label,
+         toa_color, cal_color):
     drone = load_drone(nc4s)
     toa, crown_px = load_run(toa_dir, min_clear)
     cal, _ = load_run(cal_dir, min_clear)
@@ -304,7 +319,8 @@ def main(outputprefix, toa_dir, cal_dir, nc4s, n_species, pos_frac, min_clear,
         print('\nPlanet rules:')
         print(rules.round(3).to_string(index=False))
 
-    plot(tables, outputprefix)
+    plot(tables, outputprefix, {'toa': toa_label, 'cal': cal_label},
+         {'toa': toa_color, 'cal': cal_color})
 
 
 if __name__ == '__main__':
