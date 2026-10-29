@@ -29,7 +29,10 @@ BINS = ['0-3', '4-7', '8-14', '15-30', '>30']
 @click.option('--run', 'runs', multiple=True, required=True, metavar='LABEL=CSV',
               help='A radiometric_sensitivity.py CSV, as label=path. Repeatable.')
 @click.option('--plot', type=click.Path(dir_okay=False), required=True)
-def main(runs, plot):
+@click.option('--bar-k', default=None, metavar='K,K,...',
+              help='Offsets to draw in the IoU-change bar panel (default: '
+                   'every nonzero k in the CSVs).')
+def main(runs, plot, bar_k):
     data = {}
     for spec in runs:
         label, path = spec.split('=', 1)
@@ -42,13 +45,15 @@ def main(runs, plot):
         for (label, d), c in zip(data.items(), COLORS):
             s = d[d.group == 'pooled'].sort_values('k')
             ax.plot(s.k, s[m], marker='o', ms=5, lw=2, color=c, label=label)
-        ax.set_xticks(sorted({k for d in data.values() for k in d.k}))
+        ticks = sorted({k for d in data.values() for k in d.k})
+        ax.set_xticks(ticks, [f'{k:g}' for k in ticks], fontsize=8)
         ax.set_xlabel('offset (SD of fitted offsets)', color=INK)
         ax.set_title(name, color=INK, fontsize=10)
     axes[0].legend(frameon=False, fontsize=8)
 
     ax = axes[-1]
-    ks = [k for k in sorted({k for d in data.values() for k in d.k}) if k != 0]
+    ks = ([float(k) for k in bar_k.split(',')] if bar_k else
+          [k for k in sorted({k for d in data.values() for k in d.k}) if k != 0])
     bars = [(label, k) for label in data for k in ks]
     w = 0.8 / len(bars)
     for i, (label, k) in enumerate(bars):
