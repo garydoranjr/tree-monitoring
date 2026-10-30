@@ -254,7 +254,8 @@ def missed_event(outdir, half):
     tile, gap, sep = 1.78, 0.1, 0.45
     left = 0.55
     fig_w = left + (n + 1) * tile + (n - 1) * gap + sep + 0.1
-    bottom, top = 0.5, 0.75
+    # the slide caption lives in phenology_cadence_captions.md, not the image
+    bottom, top = 0.1, 0.75
     fig = plt.figure(figsize=(fig_w, bottom + 2 * tile + 0.25 + top))
 
     def axes(i, row):
@@ -325,11 +326,6 @@ def missed_event(outdir, half):
              rotation=90, va='center', ha='center', fontsize=11)
     fig.text(0.25 / fig_w, (bottom + 0.5 * tile) / fig.get_figheight(), 'drone',
              rotation=90, va='center', ha='center', fontsize=11)
-    sp = ev['species'].split()
-    fig.text((left + (n * tile + (n - 1) * gap) / 2) / fig_w, 0.2 / fig.get_figheight(),
-             f'One $\\it{{{sp[0]}}}$ $\\it{{{sp[1]}}}$ crown (cyan): yellow in Planet on '
-             f'{cols[2]:%d %b %Y}, between drone flights on {drone[0]:%d %b} and {drone[1]:%d %b} '
-             'that both show it without flowers', ha='center', fontsize=9.5)
     save(fig, outdir, 'missed_flowering_example')
 
 
