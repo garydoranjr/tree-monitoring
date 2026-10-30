@@ -33,7 +33,10 @@ for the Mask R-CNN CV; --all-flights adds every other drone flight more than
 --exclude-days from a held-out flight. --fold all trains on every fold.
 --crown-folds N --crown-fold J also withholds the labels of the crowns in
 the J-th of N east-west strips of the plot, to test crowns the model never
-saw labels for.
+saw labels for. --split-x X --test-side east instead withholds every crown
+whose centroid lies east of x = X (or west of it): with X = 626281.5, the
+line at which the Mask R-CNN spatial experiments split their chips into
+training (left) and test (right) windows.
 
 Writes OUTDIR/model.pt, OUTDIR/params.json (including the training flights)
 and OUTDIR/predictions.csv: one row per valid crown observation with
@@ -84,6 +87,13 @@ def flight_folds(folds_csv):
         if out.setdefault(fl, k) != k:
             raise click.ClickException(f'flight {fl.date()} is in two folds')
     return out
+
+
+def crown_centroid_x(series_path):
+    """Centroid x of every crown of a crown_pixel_series.npz, in the crown
+    map's CRS."""
+    build = json.loads(str(np.load(series_path)['build']))
+    return gpd.read_file(build['crowns']).geometry.centroid.x.values
 
 
 class CrownSeries:
@@ -305,6 +315,11 @@ def predict(model, batcher, crowns, device, rng, batch=64):
 @click.option('--crown-folds', default=0, show_default=True,
               help='Number of east-west crown strips (0: no crown hold-out).')
 @click.option('--crown-fold', default=0, show_default=True)
+@click.option('--split-x', default=None, type=float,
+              help='Withhold the crowns on --test-side of this x (m, crown '
+                   'map CRS); 626281.5 is the Mask R-CNN east/west line.')
+@click.option('--test-side', default='east', show_default=True,
+              type=click.Choice(['east', 'west']))
 @click.option('--nc4', 'nc4s', multiple=True, default=NC4S, show_default=True)
 @click.option('--min-pixels', default=2, show_default=True, type=click.IntRange(1),
               help='Minimum clear pixels for a valid crown observation.')
@@ -332,11 +347,13 @@ def predict(model, batcher, crowns, device, rng, batch=64):
               help='Use only this many labelled crowns (smoke tests).')
 @click.option('--seed', default=0, show_default=True)
 def main(series_path, outdir, folds_csv, fold, all_flights, exclude_days,
-         crown_folds, crown_fold, nc4s, min_pixels, min_clear_frac,
-         min_crown_area, label_days, window, max_obs, n_pix, d_model, layers,
-         epochs, batch_size, lr, weight_decay, pos_weight, date_dropout,
-         max_crowns, seed):
+         crown_folds, crown_fold, split_x, test_side, nc4s, min_pixels,
+         min_clear_frac, min_crown_area, label_days, window, max_obs, n_pix,
+         d_model, layers, epochs, batch_size, lr, weight_decay, pos_weight,
+         date_dropout, max_crowns, seed):
     """Train on SERIES_PATH (crown_pixel_series.npz) and write OUTDIR."""
+    if crown_folds and split_x is not None:
+        raise click.ClickException('--crown-folds and --split-x are exclusive')
     os.makedirs(outdir, exist_ok=True)
     rng = np.random.default_rng(seed)
     torch.manual_seed(seed)
@@ -369,12 +386,19 @@ def main(series_path, outdir, folds_csv, fold, all_flights, exclude_days,
 
     test_crowns = np.zeros(len(series.crowns), bool)
     if crown_folds:
-        cx = gpd.read_file(series.build['crowns']).geometry.centroid.x.values
+        cx = crown_centroid_x(series_path)
         edges = np.quantile(cx, np.linspace(0, 1, crown_folds + 1))
         strip = np.clip(np.searchsorted(edges, cx, side='right') - 1, 0,
                         crown_folds - 1)
         test_crowns = strip == crown_fold
+    elif split_x is not None:
+        east = crown_centroid_x(series_path) >= split_x
+        test_crowns = east if test_side == 'east' else ~east
+    if test_crowns.any():
         train_lab = train_lab[~test_crowns[obs_crown[train_lab.index]]]
+        assert not test_crowns[obs_crown[train_lab.index]].any()
+        click.echo(f'crown hold-out: {(~test_crowns).sum()} training crowns, '
+                   f'{test_crowns.sum()} withheld')
 
     # one training sample per labelled (crown, flight), centred on the flight
     samples = (train_lab.assign(crown=obs_crown[train_lab.index])
@@ -453,6 +477,7 @@ def main(series_path, outdir, folds_csv, fold, all_flights, exclude_days,
             'series': series_path, 'folds': folds_csv, 'fold': fold,
             'all_flights': all_flights, 'exclude_days': exclude_days,
             'crown_folds': crown_folds, 'crown_fold': crown_fold,
+            'split_x': split_x, 'test_side': test_side,
             'nc4': list(nc4s), 'min_pixels': min_pixels,
             'min_clear_frac': min_clear_frac, 'min_crown_area': min_crown_area,
             'label_days': label_days, 'window': window, 'max_obs': max_obs,

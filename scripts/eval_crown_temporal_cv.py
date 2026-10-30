@@ -26,9 +26,15 @@ to April). Each row reports:
   the row);
 - persistence on the same pairs.
 
-With crown hold-out runs (--crown-folds), only the withheld crowns are
-scored, and persistence (which reads the withheld labels) is a reference
-only.
+With crown hold-out runs (--crown-folds or --split-x), only the withheld
+crowns are scored, and persistence (which reads the withheld labels) is a
+reference only. A spatial run (--fold all with a crown hold-out) is scored
+fold by fold as if it were a temporal CV, so its crown-flights, persistence
+and day bins are the same as the temporal CV's. --split-x X --side east
+restricts any run to the crowns east (or west) of x = X, e.g. to score the
+temporal CV on the same crowns as a west-to-east spatial run.
+--benchmark-chips adds a row for the flights of those chips (the Mask R-CNN
+spatial benchmark: config/spatial_test_chips_56.txt).
 
 The same rows are also split by event type, from the drone probabilities on
 the withheld flight:
@@ -56,24 +62,37 @@ from sklearn.metrics import average_precision_score
 
 from persistence_baseline import BINS, day_bin
 from plot_crown_species_comparison import NC4S, load_drone
-from train_crown_pse_ltae import flight_folds
+from train_crown_pse_ltae import crown_centroid_x, flight_folds
 
 
-def score_fold(run, fmap, drone, min_area):
+def load_run(run, min_area, split_x, side):
+    """params.json and the scored predictions of one run."""
     with open(os.path.join(run, 'params.json')) as fh:
         params = json.load(fh)
     pred = pd.read_csv(os.path.join(run, 'predictions.csv'),
                        parse_dates=['date'])
-    if params['crown_folds']:
+    if params['crown_folds'] or params.get('split_x') is not None:
         pred = pred[pred['test_crown']]
+    if split_x is not None:
+        east = crown_centroid_x(params['series']) >= split_x
+        pred = pred[east[pred['crown']] == (side == 'east')]
     pred = pred[(pred['area_m2'] >= min_area) & (pred['tag'] != -9999)]
-    test = [pd.Timestamp(f) for f in params['test_flights']]
-    train = [f for f, k in fmap.items() if f not in test]
-    events = drone.pivot_table(index='tag', columns='date', values='event',
-                               aggfunc='first')
-    parts = {c: drone.pivot_table(index='tag', columns='date', values=c,
-                                  aggfunc='first')
-             for c in ('p_flower', 'p_decid')}
+    return params, pred
+
+
+def drone_tables(drone):
+    """tag x date tables of the drone event, p_flower and p_decid."""
+    return {c: drone.pivot_table(index='tag', columns='date', values=c,
+                                 aggfunc='first')
+            for c in ('event', 'p_flower', 'p_decid')}
+
+
+def score_fold(pred, params, fold, test, fmap, tables):
+    """Score the test flights, with persistence from the other flights
+    of the fold CSV."""
+    train = [f for f in fmap if f not in test]
+    events = tables['event']
+    parts = {c: tables[c] for c in ('p_flower', 'p_decid')}
     rows = []
     for fl in test:
         near = pred[(pred['date'] - fl).abs() <= pd.Timedelta(days=params['label_days'])]
@@ -85,9 +104,9 @@ def score_fold(run, fmap, drone, min_area):
         df = df.dropna(subset=['true', 'persist'])
         df['flight'] = fl
         df['days_to_nearest_train'] = abs((src - fl).days)
-        df['fold'] = params['fold']
+        df['fold'] = fold
         rows.append(df.reset_index())
-    return pd.concat(rows, ignore_index=True), params
+    return pd.concat(rows, ignore_index=True)
 
 
 def event_type(df):
@@ -98,12 +117,16 @@ def event_type(df):
 
 
 def grouped(pairs, thresh):
-    """Metrics by day bin, by season and pooled, in BINS order."""
+    """Metrics by day bin, by season, on the benchmark flights and pooled,
+    in BINS order."""
     table = []
     for b, sub in pairs.groupby('bin'):
         table.append({'group': f'bin {b}', **metrics(sub, thresh)})
     for s, sub in pairs.groupby('season'):
         table.append({'group': f'season {s}', **metrics(sub, thresh)})
+    if pairs['benchmark'].any():
+        table.append({'group': 'benchmark flights',
+                      **metrics(pairs[pairs['benchmark']], thresh)})
     table.append({'group': 'pooled', **metrics(pairs, thresh)})
     table = pd.DataFrame(table).set_index('group')
     order = ([f'bin {b[0]}' for b in BINS if f'bin {b[0]}' in table.index]
@@ -147,19 +170,36 @@ def metrics(df, thresh):
 @click.option('--nc4', 'nc4s', multiple=True, default=NC4S, show_default=True)
 @click.option('--min-crown-area', default=36.0, show_default=True)
 @click.option('--thresh', default=0.5, show_default=True)
+@click.option('--split-x', default=None, type=float,
+              help='Score only the crowns on --side of this x (m, crown map '
+                   'CRS).')
+@click.option('--side', default='east', show_default=True,
+              type=click.Choice(['east', 'west']))
+@click.option('--benchmark-chips', default=None,
+              type=click.Path(exists=True, dir_okay=False),
+              help='Chip list whose flights get their own row.')
 @click.option('--out-prefix', default=None,
               help='Write <prefix>_pairs.csv and <prefix>_summary.csv.')
-def main(rundir, folds_csv, nc4s, min_crown_area, thresh, out_prefix):
+def main(rundir, folds_csv, nc4s, min_crown_area, thresh, split_x, side,
+         benchmark_chips, out_prefix):
     """Score every fold run under RUNDIR."""
     runs = sorted(os.path.dirname(p) for p in
                   glob(os.path.join(rundir, '**', 'params.json'), recursive=True))
     fmap = flight_folds(folds_csv)
-    drone = load_drone(nc4s, parts=True)
+    tables = drone_tables(load_drone(nc4s, parts=True))
     parts = []
     for run in runs:
-        df, params = score_fold(run, fmap, drone, min_crown_area)
-        if params['fold'] == 'all':
+        params, pred = load_run(run, min_crown_area, split_x, side)
+        if params['fold'] != 'all':
+            folds = {params['fold']: [pd.Timestamp(f)
+                                      for f in params['test_flights']]}
+        elif params['crown_folds'] or params.get('split_x') is not None:
+            folds = {k: [f for f, j in fmap.items() if j == k]
+                     for k in sorted(set(fmap.values()))}
+        else:
             continue
+        df = pd.concat([score_fold(pred, params, k, test, fmap, tables)
+                        for k, test in folds.items()], ignore_index=True)
         parts.append(df)
         click.echo(f'{run}: fold {params["fold"]}, {len(df)} crown-flights')
     if not parts:
@@ -168,6 +208,12 @@ def main(rundir, folds_csv, nc4s, min_crown_area, thresh, out_prefix):
     pairs['bin'] = pairs['days_to_nearest_train'].map(day_bin)
     pairs['season'] = np.where(pairs['flight'].dt.month <= 4, 'dry', 'wet')
     pairs['event_type'] = event_type(pairs)
+    bench = set()
+    if benchmark_chips:
+        chips = pd.read_csv(folds_csv).set_index('chip')['drone_dates']
+        bench = {pd.Timestamp(str(chips[c]).split(';')[0])
+                 for c in open(benchmark_chips).read().split()}
+    pairs['benchmark'] = pairs['flight'].isin(bench)
 
     table = grouped(pairs, thresh)
     negatives = pairs['event_type'] == 'none'
