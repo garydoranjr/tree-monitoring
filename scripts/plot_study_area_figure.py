@@ -814,5 +814,85 @@ def drone_timeline(outdir, size, dpi):
     click.echo(f'Wrote {outdir / name}.png/.pdf ({len(phantom)} phantom, {len(mavic)} mavic)')
 
 
+# --------------------------------------------------------------------------
+# planet-timeline
+# --------------------------------------------------------------------------
+PLANET_CLIPPED = FLOWER / 'planet_clipped/4band'
+# instrument -> (label, colour), oldest model first
+DOVE_MODELS = {
+    'PS2': ('Dove Classic', '#7570b3'),
+    'PS2.SD': ('Dove-R', '#1b9e77'),
+    'PSB.SD': ('SuperDove', '#d95f02'),
+}
+# Satellites with no SR order, so absent from BCNM_SR_INDEX; their
+# instrument is read from the Planet order metadata
+# (planet/BCI_50ha_Dove-Classic_psscene_analytic_udm2/PSScene/*_1105_metadata.json).
+EXTRA_INSTRUMENTS = {'1105': 'PS2'}
+
+
+def planet_scene_table():
+    """Every 50ha Planet scene: id, date, satellite and instrument."""
+    files = sorted(PLANET_CLIPPED.glob('*/*_4band.tif'))
+    df = pd.DataFrame({'scene': [f.name[:-len('_4band.tif')] for f in files]})
+    df['date'] = pd.to_datetime(df.scene.str[:8])
+    df['sat'] = df.scene.str.split('_').str[-1]
+    idx = pd.read_csv(BCNM_SR_INDEX, usecols=['satellite_id', 'instrument']).drop_duplicates()
+    inst = dict(zip(idx.satellite_id, idx.instrument)) | EXTRA_INSTRUMENTS
+    df['instrument'] = df.sat.map(inst)
+    if df.instrument.isna().any():
+        raise click.ClickException(f'no instrument for satellites {sorted(set(df.sat[df.instrument.isna()]))}')
+    return df
+
+
+@cli.command('planet-timeline')
+@out_option
+@click.option('--size', nargs=2, type=float, default=(12.5, 5.5), show_default=True,
+              help='Figure width and height in inches.')
+@click.option('--dpi', default=300, show_default=True)
+def planet_timeline(outdir, size, dpi):
+    """Dates of the 50ha Planet scenes, one row per satellite, by Dove model."""
+    import matplotlib.dates as mdates
+    df = planet_scene_table()
+    fig = plt.figure(figsize=size)
+    ax = fig.add_axes([0.2, 0.1, 0.78, 0.86])
+    y, gap = 0, 12
+    rows = {}
+    for inst, (label, color) in reversed(list(DOVE_MODELS.items())):
+        g = df[df.instrument == inst]
+        sats = g.groupby('sat').date.min().sort_values(ascending=False).index
+        y0 = y
+        for s in sats:
+            rows[s] = y
+            y += 1
+        ax.scatter(g.date, g.sat.map(rows), marker='|', s=6, lw=0.6, color=color)
+        ax.text(-0.01, (y0 + y - 1) / 2, f'{label} ({inst})\n{len(sats)} satellites, '
+                f'{len(g):,} scenes', transform=ax.get_yaxis_transform(), ha='right',
+                va='center', fontsize=10, color=color)
+        y += gap
+    # all satellites together: one tick per day with at least one scene
+    days = df.date.drop_duplicates()
+    span = (df.date.max() - df.date.min()).days + 1
+    ax.vlines(days, -gap - 14, -gap, color='0.2', lw=0.4)
+    ax.text(-0.01, -gap - 7, f'any satellite\n{len(days):,} of {span:,} days '
+            f'({len(days) / span:.0%})', transform=ax.get_yaxis_transform(), ha='right',
+            va='center', fontsize=10, color='0.2')
+    ax.axhline(-gap / 2, color='0.75', lw=0.6)
+    ax.set_ylim(-gap - 16, y - gap + 2)
+    ax.set_yticks([])
+    for side in ('left', 'right', 'top'):
+        ax.spines[side].set_visible(False)
+    ax.xaxis.set_major_locator(mdates.YearLocator())
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
+    ax.tick_params(axis='x', labelsize=11)
+    ax.set_xlim(pd.Timestamp('2019-12-01'), df.date.max() + pd.Timedelta(days=30))
+    ax.grid(axis='x', alpha=0.3)
+    name = 'planet_timeline'
+    for ext in ('png', 'pdf'):
+        fig.savefig(outdir / f'{name}.{ext}', dpi=dpi)
+    plt.close(fig)
+    by = df.groupby('instrument').agg(sats=('sat', 'nunique'), scenes=('scene', 'size'))
+    click.echo(f'Wrote {outdir / name}.png/.pdf\n{by}')
+
+
 if __name__ == '__main__':
     cli()
