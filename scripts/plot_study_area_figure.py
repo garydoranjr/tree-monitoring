@@ -746,16 +746,11 @@ def crop_photo(img, crop):
     return img[y0:y0 + ch, x0:x1]
 
 
-@cli.command('drone-cards')
-@out_option
-@click.option('--width', default=4.0, show_default=True, help='Card width in inches.')
-@click.option('--dpi', default=300, show_default=True)
-def drone_cards(outdir, width, dpi):
-    """One small figure per drone model: its photo with the name underneath."""
-    photos = outdir / 'materials/drone_photos'
+def make_cards(outdir, cards, photos, prefix, width, dpi):
+    """One small figure per entry of `cards`: the photo, the name underneath."""
     img_h = width / CARD_ASPECT
     text_h = 0.62
-    for key, card in DRONE_CARDS.items():
+    for key, card in cards.items():
         fig = plt.figure(figsize=(width, img_h + text_h))
         ax = fig.add_axes([0, text_h / (img_h + text_h), 1, img_h / (img_h + text_h)])
         ax.imshow(crop_photo(plt.imread(photos / card['file']), card['crop']))
@@ -764,11 +759,45 @@ def drone_cards(outdir, width, dpi):
                  va='center', fontsize=15)
         fig.text(0.995, 0.012, card['credit'], ha='right', va='bottom', fontsize=5.5,
                  color='0.45')
-        name = f'drone_{key}'
+        name = f'{prefix}_{key}'
         for ext in ('png', 'pdf'):
             fig.savefig(outdir / f'{name}.{ext}', dpi=dpi)
         plt.close(fig)
         click.echo(f'Wrote {outdir / name}.png/.pdf')
+
+
+@cli.command('drone-cards')
+@out_option
+@click.option('--width', default=4.0, show_default=True, help='Card width in inches.')
+@click.option('--dpi', default=300, show_default=True)
+def drone_cards(outdir, width, dpi):
+    """One small figure per drone model: its photo with the name underneath."""
+    make_cards(outdir, DRONE_CARDS, outdir / 'materials/drone_photos', 'drone', width, dpi)
+
+
+# Dove Classic and Dove-R share the 3U Dove bus and the PS2 telescope (Planet,
+# docs.planet.com/data/imagery/planetscope), and no freely licensed photo of a
+# Dove-R exists, so one public-domain NASA photo stands for both.
+DOVE_CARDS = {
+    'classic': dict(
+        name='Dove Classic / Dove-R', file='nasa_iss38_planet_launch.jpg',
+        crop=(0.376, 0.705, 0.412),
+        credit='Photo: NASA (ISS Expedition 38, 2014), public domain',
+        source='https://commons.wikimedia.org/wiki/File:Planet_Labs_satellite_launch_from_ISS.jpg'),
+    'superdove': dict(
+        name='SuperDove', file='planet_superdove_render.jpg', crop=(0.04, 0.80, 0.55),
+        credit='Image: © Planet Labs PBC',
+        source='https://www.planet.com/our-constellations/'),
+}
+
+
+@cli.command('dove-cards')
+@out_option
+@click.option('--width', default=4.0, show_default=True, help='Card width in inches.')
+@click.option('--dpi', default=300, show_default=True)
+def dove_cards(outdir, width, dpi):
+    """One small figure per Dove generation: its photo with the name underneath."""
+    make_cards(outdir, DOVE_CARDS, outdir / 'materials/dove_photos', 'dove', width, dpi)
 
 
 # --------------------------------------------------------------------------
