@@ -982,7 +982,7 @@ PLANET_CALFILL = FLOWER / 'planet_clipped_calfill/4band'
 @click.option('--seed', default=0, show_default=True)
 @click.option('--dpi', default=300, show_default=True)
 def cloud_seasonality(outdir, montage_year, per_month, chunk_m, min_valid, seed, dpi):
-    """Weekly OCM-clear fraction averaged over years, and a one-year montage."""
+    """2-week OCM-clear fraction averaged over years, and a one-year montage."""
     import matplotlib.dates as mdates
     clear = ocm_clear_table(outdir / 'materials/planet_ocm_clear.csv')
     full = clear.valid_px.max()
@@ -990,34 +990,37 @@ def cloud_seasonality(outdir, montage_year, per_month, chunk_m, min_valid, seed,
     years = sorted(clear.date.dt.year.unique())
     fig = plt.figure(figsize=(FIG_W, FIG_H))
 
-    # (a) weekly mean clear fraction: each year's weekly mean, then the mean over years
-    week = np.minimum((clear.date.dt.dayofyear - 1) // 7, 51)  # fold 31 Dec into week 52
-    per_year = clear.assign(year=clear.date.dt.year, week=week).groupby(['year', 'week']).clear.mean()
-    mean = per_year.groupby('week').mean()
+    # 2-week mean clear fraction: each year's mean per bin, then the mean over years
+    days = 14
+    nbins = 365 // days
+    period = np.minimum((clear.date.dt.dayofyear - 1) // days, nbins - 1)  # fold the year's tail in
+    per_year = clear.assign(year=clear.date.dt.year, period=period).groupby(['year', 'period']).clear.mean()
+    mean = per_year.groupby('period').mean()
     base = pd.Timestamp('2001-01-01')  # x axis is day of year
-    wx = lambda k: base + pd.Timedelta(days=7 * k + 3.5)  # noqa: E731
+    wx = lambda k: base + pd.Timedelta(days=days * k + days / 2)  # noqa: E731
     ax = fig.add_axes([0.7 / FIG_W, 0.75 / FIG_H, 4.15 / FIG_W, 4.55 / FIG_H])
     # BCI dry season, roughly mid-December to the end of April
     for a, b in (('2001-01-01', '2001-04-30'), ('2001-12-15', '2002-01-01')):
         ax.axvspan(pd.Timestamp(a), pd.Timestamp(b), color='#f3e2c0', lw=0, zorder=0)
     ax.text(pd.Timestamp('2001-02-28'), 97, 'dry season', ha='center', va='top', fontsize=9,
             color='#9a6b1f')
-    ax.bar([wx(k) for k in mean.index], 100 * mean.values, width=6, color='#4c72b0',
-           zorder=2, label=f'mean over {years[0]}–{years[-1]}')
-    yrs = per_year.reset_index()
-    ax.scatter([wx(k) for k in yrs.week], 100 * yrs.clear, s=5, color='0.25', alpha=0.45,
-               lw=0, zorder=3, label='individual years')
+    ax.bar([wx(k) for k in mean.index], 100 * mean.values, width=days - 1.5,
+           color='#4c72b0', zorder=2)
     ax.set_xlim(base, base + pd.Timedelta(days=365))
     ax.set_ylim(0, 100)
     ax.xaxis.set_major_locator(mdates.MonthLocator())
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%b'))
     ax.tick_params(labelsize=9)
     ax.set_ylabel('plot canopy clear of cloud (%)', fontsize=10)
-    ax.legend(loc='upper right', fontsize=8, frameon=False)
     ax.spines[['top', 'right']].set_visible(False)
-    ax.set_title('(a) Weekly mean cloud-free fraction (OCM)', loc='left', fontsize=10.5)
+    ax.set_title(f'Cloud-free fraction, 2-week means, {years[0]}–{years[-1]}', loc='left',
+                 fontsize=10.5)
 
     # (b) montage: random scenes per month of one year
+    import yaml
+    cfg = yaml.safe_load(FIXED_STRETCH.read_text())
+    forest_lo = np.array(cfg['lo'][:3]) / cfg['scale']  # B, G, R in SR x1e4
+    forest_hi = np.array(cfg['hi'][:3]) / cfg['scale']
     rng = np.random.default_rng(seed)
     pool = clear[clear.date.dt.year == montage_year].assign(month=clear.date.dt.month)
     pool = pool[[(PLANET_CALFILL / f'{d:%Y}' / f'{s}_4band.tif').exists()
@@ -1030,13 +1033,27 @@ def cloud_seasonality(outdir, montage_year, per_month, chunk_m, min_valid, seed,
     x0 = FIG_W - 0.45 - per_month * t - (per_month - 1) * g
     for m in range(1, 13):
         rows = pool[pool.month == m]
-        pick = rows.iloc[np.sort(rng.choice(len(rows), min(per_month, len(rows)),
-                                            replace=False))].sort_values('date')
-        y = top - m * t - (m - 1) * g
-        for j, r in enumerate(pick.itertuples()):
-            ax = fig.add_axes([(x0 + j * (t + g)) / FIG_W, y / FIG_H, t / FIG_W, t / FIG_H])
+        pick = rows.iloc[rng.choice(len(rows), min(per_month, len(rows)), replace=False)]
+        # clearest tile on the left. A pixel counts as clear only if OCM calls it
+        # clear and every band lies within the fixed stretch's clear-forest range
+        # (0.5th-99.9th percentile): OCM passes some haze, bright cloud and shadow
+        # as clear. Ties are broken by mean brightness, low first.
+        tiles = []
+        for r in pick.itertuples():
             arr, ext = read_window(PLANET_CALFILL / f'{r.date:%Y}' / f'{r.scene}_4band.tif',
                                    bounds, [1, 2, 3])
+            cls, _ = read_window(PLANET_OCM / f'{r.date:%Y}' / f'{r.scene}_ocm.tif', bounds, [1])
+            valid = cls[0] != 255
+            forest = ((arr >= forest_lo[:, None, None])
+                      & (arr <= forest_hi[:, None, None])).all(axis=0)
+            share = ((cls[0] == 0) & forest)[valid].mean() if valid.any() else 0.0
+            ok = arr.sum(axis=0) > 0
+            bright = arr[:, ok].mean() if ok.any() else np.inf
+            tiles.append((-share, bright, arr, ext))
+        tiles.sort(key=lambda x: (x[0], x[1]))
+        y = top - m * t - (m - 1) * g
+        for j, (_, _, arr, ext) in enumerate(tiles):
+            ax = fig.add_axes([(x0 + j * (t + g)) / FIG_W, y / FIG_H, t / FIG_W, t / FIG_H])
             ax.imshow(fixed_rgb(arr), extent=ext, interpolation='nearest')
             ax.set_xlim(bounds[0], bounds[2])
             ax.set_ylim(bounds[1], bounds[3])
@@ -1050,8 +1067,8 @@ def cloud_seasonality(outdir, montage_year, per_month, chunk_m, min_valid, seed,
         fig.text((FIG_W - 0.4) / FIG_W, (y + t / 2) / FIG_H, f'of {len(rows)}',
                  ha='left', va='center', fontsize=7, color='0.45')
     fig.text((x0 - 0.35) / FIG_W, (top + 0.12) / FIG_H,
-             f'(b) {montage_year}: {chunk_m:.0f} m tiles from the plot centre, '
-             f'{per_month} random scenes per month', ha='left', va='bottom', fontsize=10.5)
+             f'{montage_year}: {chunk_m:.0f} m tiles from the plot centre, {per_month} random '
+             'scenes per month, clearest on the left', ha='left', va='bottom', fontsize=10.5)
     name = 'planet_cloud_seasonality'
     for ext in ('png', 'pdf'):
         fig.savefig(outdir / f'{name}.{ext}', dpi=dpi)
