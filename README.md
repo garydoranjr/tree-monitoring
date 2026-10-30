@@ -154,6 +154,7 @@ planet_out_*/     Planet processing outputs
 | Radiometric calibration | `fetch_modis_opendap.py`, `build_modis_reference.py`, `build_bcnm_water_mask.py`, `calibrate_planet_modis.py`, `evaluate_planet_calibration.py`, `plot_planet_calibration_examples.py`, `fill_planet_calibration.py`, `derive_planet_fixed_stretch.py`, `build_calibrated_chips.py`, `plot_planet_fixed_stretch_examples.py` (Planet SR cross-calibrated to MODIS MCD43A1) — see [docs/planet_radiometric_calibration.md](docs/planet_radiometric_calibration.md) |
 | Machine learning | `train_drone_image_segformer.py`, `crown_classification.py`, `deploy_drone_image_segformer.py`, `sam2_segmentation.py` |
 | Crown extraction | `crown_extractor.py`, `extract_labeled_crowns.py`, `coreg_crown_sequence.py`, `match_crowns_to_labels.py` |
+| Crown temporal model | `build_crown_pixel_series.py` (cloud-free crown pixel sets per Planet scene), `train_crown_pse_ltae.py` (pixel-set encoder + temporal transformer, one event per crown per date), `eval_crown_temporal_cv.py` (temporal CV vs persistence) — see [docs/crown_temporal_model.md](docs/crown_temporal_model.md) and the model survey [docs/temporal_crown_models.md](docs/temporal_crown_models.md) |
 | Analysis | `parse_*.py`, `*_analysis.py`, `illumination.py` |
 | Visualization | `plot_*.py` |
 | Interactive review | `deploy_planet_image_maskrcnn_interactive.py` (layers and predictions), `vet_planet_chips.py` (chip quality rating) — see [VISUALIZATION.md](VISUALIZATION.md) |
