@@ -1013,8 +1013,6 @@ def cloud_seasonality(outdir, montage_year, per_month, chunk_m, min_valid, seed,
     ax.tick_params(labelsize=9)
     ax.set_ylabel('plot canopy clear of cloud (%)', fontsize=10)
     ax.spines[['top', 'right']].set_visible(False)
-    ax.set_title(f'Cloud-free fraction, 2-week means, {years[0]}–{years[-1]}', loc='left',
-                 fontsize=10.5)
 
     # (b) montage: random scenes per month of one year
     import yaml
@@ -1066,9 +1064,7 @@ def cloud_seasonality(outdir, montage_year, per_month, chunk_m, min_valid, seed,
                  ha='right', va='center', fontsize=11, fontweight='bold')
         fig.text((FIG_W - 0.4) / FIG_W, (y + t / 2) / FIG_H, f'of {len(rows)}',
                  ha='left', va='center', fontsize=7, color='0.45')
-    fig.text((x0 - 0.35) / FIG_W, (top + 0.12) / FIG_H,
-             f'{montage_year}: {chunk_m:.0f} m tiles from the plot centre, {per_month} random '
-             'scenes per month, clearest on the left', ha='left', va='bottom', fontsize=10.5)
+    # panel descriptions live in planet_intro_captions.md, not the image
     name = 'planet_cloud_seasonality'
     for ext in ('png', 'pdf'):
         fig.savefig(outdir / f'{name}.{ext}', dpi=dpi)
