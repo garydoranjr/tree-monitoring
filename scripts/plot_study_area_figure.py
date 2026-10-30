@@ -561,7 +561,7 @@ def draw_bcnm(ax, view):
             ha='center', va='center', path_effects=halo(2))
     bare(ax)
     add_scalebar(ax, 2000, '2 km', loc=(0.06, 0.05))
-    add_north(ax, loc=(0.92, 0.84), size=0.09)
+    add_north(ax, loc=(0.08, 0.84), size=0.09)
 
 
 def draw_plot_drone(ax, sel, crown_box):
@@ -650,12 +650,13 @@ def figure(outdir, name, dpi):
     ch = cw * (PLOT_VIEW[3] - PLOT_VIEW[1]) / (PLOT_VIEW[2] - PLOT_VIEW[0])
     tgap = 0.1
     tile = (cw - tgap) / 2
-    # centre the block (titles above c/d, date labels below the tiles)
-    block = 0.3 + ch + 1.0 + tile + 0.25
+    # centre the block (titles above c/d; date labels and the crown caption
+    # below the tiles)
+    block = 0.3 + ch + 0.9 + tile + 0.55
     ytop = FIG_H - (FIG_H - block) / 2 - 0.3 - ch
     ax_c = axes(x0, ytop, cw, ch)
     ax_d = axes(x0 + cw + gap, ytop, cw, ch)
-    ytile = ytop - 1.0 - tile
+    ytile = ytop - 0.9 - tile
     tiles = {('drone', 'base'): axes(x0, ytile, tile, tile),
              ('drone', 'event'): axes(x0 + tile + tgap, ytile, tile, tile),
              ('planet', 'base'): axes(x0 + cw + gap, ytile, tile, tile),
@@ -687,15 +688,16 @@ def figure(outdir, name, dpi):
         draw_tile(tiles[('planet', key)], planet_rgb(arr, lo, hi), unshift_extent(ext, shift),
                   outlines[key], crown_box, f'{d:%Y-%m-%d} ({word})', True, key == 'base')
     species = sel['species']
-    for sensor, letter in (('drone', 'e'), ('planet', 'f')):
-        ax = tiles[(sensor, 'base')]
-        sensor_name = 'drone' if sensor == 'drone' else 'PlanetScope'
-        ax.text(0, 1.04, f'({letter}) {sensor_name}', transform=ax.transAxes, ha='left',
-                va='bottom', fontsize=FS_TITLE)
-    fig.text((x0 + cw + gap / 2) / FIG_W, (ytile + tile + 0.42) / FIG_H,
+    # (e)/(f) centred over each tile pair, between the zoom connectors that
+    # meet the pair's outer corners
+    for xpair, letter, sensor_name in ((x0, 'e', 'drone'), (x0 + cw + gap, 'f', 'PlanetScope')):
+        fig.text((xpair + cw / 2) / FIG_W, (ytile + tile + 0.05) / FIG_H,
+                 f'({letter}) {sensor_name}', ha='center', va='bottom', fontsize=FS_TITLE)
+    # crown caption below the tiles' date labels, clear of the connectors
+    fig.text((x0 + cw + gap / 2) / FIG_W, (ytile - 0.3) / FIG_H,
              f'One $\\it{{{species.split()[0]}}}$ $\\it{{{species.split()[1]}}}$ crown '
              f'({sel["area_m2"]:.0f} m²), before and during flowering',
-             ha='center', va='bottom', fontsize=FS_LABEL)
+             ha='center', va='top', fontsize=FS_LABEL)
 
     # zoom connectors
     connect(fig, ax_pan, (view[2], view[3]), ax_b, (0, 1))
