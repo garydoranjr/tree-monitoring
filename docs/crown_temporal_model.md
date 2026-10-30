@@ -309,9 +309,10 @@ an event.
 
 **Caveats.**
 - Each fold was run once with seed 0, so run-to-run spread is unmeasured.
-- No crown hold-out (`--crown-folds`) run yet. The model sees every crown's
-  labels on the training flights, so part of its skill near the flights may
-  be memory of those crowns, as with Mask R-CNN (H6).
+- In the temporal CV the model sees every crown's labels on the training
+  flights. Part of its skill near the flights is memory of those crowns, as
+  with Mask R-CNN (H6). See
+  [Spatial generalization](#spatial-generalization-west-to-east).
 - 15 epochs was not tuned. The training loss was still falling slowly (0.08
   to 0.09 at epoch 15 in every fold).
 
@@ -319,3 +320,132 @@ Outputs are in `$D/crown_series_20261029/cv/`:
 - `fold{0..5}/` for each fold: `model.pt`, `predictions.csv`, `params.json`
   and the log;
 - `eval_pairs.csv`, `eval_summary.csv` and `eval_by_type.csv`.
+
+## Spatial generalization (west to east)
+
+The question is how the model does on crowns it never saw labels for.
+
+### The split
+
+The split copies the Mask R-CNN spatial experiments
+([planet_training_chips_50ha.md](planet_training_chips_50ha.md)).
+- **The line.** All 142 chips share one footprint. `_split_window` cuts
+  every one of them at x = 626281.5 m (UTM 17N): the model trains on the left
+  window and is tested on the right one.
+- **Crowns.** Each crown goes to the side of its centroid. The crown map has
+  1,170 crowns to the west and 1,110 to the east; 25 straddle the line.
+- **Event rates are similar on the two sides:** 4.8 % of the scored west
+  crown-flights and 5.1 % of the east.
+
+### Three runs on the same crowns
+
+All three runs are scored on the same 60,089 eastern crown-flights over the
+62 flights. The truth, persistence and day bins are identical across them,
+because spatial runs are scored fold by fold like the temporal CV.
+
+| Run | Eastern crowns' labels | Test flight's labels |
+|---|---|---|
+| Temporal CV (the run above, rescored on the east) | seen, on other flights | withheld |
+| **Spatial** (`--fold all --split-x 626281.5`) | never seen | seen, for western crowns |
+| **Spatio-temporal** (`--fold K --split-x 626281.5`) | never seen | withheld |
+
+Persistence reads the eastern crowns' own labels. It is a reference here,
+not a competitor: no such labels exist off the drone footprint.
+
+```bash
+D=/Volumes/Earth03/flower/crown_series_20261029
+S=$D/crown_pixel_series.npz; F=config/temporal_folds_20261012.csv; X=626281.5
+python scripts/train_crown_pse_ltae.py $S $D/cv_spatial/west_east --folds $F \
+    --fold all --split-x $X --test-side east --epochs 15
+for k in 0 1 2 3 4 5; do
+  python scripts/train_crown_pse_ltae.py $S $D/cv_spatiotemporal/fold$k \
+      --folds $F --fold $k --split-x $X --test-side east --epochs 15
+done
+python scripts/eval_crown_temporal_cv.py $D/cv --folds $F --split-x $X \
+    --side east --benchmark-chips config/spatial_test_chips_56.txt \
+    --out-prefix $D/cv/eval_east
+for r in cv_spatial cv_spatiotemporal; do
+  python scripts/eval_crown_temporal_cv.py $D/$r --folds $F \
+      --benchmark-chips config/spatial_test_chips_56.txt --out-prefix $D/$r/eval
+done
+```
+
+**Training data.** The spatial run had 58,873 crown-flight samples, against
+about 100,000 per temporal fold. The spatio-temporal folds had about 50,000.
+All runs used 15 epochs, so the spatial runs took fewer optimizer steps.
+Each spatial run took about 15 min on MPS.
+
+### Results
+
+"Benchmark flights" are the 25 flights of the 56 phantom 2020–23 chips of
+the Mask R-CNN spatial benchmark. Area J and recall are at persistence's
+number of calls.
+
+| Days to nearest training flight | Temporal AP | Spatial AP | Spatio-temporal AP | Temporal area J | Spatial area J | Spatio-temporal area J | Persistence area J (reference) |
+|---|---|---|---|---|---|---|---|
+| 4–7 | **0.761** | 0.607 | 0.579 | **0.649** | 0.581 | 0.546 | 0.745 |
+| 8–14 | **0.702** | 0.613 | 0.578 | **0.636** | 0.595 | 0.551 | 0.634 |
+| 15–30 | **0.573** | 0.562 | 0.514 | 0.493 | 0.488 | **0.495** | 0.434 |
+| >30 | 0.342 | **0.380** | 0.292 | 0.375 | **0.397** | 0.295 | 0.156 |
+| Dry season | **0.713** | 0.613 | 0.578 | **0.630** | 0.588 | 0.553 | 0.618 |
+| Wet season | **0.376** | **0.376** | 0.337 | 0.332 | **0.351** | 0.321 | 0.330 |
+| Benchmark flights | **0.720** | 0.611 | 0.571 | **0.600** | 0.565 | 0.531 | 0.545 |
+| Pooled | **0.667** | 0.576 | 0.540 | **0.580** | 0.548 | 0.516 | 0.562 |
+
+- **Not seeing a crown's labels costs about 0.09 in pooled AP** (0.667 to
+  0.576). The whole cost is near the flights:
+  - 0.15 at 4–7 days and 0.09 at 8–14 days;
+  - nothing from 15 days on, where the spatial run is level (15–30) or ahead
+    (beyond 30 days).
+  - So the temporal CV's edge within two weeks is memory of the crowns' state
+    on nearby flights (H6), and the imagery-only skill is what the spatial
+    run shows.
+- **Not seeing the date's labels costs a further 0.04** (0.576 to 0.540).
+  The spatial run learns, from the western crowns, what that flight's events
+  look like in the imagery.
+- **On entirely new crowns and dates, area Jaccard is 0.52 pooled.** That is
+  0.55 within two weeks of a training flight, and 0.50 at 15–30 days.
+  - The spatio-temporal model is above persistence beyond 15 days, even
+    though persistence reads the crowns' own labels.
+  - The spatial run is above persistence on the benchmark flights (0.565
+    against 0.545).
+- **Against Mask R-CNN:** on its spatial benchmark, Mask R-CNN peaked at
+  pixel IoUs of 0.27–0.32 across training sets: 0.293 for `full_mkl`, the
+  142-chip TOA run, and 0.318 calibrated. The crown-level spatial area Jaccard
+  on the same 25 flights is 0.57. This is context, not a like-for-like comparison:
+  - pixels against crowns;
+  - the 384 m right window against all 1,110 eastern crowns;
+  - every labelled crown pixel against crowns with a clear view within 2 days.
+
+**By event type**, pooled over the 62 flights:
+
+| Type | Temporal AP | Spatial AP | Spatio-temporal AP | Temporal area J | Spatial area J | Spatio-temporal area J | Persistence area J |
+|---|---|---|---|---|---|---|---|
+| Leaf loss (2,175 events) | 0.746 | 0.646 | 0.618 | 0.621 | 0.586 | 0.565 | 0.588 |
+| Flowering (431 events) | 0.083 | 0.060 | 0.027 | 0.058 | 0.064 | 0.034 | 0.081 |
+
+- **Leaf loss transfers to new crowns.**
+  - On new crowns at new dates: AP 0.62, area Jaccard 0.57.
+  - Beyond 15 days the spatio-temporal run beats persistence by area Jaccard
+    (0.56 against 0.46 at 15–30 days).
+- **Flowering does not transfer.**
+  - Already weak in the temporal CV (AP 0.08).
+  - On new crowns at new dates its AP is 0.027. The base rate in that subset
+    is 0.0075, so the model ranks flowering crowns only a little better than
+    chance.
+  - What flowering skill there is depends on having seen the crown.
+
+**Caveats.**
+- One seed per run.
+- The spatial runs had fewer training samples and steps than the temporal
+  CV at the same 15 epochs.
+- Not run:
+  - east to west, which would check whether the direction matters;
+  - a crown-level Mask R-CNN score on the same eastern crown-flights, which
+    would need its spatial checkpoints applied on gattaca2.
+
+Outputs:
+- `$D/crown_series_20261029/cv_spatial/west_east/`;
+- `$D/crown_series_20261029/cv_spatiotemporal/fold{0..5}/`;
+- `eval_*` in each of the two;
+- `cv/eval_east_*`: the temporal CV rescored on the eastern crowns.
