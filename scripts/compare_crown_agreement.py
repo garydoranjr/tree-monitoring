@@ -21,8 +21,10 @@ Writes, with the given output prefix:
   most drone event crown-dates, other species, all species), precision,
   recall and the share of crown-scenes called an event, for each run.
 - <prefix>_rules.csv: per stratum and run, precision, recall and share
-  called for alternative Planet rules, and the AUROC of pos_frac and
-  max_score against the drone label.
+  called for alternative Planet rules; and per stratum, offset source (all,
+  fit, borrowed) and run, the AUROC and average precision of pos_frac and
+  max_score against the drone label, and the precision and recall of
+  pos_frac > 0, the highest recall any pos_frac rule can reach.
 - <prefix>.png/.pdf: precision, recall and event share by species for both
   runs, one row of panels per stratum.
 
@@ -50,7 +52,7 @@ import click
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import average_precision_score, roc_auc_score
 
 from plot_crown_species_comparison import (APPLY, CROWN_COLS, DRONE, GRID,
                                            INK, NC4S, agreement, load_drone,
@@ -279,16 +281,26 @@ def main(outputprefix, toa_dir, cal_dir, nc4s, n_species, pos_frac, min_clear,
             for col, thresh in RULES:
                 e = m[f'{col}_{run}'] >= thresh
                 tp = (e & m['event_drone']).sum()
-                rules.append({'stratum': stratum, 'run': run,
+                rules.append({'stratum': stratum, 'offset': 'all', 'run': run,
                               'rule': f'{col} >= {thresh:.2f}',
                               'precision': tp / e.sum(),
                               'recall': tp / m['event_drone'].sum(),
                               'share': e.mean()})
-            for col in ('pos_frac', 'max_score'):
-                rules.append({'stratum': stratum, 'run': run,
-                              'rule': f'AUROC {col}',
-                              'auroc': roc_auc_score(m['event_drone'],
-                                                     m[f'{col}_{run}'])})
+            for offset, g in (('all', m), *m.groupby('offset')):
+                y = g['event_drone']
+                # pos_frac > 0 bounds the recall any pos_frac rule can reach.
+                e = g[f'pos_frac_{run}'] > 0
+                rules.append({'stratum': stratum, 'offset': offset, 'run': run,
+                              'rule': 'pos_frac > 0',
+                              'precision': (e & y).sum() / e.sum(),
+                              'recall': (e & y).sum() / y.sum(),
+                              'share': e.mean()})
+                for col in ('pos_frac', 'max_score'):
+                    rules.append({'stratum': stratum, 'offset': offset,
+                                  'run': run, 'rule': f'ranking {col}',
+                                  'auroc': roc_auc_score(y, g[f'{col}_{run}']),
+                                  'ap': average_precision_score(
+                                      y, g[f'{col}_{run}'])})
 
     table = pd.concat(rows, ignore_index=True)
     cols = ['stratum', 'species', 'crown_scenes', 'drone_events', 'drone_share']
