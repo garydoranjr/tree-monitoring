@@ -219,6 +219,12 @@ MISSED = dict(
     planet=('20230328_144849_31_241a_4band', '20230331_145345_86_24c2_4band',
             '20230401_154503_82_2413_4band', '20230402_145653_20_24c8_4band',
             '20230404_154320_37_2413_4band'),
+    # AROSICS failed on this scene in coreg_all_scenes.json because its
+    # georeferencing error (~33 m) exceeds compute_coreg_shift's max_shift of
+    # 10 Planet pixels (30 m). Rerun by hand against the same-day phantom
+    # local mosaic with max_shift=15, other settings unchanged; a brute-force
+    # brightness match to the drone mosaic gives (-12, -33) m.
+    shift_overrides={'20230328_144849_31_241a_4band': (-10.384, -31.755)},
     # for comparison: another guayacan that flowered on a flight day
     compare=dict(tag=3825, drone_date='2023-03-21', planet='20230320_145416_05_24c7_4band'),
 )
@@ -235,7 +241,12 @@ def missed_event(outdir, half):
     tag = ev['tag']
     outline = sa.dated_crown(tag, ev['drone_dates'][1])
     bounds = sa.crown_bounds(outline, 0, min_half=half)
-    planet = [(pd.Timestamp(s[:8]), sa.scene_info(s)) for s in ev['planet']]
+    planet = []
+    for s in ev['planet']:
+        info = sa.scene_info(s)
+        if s in ev['shift_overrides']:
+            info['shift'] = ev['shift_overrides'][s]
+        planet.append((pd.Timestamp(s[:8]), info))
     drone = [pd.Timestamp(d) for d in ev['drone_dates']]
     cols = sorted({d for d, _ in planet} | set(drone))
 
