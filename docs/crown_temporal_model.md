@@ -241,6 +241,72 @@ alongside the imagery: a per-crown "last known state" token, with its age in
 days. Interpolating between flights is how the model would be used in any
 case.
 
+### By event type
+
+The event merges two processes, flowering and leaf loss. Each true event is
+typed from the drone probabilities on the withheld flight:
+- **Flowering:** `p_flower` > 0.5 and at least `p_decid`.
+- **Leaf loss:** `p_decid` > 0.5 and greater than `p_flower`.
+- **Mixed:** neither component is above 0.5, but the combined event is.
+
+Each type is scored against its own events plus every non-event.
+Precision therefore counts every false call and is not comparable across
+types. The table gives recall and area Jaccard, with the model at
+persistence's number of calls.
+
+| Type | Events | Days / season | Persistence recall | Model recall at k | Persistence area J | Model area J at k | Model AP |
+|---|---|---|---|---|---|---|---|
+| Leaf loss | 3,969 | 4–7 | **0.876** | 0.769 | **0.728** | 0.658 | 0.791 |
+| | | 8–14 | **0.785** | 0.756 | 0.634 | **0.644** | 0.756 |
+| | | 15–30 | 0.625 | 0.628 | 0.409 | **0.474** | 0.594 |
+| | | >30 | 0.371 | **0.609** | 0.144 | **0.288** | 0.435 |
+| | | dry | 0.774 | 0.743 | 0.608 | **0.638** | 0.750 |
+| | | wet | **0.635** | 0.567 | **0.320** | 0.299 | 0.428 |
+| | | pooled | 0.757 | 0.730 | 0.554 | **0.584** | 0.713 |
+| Flowering | 1,076 | 4–7 | **0.639** | 0.449 | **0.195** | 0.120 | 0.306 |
+| | | 8–14 | **0.469** | 0.235 | **0.117** | 0.056 | 0.126 |
+| | | 15–30 | **0.259** | 0.148 | **0.059** | 0.039 | 0.035 |
+| | | >30 | 0.125 | **0.175** | 0.031 | **0.098** | 0.031 |
+| | | dry | **0.472** | 0.304 | **0.119** | 0.077 | 0.160 |
+| | | wet | **0.208** | 0.108 | 0.046 | **0.058** | 0.018 |
+| | | pooled | **0.406** | 0.266 | **0.095** | 0.071 | 0.125 |
+| Mixed | 897 | pooled | **0.386** | 0.319 | 0.103 | 0.100 | 0.096 |
+
+- **Leaf loss is two-thirds of the events, and there the model is level with
+  or ahead of persistence from 8 days on.**
+  - Area Jaccard at matched calls: 0.64 against 0.63 at 8–14 days, 0.47
+    against 0.41 at 15–30 days, and 0.29 against 0.14 beyond 30 days.
+  - Persistence keeps only the first week, and the wet season (0.32 against
+    0.30, on 490 events).
+  - Restricted to leaf loss, the plan's 8–30-day test is met. The wet-season
+    test is not.
+- **The model hardly sees flowering.**
+  - Flowering AP is 0.13 pooled and 0.02 in the wet season.
+  - At threshold 0.5 its flowering recall is 0.18 overall and 0.004 in the
+    wet season.
+  - Persistence finds 64 % of flowering events at 4–7 days and 47 % at 8–14
+    days. The model beats it only beyond 30 days, on 160 events.
+  - The combined-event gap within 14 days is therefore mostly flowering.
+- **Mixed events are weak for both.** These are 15 % of events, crowns that
+  pass 0.5 only in combination, and they sit near the label threshold by
+  construction.
+
+**Do persistence's hits come from crowns the drone classifier always calls
+events?** This was checked once, from `eval_pairs.csv` and the drone tables.
+For each crown, the check took the share of all drone flights on which it is
+an event.
+- **Flowering: no.** Persistence's flowering hits and misses are on crowns
+  with similar event rates (median 0.09 against 0.08). Its flowering lead
+  therefore looks like real persistence of flowering beyond a week, not a
+  repeated per-crown classifier error.
+- **Leaf loss: unclear.** Its hits are on crowns that are events far more
+  often (median 0.26 against 0.14). 35 % of leaf-loss events are on crowns
+  that are events on at least 30 % of flights. Persistence recalls 0.90 of
+  those, against 0.68 of the rest. The model also scores those crowns high
+  (mean p 0.77 against 0.52). So these may be genuinely long or recurring
+  leaf loss, or a classifier bias that both methods pick up. Only
+  independent labels can separate the two.
+
 **Caveats.**
 - Each fold was run once with seed 0, so run-to-run spread is unmeasured.
 - No crown hold-out (`--crown-folds`) run yet. The model sees every crown's
@@ -252,4 +318,4 @@ case.
 Outputs are in `$D/crown_series_20261029/cv/`:
 - `fold{0..5}/` for each fold: `model.pt`, `predictions.csv`, `params.json`
   and the log;
-- `eval_pairs.csv` and `eval_summary.csv`.
+- `eval_pairs.csv`, `eval_summary.csv` and `eval_by_type.csv`.

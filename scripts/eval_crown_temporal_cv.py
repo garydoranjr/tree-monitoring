@@ -30,6 +30,17 @@ With crown hold-out runs (--crown-folds), only the withheld crowns are
 scored, and persistence (which reads the withheld labels) is a reference
 only.
 
+The same rows are also split by event type, from the drone probabilities on
+the withheld flight:
+- flowering: p_flower > 0.5 and p_flower >= p_decid;
+- leaf loss: p_decid > 0.5 and p_decid > p_flower;
+- mixed: neither is above 0.5, but the combined event is.
+
+Each type is scored on its own events plus every non-event. Precision
+therefore counts every false call of either method, so only recall, AP and
+the model-persistence gap compare across types. These rows go to
+<prefix>_by_type.csv.
+
 Typical usage:
     python scripts/eval_crown_temporal_cv.py RUNDIR \\
         --folds config/temporal_folds_20261012.csv --out-prefix RUNDIR/eval
@@ -60,18 +71,44 @@ def score_fold(run, fmap, drone, min_area):
     train = [f for f, k in fmap.items() if f not in test]
     events = drone.pivot_table(index='tag', columns='date', values='event',
                                aggfunc='first')
+    parts = {c: drone.pivot_table(index='tag', columns='date', values=c,
+                                  aggfunc='first')
+             for c in ('p_flower', 'p_decid')}
     rows = []
     for fl in test:
         near = pred[(pred['date'] - fl).abs() <= pd.Timedelta(days=params['label_days'])]
         p = near.groupby('tag').agg(p=('p_event', 'mean'), area=('area_m2', 'first'))
         src = min(train, key=lambda f: abs((f - fl).days))
         df = p.join(events[fl].rename('true')).join(events[src].rename('persist'))
+        for c, tab in parts.items():
+            df = df.join(tab[fl].rename(c))
         df = df.dropna(subset=['true', 'persist'])
         df['flight'] = fl
         df['days_to_nearest_train'] = abs((src - fl).days)
         df['fold'] = params['fold']
         rows.append(df.reset_index())
     return pd.concat(rows, ignore_index=True), params
+
+
+def event_type(df):
+    """flowering, leaf loss or mixed for true events; none otherwise."""
+    t = np.where(df['p_flower'] >= df['p_decid'], 'flowering', 'leaf loss')
+    t = np.where((df['p_flower'] <= 0.5) & (df['p_decid'] <= 0.5), 'mixed', t)
+    return np.where(df['true'].astype(bool), t, 'none')
+
+
+def grouped(pairs, thresh):
+    """Metrics by day bin, by season and pooled, in BINS order."""
+    table = []
+    for b, sub in pairs.groupby('bin'):
+        table.append({'group': f'bin {b}', **metrics(sub, thresh)})
+    for s, sub in pairs.groupby('season'):
+        table.append({'group': f'season {s}', **metrics(sub, thresh)})
+    table.append({'group': 'pooled', **metrics(pairs, thresh)})
+    table = pd.DataFrame(table).set_index('group')
+    order = ([f'bin {b[0]}' for b in BINS if f'bin {b[0]}' in table.index]
+             + [g for g in table.index if not g.startswith('bin ')])
+    return table.loc[order]
 
 
 def metrics(df, thresh):
@@ -117,7 +154,7 @@ def main(rundir, folds_csv, nc4s, min_crown_area, thresh, out_prefix):
     runs = sorted(os.path.dirname(p) for p in
                   glob(os.path.join(rundir, '**', 'params.json'), recursive=True))
     fmap = flight_folds(folds_csv)
-    drone = load_drone(nc4s)
+    drone = load_drone(nc4s, parts=True)
     parts = []
     for run in runs:
         df, params = score_fold(run, fmap, drone, min_crown_area)
@@ -130,17 +167,14 @@ def main(rundir, folds_csv, nc4s, min_crown_area, thresh, out_prefix):
     pairs = pd.concat(parts, ignore_index=True)
     pairs['bin'] = pairs['days_to_nearest_train'].map(day_bin)
     pairs['season'] = np.where(pairs['flight'].dt.month <= 4, 'dry', 'wet')
+    pairs['event_type'] = event_type(pairs)
 
-    table = []
-    for b, sub in pairs.groupby('bin'):
-        table.append({'group': f'bin {b}', **metrics(sub, thresh)})
-    for s, sub in pairs.groupby('season'):
-        table.append({'group': f'season {s}', **metrics(sub, thresh)})
-    table.append({'group': 'pooled', **metrics(pairs, thresh)})
-    table = pd.DataFrame(table).set_index('group')
-    order = ([f'bin {b[0]}' for b in BINS if f'bin {b[0]}' in table.index]
-             + [g for g in table.index if not g.startswith('bin ')])
-    table = table.loc[order]
+    table = grouped(pairs, thresh)
+    negatives = pairs['event_type'] == 'none'
+    by_type = pd.concat(
+        {t: grouped(pairs[negatives | (pairs['event_type'] == t)], thresh)
+         for t in ('flowering', 'leaf loss', 'mixed')},
+        names=['event_type'])
 
     cols = ['flights', 'crowns', 'n_true',
             'model_precision', 'model_recall', 'model_f1', 'model_area_jaccard',
@@ -150,10 +184,18 @@ def main(rundir, folds_csv, nc4s, min_crown_area, thresh, out_prefix):
     with pd.option_context('display.float_format', '{:.3f}'.format,
                            'display.width', 250, 'display.max_columns', 30):
         click.echo(table[cols].to_string())
+        type_cols = ['crowns', 'n_true', 'persist_recall', 'model_at_k_recall',
+                     'persist_precision', 'model_at_k_precision',
+                     'persist_area_jaccard', 'model_at_k_area_jaccard',
+                     'model_recall', 'model_ap']
+        click.echo('\nby event type (each scored against all non-events):')
+        click.echo(by_type[type_cols].to_string())
     if out_prefix:
         pairs.to_csv(f'{out_prefix}_pairs.csv', index=False)
         table.to_csv(f'{out_prefix}_summary.csv')
-        click.echo(f'wrote {out_prefix}_pairs.csv, {out_prefix}_summary.csv')
+        by_type.to_csv(f'{out_prefix}_by_type.csv')
+        click.echo(f'wrote {out_prefix}_pairs.csv, {out_prefix}_summary.csv, '
+                   f'{out_prefix}_by_type.csv')
 
 
 if __name__ == '__main__':

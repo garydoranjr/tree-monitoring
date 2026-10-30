@@ -59,13 +59,18 @@ CROWN_COLS = ['scene', 'date', 'days_to_drone', 'in_envelope', 'coreg_ok',
               'tag', 'crown_px', 'crown_clear_frac', 'pos_frac']
 
 
-def load_drone(nc4s):
-    """Long table of drone crown-dates: tag, date, species, event."""
+def load_drone(nc4s, parts=False):
+    """Long table of drone crown-dates: tag, date, species, event. With
+    parts, also the p_flower and p_decid behind the event."""
     frames = []
     for path in nc4s:
         ds = xr.open_dataset(path)
         p = 1 - (1 - ds.flowering_probability) * (1 - ds.deciduous_probability)
-        df = p.to_dataframe('p').reset_index().dropna(subset=['p'])
+        df = p.to_dataframe('p')
+        if parts:
+            df['p_flower'] = ds.flowering_probability.to_series()
+            df['p_decid'] = ds.deciduous_probability.to_series()
+        df = df.reset_index().dropna(subset=['p'])
         species = pd.Series(ds.species.values, index=ds.tag.values)
         df['species'] = df['tag'].map(species)
         df['mavic'] = 'mavic' in os.path.basename(path)
@@ -73,7 +78,8 @@ def load_drone(nc4s):
     df = pd.concat(frames, ignore_index=True)
     df = df[~(df['mavic'] & (df['date'] <= PHANTOM_END))]
     df['event'] = df['p'] > 0.5
-    return df[['tag', 'date', 'species', 'event']]
+    cols = ['tag', 'date', 'species', 'event']
+    return df[cols + ['p_flower', 'p_decid'] if parts else cols]
 
 
 def load_planet(apply_dir, min_clear, pos_frac):
