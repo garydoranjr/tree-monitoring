@@ -717,5 +717,102 @@ def figure(outdir, name, dpi):
     click.echo(f'Wrote {outdir / name}.png/.pdf')
 
 
+# --------------------------------------------------------------------------
+# drone-cards
+# --------------------------------------------------------------------------
+# Wikimedia Commons photos (CC BY-SA 4.0), downloaded to materials/drone_photos.
+# crop = (x0, x1, y_centre) as fractions of the photo; the height follows from
+# the 3:2 card aspect.
+DRONE_CARDS = {
+    'phantom': dict(
+        name='DJI Phantom 4 Pro', file='phantom4pro_03.jpg', crop=(0.05, 0.97, 0.47),
+        credit='Photo: A.BourgeoisP, CC BY-SA 4.0, via Wikimedia Commons',
+        source='https://commons.wikimedia.org/wiki/File:DJI_Phantom_4_Pro_-_03.jpg'),
+    'mavic': dict(
+        name='DJI Mavic 3 Multispectral', file='m3m_FA373WYPN9_cropped.jpg',
+        crop=(0.06, 1.0, 0.50),
+        credit='Photo: ZLEA, CC BY-SA 4.0, via Wikimedia Commons',
+        source='https://commons.wikimedia.org/wiki/'
+               'File:DJI_Mavic_3M_Multispectral_FA373WYPN9_(4-9-2024)_(cropped).jpg'),
+}
+CARD_ASPECT = 1.5
+
+
+def crop_photo(img, crop):
+    h, w = img.shape[:2]
+    x0, x1 = int(crop[0] * w), int(crop[1] * w)
+    ch = min(h, int(round((x1 - x0) / CARD_ASPECT)))
+    y0 = int(np.clip(crop[2] * h - ch / 2, 0, h - ch))
+    return img[y0:y0 + ch, x0:x1]
+
+
+@cli.command('drone-cards')
+@out_option
+@click.option('--width', default=4.0, show_default=True, help='Card width in inches.')
+@click.option('--dpi', default=300, show_default=True)
+def drone_cards(outdir, width, dpi):
+    """One small figure per drone model: its photo with the name underneath."""
+    photos = outdir / 'materials/drone_photos'
+    img_h = width / CARD_ASPECT
+    text_h = 0.62
+    for key, card in DRONE_CARDS.items():
+        fig = plt.figure(figsize=(width, img_h + text_h))
+        ax = fig.add_axes([0, text_h / (img_h + text_h), 1, img_h / (img_h + text_h)])
+        ax.imshow(crop_photo(plt.imread(photos / card['file']), card['crop']))
+        bare(ax)
+        fig.text(0.5, (text_h - 0.27) / (img_h + text_h), card['name'], ha='center',
+                 va='center', fontsize=15)
+        fig.text(0.995, 0.012, card['credit'], ha='right', va='bottom', fontsize=5.5,
+                 color='0.45')
+        name = f'drone_{key}'
+        for ext in ('png', 'pdf'):
+            fig.savefig(outdir / f'{name}.{ext}', dpi=dpi)
+        plt.close(fig)
+        click.echo(f'Wrote {outdir / name}.png/.pdf')
+
+
+# --------------------------------------------------------------------------
+# drone-timeline
+# --------------------------------------------------------------------------
+@cli.command('drone-timeline')
+@out_option
+@click.option('--size', nargs=2, type=float, default=(12.5, 2.6), show_default=True,
+              help='Figure width and height in inches.')
+@click.option('--dpi', default=300, show_default=True)
+def drone_timeline(outdir, size, dpi):
+    """Dates of the 50ha drone flights: phantom (both releases), then mavic."""
+    import matplotlib.dates as mdates
+    phantom = sorted(set(pu.drone_dates('phantom-24782016')) | set(pu.drone_dates('phantom-C3KW2X')))
+    mavic = pu.drone_dates('mavic')
+    rows = [(DRONE_CARDS['phantom']['name'], phantom, pu.C_PHANTOM),
+            (DRONE_CARDS['mavic']['name'], mavic, pu.C_MAVIC)]
+    fig = plt.figure(figsize=size)
+    ax = fig.add_axes([0.04, 0.2, 0.94, 0.72])
+    for i, (label, dates, color) in enumerate(rows):
+        y = len(rows) - i
+        ax.vlines(dates, y - 0.3, y + 0.3, color=color, lw=1.2)
+        # the first series' label starts at its first flight, later ones end
+        # at their last flight so they stay inside the axes
+        left = i == 0
+        ax.text(dates[0] - pd.Timedelta(days=20) if left else dates[-1] + pd.Timedelta(days=20),
+                y + 0.42,
+                f'{label}: {len(dates)} flights, {dates[0]:%b %Y} – {dates[-1]:%b %Y}',
+                ha='left' if left else 'right', va='bottom', fontsize=11, color=color)
+    ax.set_ylim(0.45, len(rows) + 0.95)
+    ax.set_yticks([])
+    for side in ('left', 'right', 'top'):
+        ax.spines[side].set_visible(False)
+    ax.xaxis.set_major_locator(mdates.YearLocator())
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
+    ax.tick_params(axis='x', labelsize=11)
+    ax.set_xlim(pd.Timestamp('2018-01-01'), pd.Timestamp('2026-04-01'))
+    ax.grid(axis='x', alpha=0.3)
+    name = 'drone_timeline'
+    for ext in ('png', 'pdf'):
+        fig.savefig(outdir / f'{name}.{ext}', dpi=dpi)
+    plt.close(fig)
+    click.echo(f'Wrote {outdir / name}.png/.pdf ({len(phantom)} phantom, {len(mavic)} mavic)')
+
+
 if __name__ == '__main__':
     cli()
