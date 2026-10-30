@@ -665,6 +665,130 @@ So the TOA apply output stays the reference. Calibration could only help if
 offsets were fitted for more scenes, or if borrowed-offset scenes fell back
 to a per-image stretch.
 
+### Offset-jitter apply run against the drone labels
+
+The calibrated model trained with offset augmentation
+([below](#offset-augmentation-2026-10-28)) was applied to the same 792
+scenes on 2026-10-29. It used the same calibrated inputs and TOA
+coregistration as the calibrated run. The final model is
+`config/temporal_cv_20261012_cal_offjit1.sh` trained on all 142 chips for
+17 epochs, the epoch its CV selected. The TOA and calibrated final models
+use epoch 12.
+
+```bash
+F=/Volumes/Earth03/flower
+A=$F/202610_temporal_apply_cal_offjit1
+python scripts/plot_crown_species_comparison.py $A/crown_species --apply-dir $A
+python scripts/make_crown_timeseries_html.py $A/crown_timeseries_viewer.html --apply-dir $A
+python scripts/compare_crown_agreement.py $A/crown_agreement_toa_vs_offjit1 \
+  --toa-dir $F/202610_temporal_apply --cal-dir $A \
+  --cal-label 'MODIS-calibrated, offset jitter 1' --cal-color '#8a5bd6'
+python scripts/compare_crown_agreement.py $A/crown_agreement_cal_vs_offjit1 \
+  --toa-dir $F/202610_temporal_apply_cal --cal-dir $A \
+  --toa-label 'MODIS-calibrated, fixed stretch' --toa-color '#1baf7a' \
+  --cal-label 'MODIS-calibrated, offset jitter 1' --cal-color '#8a5bd6'
+```
+
+The pairing and strata are as above. All three runs share the same
+crown-scenes, so the TOA and calibrated values reproduce the table above.
+The intervals are scene-bootstrap 95 % intervals of jitter minus the other
+run.
+
+| Stratum | Scenes | Precision / recall: TOA, cal, jitter | Δ precision vs TOA | Δ recall vs TOA | Δ precision vs cal | Δ recall vs cal |
+|---|---|---|---|---|---|---|
+| In envelope | 202 | 0.561 / 0.392, 0.542 / 0.368, 0.599 / 0.314 | +0.021 to +0.054 | −0.098 to −0.054 | +0.042 to +0.071 | −0.062 to −0.044 |
+| — own MODIS fit | 148 | 0.562 / 0.409, 0.552 / 0.398, 0.614 / 0.335 | +0.036 to +0.068 | −0.093 to −0.050 | +0.047 to +0.078 | −0.071 to −0.053 |
+| — borrowed offset | 54 | 0.553 / 0.299, 0.459 / 0.209, 0.493 / 0.202 | −0.124 to 0.000 | −0.160 to −0.015 | −0.001 to +0.066 | −0.032 to +0.016 |
+| Outside envelope | 48 | 0.489 / 0.349, 0.436 / 0.342, 0.538 / 0.316 | +0.009 to +0.086 | −0.064 to −0.002 | +0.073 to +0.132 | −0.048 to −0.006 |
+| — own MODIS fit | 33 | 0.502 / 0.403, 0.466 / 0.385, 0.576 / 0.353 | +0.033 to +0.109 | −0.078 to −0.020 | +0.077 to +0.143 | −0.054 to −0.009 |
+| — borrowed offset | 15 | 0.319 / 0.093, 0.237 / 0.140, 0.298 / 0.137 | −0.191 to +0.074 | −0.030 to +0.110 | +0.002 to +0.099 | −0.045 to +0.026 |
+
+A fixed `pos_frac` cutoff compares the runs at different operating points.
+The table below therefore also gives threshold-free measures from
+`_rules.csv`:
+- the average precision of each crown score against the drone label;
+- the highest recall any `pos_frac` rule can reach (`pos_frac > 0`).
+
+The chance level of average precision is the drone event share, 0.048 in
+the envelope and 0.033 outside it.
+
+| Stratum | AP of `pos_frac`: TOA / cal / jitter | AP of `max_score` | Highest `pos_frac` recall |
+|---|---|---|---|
+| In envelope | 0.306 / 0.292 / 0.268 | 0.251 / 0.229 / 0.227 | 0.424 / 0.403 / 0.346 |
+| — own MODIS fit | 0.319 / 0.316 / 0.290 | 0.262 / 0.246 / 0.241 | 0.442 / 0.433 / 0.367 |
+| — borrowed offset | 0.234 / 0.161 / 0.156 | 0.193 / 0.141 / 0.155 | 0.330 / 0.244 / 0.229 |
+| Outside envelope | 0.240 / 0.229 / 0.235 | 0.207 / 0.188 / 0.199 | 0.366 / 0.361 / 0.335 |
+| — own MODIS fit | 0.277 / 0.265 / 0.271 | 0.236 / 0.207 / 0.220 | 0.421 / 0.403 / 0.368 |
+| — borrowed offset | 0.070 / 0.080 / 0.088 | 0.067 / 0.094 / 0.102 | 0.101 / 0.158 / 0.179 |
+
+Mean detections per scene, from `scene_summary.csv` over the same scenes,
+given as all detections (score ≥ 0.05) / those scoring 0.5 or more:
+
+| Stratum | TOA | Calibrated | Offset jitter |
+|---|---|---|---|
+| In envelope, own fit | 190 / 66 | 181 / 64 | 135 / 46 |
+| In envelope, borrowed | 92 / 25 | 106 / 24 | 190 / 18 |
+| Outside envelope, own fit | 172 / 52 | 173 / 55 | 128 / 37 |
+| Outside envelope, borrowed | 45 / 9 | 109 / 19 | 142 / 15 |
+
+- **Offset jitter does not fix the borrowed-offset loss.**
+  - On the 54 in-envelope borrowed-offset scenes, precision and recall are
+    0.493 / 0.202, against 0.459 / 0.209 for the calibrated run. Both
+    intervals against the calibrated run cover zero. TOA stays well ahead,
+    at 0.553 / 0.299.
+  - The average precision of `pos_frac` is 0.156, against 0.161 calibrated
+    and 0.234 TOA. Only the `max_score` ranking gains a little (0.155
+    against 0.141), still short of TOA's 0.193.
+- **Its higher precision comes from making fewer calls.**
+  - It calls 2.5 % of in-envelope crown-scenes an event, against 3.3 % for
+    TOA and 4.8 % for the drone. So precision rises (0.599) and recall falls
+    (0.314).
+  - The model is less confident overall. On own-fit scenes, its detections
+    scoring 0.5 or more drop by about 30 %.
+  - On borrowed scenes it nearly doubles its detections, but fewer of them
+    score 0.5 or more. This is the CV's −1 SD pattern: many extra
+    low-scoring detections.
+  - `pos_frac` counts only detections scoring 0.5 or more. So no `pos_frac`
+    cutoff reaches TOA's recall: the most it can reach in the envelope is
+    0.346, against 0.392 for TOA at the standard rule.
+- **Its ranking is worse, not just shifted.**
+  - In the envelope, the average precision of `pos_frac` is 0.268, against
+    0.292 calibrated and 0.306 TOA. On own-fit scenes it is 0.290, against
+    0.316 and 0.319.
+  - So the precision gain at `pos_frac ≥ 0.25` is a move along a lower
+    curve. This is the same lesson as
+    [matched detection counts](#comparing-runs-at-matched-detection-counts)
+    in the CV.
+- **Outside the envelope, it is level with TOA.**
+  - The average precision of `pos_frac` is 0.235, against 0.240 TOA and
+    0.229 calibrated.
+  - It recovers the precision that calibration lost (0.538, against 0.436),
+    at lower recall.
+  - The 15 borrowed-offset scenes there rank better under both calibrated
+    models than under TOA. They hold only 386 drone events.
+- **The calls differ little between runs.** Against TOA, they differ on
+  2.7 % of in-envelope crown-scenes (κ 0.53). Against the calibrated run,
+  2.5 % (κ 0.55). The largest in-envelope recall drops against TOA are in
+  *Cavanillesia* (0.611 → 0.487), *Hura* (0.595 → 0.461) and *Tabebuia*
+  (0.407 → 0.291).
+- **The CV gain does not carry over.** In the CV this model had the best
+  `map_50`, the best recall at matched detection counts, and a borrowed-chip
+  recall of 0.41. The apply comparison differs in three ways:
+  - It scores crowns, not instance masks.
+  - It has 54 borrowed-offset scenes, not 12 chips.
+  - Its final model is trained on every chip for 17 epochs, against 12 for
+    the other two.
+
+  The `max_score` ranking uses every detection, and it shows no gain in the
+  envelope either (0.227, against 0.229). So the 0.5 cutoff alone does not
+  explain the gap. Nor does the epoch mismatch, probably: in the CV, this
+  run's `map_50` is 0.355 at epoch 12 and 0.361 at epoch 17. A `final_e12`
+  run would settle it, but has not been done.
+
+So the TOA apply output stays the reference, and offset augmentation as
+trained here is not adopted. The remaining option for the borrowed-offset
+scenes is the one above: give them a per-image stretch.
+
 ## Why calibration did not help
 
 Candidate explanations for the null temporal-CV result, tested cheapest first:
@@ -682,7 +806,7 @@ Candidate explanations for the null temporal-CV result, tested cheapest first:
 | H9 | The calibrated chips (from the SR product) are shifted or blurred relative to the TOA chips the labels were coregistered to | Chip-pair shift and sharpness |
 | H10 | ImageNet normalization and hyperparameters were set on TOA inputs | Conditional retrain |
 
-Where they stand (2026-10-28; details in the subsections below):
+Where they stand (2026-10-29; details in the subsections below):
 
 - **Supported: H4, H6.** The TOA model is nearly blind to scene-level
   offsets (H4). Much of its skill is memory of the same crowns (H6).
@@ -710,6 +834,12 @@ Where they stand (2026-10-28; details in the subsections below):
   gives the best recall at matched detection counts, and it cuts the `map_50`
   loss from a 1 SD test-time offset by a factor of 4–6
   ([below](#offset-augmentation-2026-10-28)).
+  - That gain does not carry over to the drone labels (2026-10-29).
+  - Applied to the 792 scenes, it makes fewer, more precise calls, but it
+    ranks crowns worse than both TOA and the calibrated model.
+  - It does not recover the borrowed-offset scenes.
+  - TOA stays the reference
+    ([apply run](#offset-jitter-apply-run-against-the-drone-labels)).
 
 ### CV split by offset source, with a chip bootstrap (H2, H8)
 
@@ -1468,15 +1598,17 @@ python scripts/plot_radiometric_sensitivity.py \
   - Met: borrowed-chip recall recovers.
 - **S = 1 is better than S = 0.5** on nearly every count. Its best epoch is
   17, and its detections thin more slowly with training.
-- **The deciding test is the apply run against the drone labels.** It has 54
-  borrowed-offset scenes against 12 chips in the CV, and it uses a score
-  cutoff of 0.5. It is pending on gattaca2. The final model uses
-  `config/temporal_cv_20261012_cal_offjit1.sh` at epoch 17. That config keeps
-  the calibrated apply settings and writes to
-  `202610_temporal_apply_cal_offjit1/`. Its result is compared with
-  [the calibrated apply run](#calibrated-apply-run-against-the-drone-labels).
-  The commands and how to read the result are in
-  [handoff_gattaca2_offjit_apply.md](handoff_gattaca2_offjit_apply.md).
+- **The apply run against the drone labels does not confirm it
+  (2026-10-29).** This was the deciding test, with 54 borrowed-offset scenes
+  against 12 chips in the CV and a score cutoff of 0.5. The epoch-17 final
+  model of `config/temporal_cv_20261012_cal_offjit1.sh` makes fewer calls.
+  - In the envelope, precision is 0.599 and recall 0.314, against 0.561 /
+    0.392 for TOA.
+  - Its threshold-free ranking is below both other runs (average precision
+    of `pos_frac` 0.268, against 0.292 calibrated and 0.306 TOA).
+  - On borrowed-offset scenes it is no better than the calibrated run.
+
+  See [the offset-jitter apply run](#offset-jitter-apply-run-against-the-drone-labels).
 - **Worth adding to the sensitivity test:** the detection count and a
   score-thresholded IoU, so that false-detection growth can be told apart
   from lost crowns without deriving them.
@@ -1809,3 +1941,32 @@ python scripts/plot_radiometric_sensitivity.py \
 > crown-dates are shown above the rule, with the remaining species and all
 > species pooled below it. The number of drone events in each row is given
 > next to its name.
+
+`crown_agreement_toa_vs_offjit1.png` (in `202610_temporal_apply_cal_offjit1/`
+on Earth03):
+
+> Crown-level agreement with the drone classifications of two temporal
+> Planet Mask R-CNNs, by species. The first (blue) is the epoch-12 model
+> trained and applied on TOA scenes with a per-image 0th–99.9th percentile
+> stretch per band. The second (purple) is the epoch-17 model trained and
+> applied on MODIS-calibrated surface reflectance with one fixed per-band
+> stretch, with a random offset added to each training sample: k times each
+> band's calibration-offset SD, with k ~ N(0, 1) shared by the bands. Both
+> runs are scored on the same crown-scenes: coregistered Planet scenes 3 to
+> 7 days from the drone flight they were coregistered to, matched to that
+> flight, 2020-2026. Top row: scenes 30 days or less from a training chip
+> (202 scenes, 74 flights). Bottom row: scenes more than 30 days from one
+> (48 scenes, 18 flights, mostly 2020 and 2022). Left: precision (share of
+> Planet event calls that the drone also calls an event). Middle: recall
+> (share of drone events that Planet calls). Right: the share of
+> crown-scenes called an event by the drone label (black) and by each model.
+> A drone event is 1 − (1 − p_flowering)(1 − p_deciduous) > 0.5 on the
+> crown's mean classification probabilities. A Planet event is at least
+> 25 % of the crown's clear pixels under a detection scoring 0.5 or more.
+> Only crowns of at least 64 Planet pixels (0.75 m) and at least 50 % clear
+> in both runs are used. The twelve species with the most drone event
+> crown-dates are shown above the rule, with the remaining species and all
+> species pooled below it. The number of drone events in each row is given
+> next to its name. `crown_agreement_cal_vs_offjit1.png` is the same with the
+> calibrated epoch-12 model (green, fixed stretch, no offset augmentation) in
+> place of the TOA model.

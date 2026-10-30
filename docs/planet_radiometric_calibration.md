@@ -512,8 +512,13 @@ TOA per-image stretch would have absorbed it.
     0.35 for the two calibrated seeds).
   - A negative offset still roughly doubles its detections, so its IoU and
     precision fall about as much as before.
-  - The test that decides it is an apply run against the drone labels
-    ([planet_temporal_generalization.md](planet_temporal_generalization.md#offset-augmentation-2026-10-28)).
+  - (2026-10-29) The apply run against the drone labels does not confirm it
+    ([planet_temporal_generalization.md](planet_temporal_generalization.md#offset-jitter-apply-run-against-the-drone-labels)).
+    - The model makes fewer calls: in-envelope precision is 0.599 and recall
+      0.314, against 0.561 / 0.392 for TOA.
+    - It ranks crowns worse than both the TOA and the calibrated model.
+    - On the 54 borrowed-offset scenes it is no better than the calibrated
+      model.
 - (2026-10-28, two seeds per arm) The training ColorJitter helps both arms.
   - Without it, `map_50` from epoch 12 on falls by 0.021 for TOA and 0.014
     for calibrated, on average. The first seed alone showed 0.024 against
