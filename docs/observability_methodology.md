@@ -27,6 +27,15 @@ upstream provenance is not documented:
   input.
 - `scripts/plot_planet_image_fraction_monthly.py` — its input CSV (with
   a `date` column) is not produced by any documented script.
+- `scripts/plot_ocm_observability.py` — a variant of the Step 7 analysis
+  for the November 2026 presentation. It rebuilds the empirical
+  observation model from OmniCloudMask instead of the Step 4 classifier:
+  a crown is visible when at least 90% of its pixels are OCM-clear in
+  `crown_series_20261029/crown_pixel_series.npz`, over 2020–2025. The
+  model is fitted per species from that species' crowns. Its inputs, the
+  crown pixel series and the presentation copies of the trap and
+  deciduousness event tables, live outside `data/` and `results/`, so the
+  script is not in the Snakefile.
 
 ## Step 1: Manual Labeling of Crown-Level Image Quality
 
