@@ -36,6 +36,20 @@ upstream provenance is not documented:
   crown pixel series and the presentation copies of the trap and
   deciduousness event tables, live outside `data/` and `results/`, so the
   script is not in the Snakefile.
+- `scripts/plot_planet_event_observability.py` extends that analysis from
+  "seen" to "detected". It applies to the same events and the same OCM
+  crown visibility.
+  - **Per-view detection rate:** fitted with a logistic model on the
+    held-out detections of the Planet Mask R-CNN temporal
+    cross-validation, by species × event type, season and crown size.
+  - **Correlation between views:** a beta-binomial fit over the event
+    episodes in that cross-validation.
+  - **Event-level detection:** combines both with the number of clear
+    views of each crown during each event.
+
+  Its inputs are the temporal-CV inference cache and the crown table
+  built from it by `plot_temporal_eval.py`. They are not pipeline
+  artifacts, so the script is not in the Snakefile.
 
 ## Step 1: Manual Labeling of Crown-Level Image Quality
 

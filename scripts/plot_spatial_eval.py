@@ -154,6 +154,7 @@ def crown_table(chips, windows, score, gt, clear, chip_dir=CHIPS, min_px=64):
         n_clear = np.bincount(ids, weights=cl.ravel(), minlength=n)
         n_gt = np.bincount(ids, weights=g_.ravel(), minlength=n)
         s_sum = np.bincount(ids, weights=sc.ravel(), minlength=n)
+        n_pred = np.bincount(ids, weights=(sc > 0).ravel(), minlength=n)
         s_max = np.zeros(n)
         np.maximum.at(s_max, ids, sc.ravel())
         full = np.concatenate([[0], np.array([g.area for g in geoms]) / abs(t.a * t.e)])
@@ -162,8 +163,8 @@ def crown_table(chips, windows, score, gt, clear, chip_dir=CHIPS, min_px=64):
                 continue
             rows.append(dict(chip=str(chip), window=str(window), date=day,
                              tag=c.tag.iloc[i - 1], px=int(n_in[i]),
-                             gt_frac=n_gt[i] / n_in[i], score_mean=s_sum[i] / n_in[i],
-                             score_max=s_max[i]))
+                             gt_frac=n_gt[i] / n_in[i], pred_frac=n_pred[i] / n_in[i],
+                             score_mean=s_sum[i] / n_in[i], score_max=s_max[i]))
     df = pd.DataFrame(rows)
     df['event'] = df.gt_frac >= 0.5
     return df
