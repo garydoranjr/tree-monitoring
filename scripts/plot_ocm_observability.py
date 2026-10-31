@@ -187,7 +187,7 @@ def species(latin, outdir, flower_events, decid_events, min_clear, dpi, max_week
     fig = plt.figure(figsize=(12.5, 5.6))
     ax = fig.add_axes([0.075, 0.13, 0.6, 0.8])
     cax = fig.add_axes([0.685, 0.13, 0.012, 0.8])
-    hax = fig.add_axes([0.82, 0.13, 0.15, 0.76])
+    hax = fig.add_axes([0.8, 0.13, 0.18, 0.74])
     wmax = 7 * max_weeks
     im = ax.imshow(model.probablities[:wmax], origin='lower', aspect='auto', cmap='magma',
                    vmin=0, vmax=1, extent=[0, 365, 0.5 / 7, (wmax + 0.5) / 7])
@@ -206,16 +206,26 @@ def species(latin, outdir, flower_events, decid_events, min_clear, dpi, max_week
     cb = fig.colorbar(im, cax=cax)
     cb.set_label('chance of at least one clear Planet view', fontsize=10)
     cb.ax.tick_params(labelsize=9)
+    # split histogram: flowering to the left of zero, deciduous to the right
     bins = np.linspace(0, 1, 11)
-    for kind, color in (('flowering', C_FLOWER), ('deciduous', C_DECID)):
+    width = bins[1] - bins[0]
+    peak = 1
+    for kind, color, sign in (('flowering', C_FLOWER, -1), ('deciduous', C_DECID, 1)):
         p = ev.p[ev.kind == kind]
+        n, _ = np.histogram(p, bins=bins)
+        peak = max(peak, n.max())
+        hax.barh(bins[:-1] + width / 2, sign * n, height=width * 0.92, color=color, alpha=0.8)
         if len(p):
-            hax.hist(p, bins=bins, orientation='horizontal', histtype='stepfilled',
-                     alpha=0.55, color=color, ec=color)
-            hax.axhline(p.mean(), color=color, lw=2)
-    means = ev.groupby('kind').p.mean()
-    hax.set_title('mean: ' + ', '.join(f'{k} {means[k]:.2f}' for k in ('flowering', 'deciduous')
-                                       if k in means), fontsize=8.5, loc='left')
+            hax.plot([0, sign * 1e6], [p.mean()] * 2, color=color, lw=1.8, ls='--')
+            hax.text(0.5 + sign * 0.25, 1.01, f'{kind}\nmean {p.mean():.2f}',
+                     transform=hax.transAxes, ha='center', va='bottom', fontsize=8.5,
+                     color=color)
+    lim = peak * 1.1
+    hax.set_xlim(-lim, lim)
+    ticks = hax.get_xticks()
+    hax.set_xticks(ticks, [f'{abs(t):.0f}' for t in ticks])
+    hax.set_xlim(-lim, lim)
+    hax.axvline(0, color='0.3', lw=0.8)
     hax.set_ylim(0, 1)
     hax.set_xlabel('events', fontsize=10)
     hax.set_ylabel('chance of observing the event', fontsize=10)
