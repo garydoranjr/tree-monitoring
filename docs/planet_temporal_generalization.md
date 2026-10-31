@@ -10,7 +10,9 @@ Scripts:
 - [`scripts/apply_planet_maskrcnn.py`](../scripts/apply_planet_maskrcnn.py)
 - [`scripts/plot_crown_species_comparison.py`](../scripts/plot_crown_species_comparison.py)
 - [`scripts/make_crown_timeseries_html.py`](../scripts/make_crown_timeseries_html.py), with the page template
-  [`scripts/crown_timeseries_template.html`](../scripts/crown_timeseries_template.html)
+  [`scripts/crown_timeseries_template.html`](../scripts/crown_timeseries_template.html); served with image layers by
+  [`scripts/serve_crown_timeseries.py`](../scripts/serve_crown_timeseries.py) and
+  [`scripts/crown_viewer_imagery.py`](../scripts/crown_viewer_imagery.py)
 - the Slurm wrappers `scripts/slurm/planet_temporal_{cv,eval,final}.sh`,
   `scripts/slurm/planet_coreg_nearest.sh` and `scripts/slurm/planet_apply.sh`
 
@@ -585,6 +587,43 @@ python scripts/make_crown_timeseries_html.py \
   (`--store-min-clear`).
 - **The URL** keeps the selected tag (`#<tag>`), so a crown can be linked
   directly.
+- **Scenes with no detections.** The 108 scenes in which the model made no
+  detection at any score (`n_detections` = 0 in `scene_summary.csv`) plot as 0
+  for every crown, so both panels hide them unless *Show Planet scenes with no
+  detections* is checked. The map and the info line still count them.
+
+**Image layers (served viewer).** `serve_crown_timeseries.py` serves the same
+page from a local Flask server, with image layers under the crown map:
+
+```bash
+python scripts/crown_viewer_imagery.py prerender --jobs 3   # once, about 2 h
+python scripts/serve_crown_timeseries.py                    # http://127.0.0.1:8050
+```
+
+- **Drone flight.** The orthomosaic of the current flight. Phantom uses the
+  local alignment that `crown_classifications.nc4` was built from, and mavic
+  uses `globus/RGB`. Colours are the classifier's (mavic is scaled with
+  `config/crown_classification_mavic.yml`).
+  - The mosaics have no overviews, and reading one takes 20 s to 2 min, so a
+    0.25 m overview of each of the 200 flights is cached as WebP (about 4 MB
+    each) in `/Volumes/Earth03/flower/crown_viewer_cache/drone/`. `prerender`
+    fills the cache, and a flight that is missing is rendered on first view.
+  - Zoomed in past the overview's resolution, the server reads a near-native
+    crop of the visible window.
+- **Planet scene.** The current scene, from the `planet_rel` file in
+  `coreg_nearest_drone.json` under `--planet-dir`, with a per-band 2/98 %
+  stretch over clear pixels. Coregistered scenes are translated by −shift into
+  crown-map geometry, as `pred_coreg.tif` is; the others are shown in raw
+  Planet geometry.
+- **Overlays.** *Detection scores* is pred band 2 (the highest instance score
+  per pixel, orange, more opaque at higher score), and *cloud mask* tints
+  pixels that are not clear (pred band 3) blue. Both are taken from the pred
+  raster in the same geometry as the scene.
+- **Navigation.** Scroll to zoom the map, drag to pan, and double-click (or
+  *Reset view*) to see the whole plot. *Zoom to crown* frames the selected
+  crown, and *Crown fill* sets the fill opacity (0 shows outlines only). The
+  images follow the map date. Under *Highlight species*, ◀ ▶ step through the
+  image layer's flights or scenes.
 
 **What the comparison shows.**
 - **Large deciduous and mass-flowering canopy species track the drone
@@ -612,6 +651,9 @@ python scripts/plot_crown_species_comparison.py \
 python scripts/make_crown_timeseries_html.py \
   /Volumes/Earth03/flower/202610_temporal_apply_cal/crown_timeseries_viewer.html \
   --apply-dir /Volumes/Earth03/flower/202610_temporal_apply_cal
+python scripts/serve_crown_timeseries.py \
+  --apply-dir /Volumes/Earth03/flower/202610_temporal_apply_cal \
+  --planet-dir /Volumes/Earth03/flower/planet_clipped_cal/4band
 python scripts/compare_crown_agreement.py \
   /Volumes/Earth03/flower/202610_temporal_apply_cal/crown_agreement_toa_vs_cal
 ```

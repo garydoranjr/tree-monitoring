@@ -12,6 +12,8 @@ Planet confidence on a chosen date) above two linked time series:
   scene, with the rules of plot_crown_species_comparison.py.
 
 Data are embedded as JSON and plotly.js is inlined, so the file opens offline.
+serve_crown_timeseries.py serves the same page with drone and Planet image
+layers under the map.
 """
 import json
 import os
@@ -57,19 +59,10 @@ def load_drone(nc4s):
     return dates, f, d, species
 
 
-@click.command()
-@click.argument('output', type=click.Path(dir_okay=False))
-@click.option('--apply-dir', default=APPLY, show_default=True,
-              type=click.Path(exists=True, file_okay=False))
-@click.option('--crownmap', default=CROWNMAP, show_default=True,
-              type=click.Path(exists=True, dir_okay=False))
-@click.option('--nc4', 'nc4s', multiple=True, default=NC4S, show_default=True)
-@click.option('--store-min-clear', default=0.1, show_default=True,
-              help='Planet crown-scenes below this clear fraction are not '
-                   'embedded; the page filters further.')
-@click.option('--simplify-m', default=0.3, show_default=True,
-              help='Crown outline simplification tolerance (m).')
-def main(output, apply_dir, crownmap, nc4s, store_min_clear, simplify_m):
+def build_data(apply_dir=APPLY, crownmap=CROWNMAP, nc4s=NC4S,
+               store_min_clear=0.1, simplify_m=0.3):
+    """The page's data: drone and Planet per-crown series, scenes and crown
+    outlines in map coordinates (x - x0, y1 - y)."""
     dates, pf, pd_, species = load_drone(nc4s)
 
     scenes = pd.read_csv(f'{apply_dir}/scene_summary.csv',
@@ -125,8 +118,11 @@ def main(output, apply_dir, crownmap, nc4s, store_min_clear, simplify_m):
             row['pp'] = q(g['pos_frac'])
         crown_rows.append(row)
 
-    data = {
+    print(f'{len(crown_rows)} crowns, {len(dates)} flights, '
+          f'{len(scenes)} scenes, {len(obs):,} Planet crown-scenes')
+    return {
         'width': round(x1 - x0, 1), 'height': round(y1 - y0, 1),
+        'origin': [float(x0), float(y1)],
         'droneDates': [str(d)[:10] for d in dates],
         'scenes': {
             'date': scenes['date'].dt.strftime('%Y-%m-%d').tolist(),
@@ -136,19 +132,43 @@ def main(output, apply_dir, crownmap, nc4s, store_min_clear, simplify_m):
             'dtrain': scenes['days_to_nearest_train'].astype(int).tolist(),
             'ddrone': scenes['days_to_drone'].astype(int).tolist(),
             'droneDate': scenes['drone_date'].dt.strftime('%Y-%m-%d').tolist(),
+            'ndet': scenes['n_detections'].astype(int).tolist(),
         },
         'crowns': crown_rows,
         'phantomEnd': str(PHANTOM_END.date()),
     }
+
+
+def render_page(data, plotlyjs=None):
+    """The page with `data` embedded; plotly.js is inlined unless `plotlyjs`
+    gives a script URL to load it from instead."""
     with open(TEMPLATE) as fh:
         html = fh.read()
-    html = html.replace('/*PLOTLYJS*/', get_plotlyjs())
-    html = html.replace('/*DATA*/', json.dumps(data, separators=(',', ':')))
+    if plotlyjs is None:
+        html = html.replace('/*PLOTLYJS*/', get_plotlyjs())
+    else:
+        html = html.replace('<script>/*PLOTLYJS*/</script>',
+                            f'<script src="{plotlyjs}"></script>')
+    return html.replace('/*DATA*/', json.dumps(data, separators=(',', ':')))
+
+
+@click.command()
+@click.argument('output', type=click.Path(dir_okay=False))
+@click.option('--apply-dir', default=APPLY, show_default=True,
+              type=click.Path(exists=True, file_okay=False))
+@click.option('--crownmap', default=CROWNMAP, show_default=True,
+              type=click.Path(exists=True, dir_okay=False))
+@click.option('--nc4', 'nc4s', multiple=True, default=NC4S, show_default=True)
+@click.option('--store-min-clear', default=0.1, show_default=True,
+              help='Planet crown-scenes below this clear fraction are not '
+                   'embedded; the page filters further.')
+@click.option('--simplify-m', default=0.3, show_default=True,
+              help='Crown outline simplification tolerance (m).')
+def main(output, apply_dir, crownmap, nc4s, store_min_clear, simplify_m):
+    data = build_data(apply_dir, crownmap, nc4s, store_min_clear, simplify_m)
     with open(output, 'w') as fh:
-        fh.write(html)
-    print(f'Wrote {output} ({os.path.getsize(output) / 1e6:.1f} MB, '
-          f'{len(crown_rows)} crowns, {len(dates)} flights, '
-          f'{len(scenes)} scenes, {len(obs):,} Planet crown-scenes)')
+        fh.write(render_page(data))
+    print(f'Wrote {output} ({os.path.getsize(output) / 1e6:.1f} MB)')
 
 
 if __name__ == '__main__':

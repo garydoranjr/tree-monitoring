@@ -22,10 +22,20 @@
            background: #fafafa; cursor: pointer; }
   button:hover { background: #f0f0f0; }
   #mapwrap { position: relative; border: 1px solid var(--grid); border-radius: 4px; }
-  #map { display: block; width: 100%; height: auto; }
-  #map path { stroke: #fff; stroke-width: 0.35; cursor: pointer; }
-  #map path:hover { stroke: var(--ink); stroke-width: 1; }
-  #map path.sel { stroke: var(--sel); stroke-width: 2.2; }
+  #map { display: block; width: 100%; height: auto; touch-action: none; }
+  #map path { stroke: #fff; stroke-width: 0.5px; vector-effect: non-scaling-stroke; cursor: pointer; }
+  #map path:hover { stroke: var(--ink); stroke-width: 1.5px; }
+  #map path.sel { stroke: var(--sel); stroke-width: 3px; }
+  #map.imagery path { stroke: rgba(255,255,255,.85); stroke-width: 0.8px; }
+  #map.imagery path.sel { stroke: var(--sel); stroke-width: 3px; }
+  #map.dragging { cursor: grabbing; }
+  #map image.planet { image-rendering: pixelated; }
+  #map image.loading { opacity: .45; }
+  .layers { display: none; flex-wrap: wrap; gap: 14px; align-items: center; margin-bottom: 8px; }
+  .layers.on { display: flex; }
+  .layers label.inline, .controls label.inline { flex-direction: row; align-items: center; gap: 4px; }
+  #imgstatus { color: var(--ink2); font-size: 12px; }
+  #imgstatus.busy { color: var(--orange); }
   #tip { position: absolute; pointer-events: none; background: rgba(255,255,255,.96);
          border: 1px solid #ccc; border-radius: 4px; padding: 4px 7px; font-size: 12px;
          display: none; white-space: nowrap; box-shadow: 0 1px 4px rgba(0,0,0,.1); }
@@ -48,7 +58,7 @@ Planet: the epoch-12 temporal Mask R-CNN on scenes between flights;
 <i>max score</i> is the highest detection score on a clear crown pixel, and
 <i>covered fraction</i> the share of clear crown pixels under a detection scoring ≥ 0.5
 (a Planet event is ≥ 0.25). Click a crown on the map, or a point in the plot to
-set the map date.
+set the map date. Scroll to zoom the map and drag to pan.
 </p>
 
 <div class="controls">
@@ -61,6 +71,8 @@ set the map date.
       <option value="50" selected>0.5</option><option value="75">0.75</option>
       <option value="100">1.0</option>
     </select></label>
+  <label class="inline" title="Planet scenes in which the model made no detection at any score plot as 0 for every crown"><input id="showempty" type="checkbox">
+    Show Planet scenes with no detections</label>
   <label>Map colour
     <select id="mode">
       <option value="species">Highlight species</option>
@@ -75,8 +87,23 @@ set the map date.
   </div>
 </div>
 
+<div class="layers" id="layers">
+  <label class="inline">Image
+    <select id="imglayer">
+      <option value="none">none</option>
+      <option value="drone">drone flight</option>
+      <option value="planet">Planet scene (RGB)</option>
+    </select></label>
+  <label class="inline"><input id="lscore" type="checkbox"> Planet detection scores</label>
+  <label class="inline"><input id="lcloud" type="checkbox"> Planet cloud mask</label>
+  <label class="inline">Crown fill <input id="fillop" type="range" min="0" max="1" step="0.05" value="1"></label>
+  <button id="zoomcrown" title="Zoom to the selected crown">Zoom to crown</button>
+  <button id="resetview" title="Show the whole plot (or double-click the map)">Reset view</button>
+  <span id="imgstatus"></span>
+</div>
+
 <div id="mapwrap">
-  <svg id="map" xmlns="http://www.w3.org/2000/svg"></svg>
+  <svg id="map" xmlns="http://www.w3.org/2000/svg"><g id="imagery"></g><g id="crowns"></g></svg>
   <div id="tip"></div>
 </div>
 <div class="maprow">
@@ -120,7 +147,10 @@ const minClear = () => +document.getElementById('minclear').value;
 
 // ---------- map ----------
 const svg = document.getElementById('map');
-svg.setAttribute('viewBox', `0 0 ${D.width} ${D.height}`);
+const crownsG = document.getElementById('crowns');
+let vb = {x: 0, y: 0, w: D.width, h: D.height};
+const setViewBox = () => svg.setAttribute('viewBox', `${vb.x} ${vb.y} ${vb.w} ${vb.h}`);
+setViewBox();
 const paths = new Map();
 const frag = document.createDocumentFragment();
 for (const c of C) {
@@ -129,7 +159,7 @@ for (const c of C) {
   p.setAttribute('d', c.path); p.dataset.tag = c.tag;
   frag.appendChild(p); paths.set(c.tag, p);
 }
-svg.appendChild(frag);
+crownsG.appendChild(frag);
 const tip = document.getElementById('tip');
 svg.addEventListener('mousemove', ev => {
   const t = ev.target.dataset && ev.target.dataset.tag;
@@ -144,6 +174,7 @@ svg.addEventListener('mousemove', ev => {
 });
 svg.addEventListener('mouseleave', () => tip.style.display = 'none');
 svg.addEventListener('click', ev => {
+  if (drag.moved) return;
   const t = ev.target.dataset && ev.target.dataset.tag;
   if (t) selectCrown(+t, true);
 });
@@ -178,7 +209,9 @@ function drawMap() {
     const p = paths.get(c.tag); if (!p) continue;
     let fill;
     if (cur.mode === 'species') {
-      fill = (cur.sp === '__all' || c.sp === cur.sp) ? '#3987e5' : '#e3e3e3';
+      // Over an image, other species stay unfilled (but clickable).
+      fill = (cur.sp === '__all' || c.sp === cur.sp) ? '#3987e5'
+        : (L && imgLayer() !== 'none') ? 'rgba(0,0,0,0)' : '#e3e3e3';
     } else {
       const v = mapValue(c);
       fill = v == null ? '#f2f2f2' : rampColor(v);
@@ -186,7 +219,7 @@ function drawMap() {
     p.setAttribute('fill', fill);
     p.classList.toggle('sel', c.tag === cur.tag);
   }
-  const sel = paths.get(cur.tag); if (sel) svg.appendChild(sel);
+  const sel = paths.get(cur.tag); if (sel) crownsG.appendChild(sel);
   if (cur.mode === 'species') {
     legend.innerHTML = `<svg width="12" height="12"><rect width="12" height="12" fill="#3987e5"/></svg>
       ${cur.sp === '__all' ? 'all species' : cur.sp}`;
@@ -197,7 +230,158 @@ function drawMap() {
       ${cur.mode === 'drone' ? 'not flown' : 'cloudy / not clear enough'}`;
   }
   updateDateLabel();
+  drawImagery();
 }
+
+// ---------- pan / zoom ----------
+const MIN_VIEW_M = 15;
+function clampView() {
+  const k = Math.min(1, D.width / vb.w);  // never zoom out past the whole plot
+  vb.w *= k; vb.h *= k;
+  vb.x = Math.max(0, Math.min(D.width - vb.w, vb.x));
+  vb.y = Math.max(0, Math.min(D.height - vb.h, vb.y));
+}
+function zoomAt(f, mx, my) {
+  const w = Math.max(MIN_VIEW_M, Math.min(D.width, vb.w * f)), k = w / vb.w;
+  vb = {x: mx - (mx - vb.x) * k, y: my - (my - vb.y) * k, w, h: vb.h * k};
+  clampView(); setViewBox(); onViewChange();
+}
+function toMap(ev) {
+  const r = svg.getBoundingClientRect();
+  return [vb.x + (ev.clientX - r.left) / r.width * vb.w, vb.y + (ev.clientY - r.top) / r.height * vb.h];
+}
+svg.addEventListener('wheel', ev => {
+  ev.preventDefault();
+  const [mx, my] = toMap(ev);
+  zoomAt(Math.exp(ev.deltaY * (ev.deltaMode ? 0.05 : 0.0015)), mx, my);
+}, {passive: false});
+const drag = {on: false, moved: false, x: 0, y: 0};
+svg.addEventListener('pointerdown', ev => {
+  if (ev.button !== 0) return;
+  Object.assign(drag, {on: true, moved: false, x: ev.clientX, y: ev.clientY});
+});
+window.addEventListener('pointermove', ev => {
+  if (!drag.on) return;
+  const dx = ev.clientX - drag.x, dy = ev.clientY - drag.y;
+  if (!drag.moved && Math.hypot(dx, dy) < 4) return;
+  drag.moved = true; svg.classList.add('dragging'); tip.style.display = 'none';
+  const r = svg.getBoundingClientRect();
+  vb.x -= dx / r.width * vb.w; vb.y -= dy / r.height * vb.h;
+  drag.x = ev.clientX; drag.y = ev.clientY;
+  clampView(); setViewBox(); onViewChange();
+});
+window.addEventListener('pointerup', () => {
+  drag.on = false; svg.classList.remove('dragging');
+  setTimeout(() => { drag.moved = false; }, 0);  // after the click event
+});
+function resetView() { vb = {x: 0, y: 0, w: D.width, h: D.height}; setViewBox(); onViewChange(); }
+svg.addEventListener('dblclick', resetView);
+document.getElementById('resetview').onclick = resetView;
+document.getElementById('zoomcrown').onclick = () => {
+  const p = paths.get(cur.tag); if (!p) return;
+  const b = p.getBBox(), w = Math.max(60, 3 * Math.max(b.width, b.height * D.width / D.height));
+  const h = w * D.height / D.width;
+  vb = {x: b.x + b.width / 2 - w / 2, y: b.y + b.height / 2 - h / 2, w, h};
+  clampView(); setViewBox(); onViewChange();
+};
+
+// ---------- image layers (served pages only) ----------
+const L = D.layers;
+const imgEls = {};
+let cropTimer = null;
+if (L) {
+  document.getElementById('layers').classList.add('on');
+  const g = document.getElementById('imagery');
+  for (const k of ['drone', 'crop', 'planet', 'cloud', 'score']) {
+    const im = document.createElementNS('http://www.w3.org/2000/svg', 'image');
+    im.setAttribute('preserveAspectRatio', 'none');
+    if (k !== 'crop') { im.setAttribute('x', L.x); im.setAttribute('y', L.y);
+                        im.setAttribute('width', L.w); im.setAttribute('height', L.h); }
+    if (k === 'planet' || k === 'score' || k === 'cloud') im.classList.add('planet');
+    im.style.display = 'none'; g.appendChild(im); imgEls[k] = im;
+  }
+}
+const imgLayer = () => document.getElementById('imglayer').value;
+const wantScore = () => document.getElementById('lscore').checked;
+const wantCloud = () => document.getElementById('lcloud').checked;
+const planetLayersOn = () => imgLayer() === 'planet' || wantScore() || wantCloud();
+const pending = new Map();  // layer -> label of the image it is loading
+function showStatus() {
+  const el = document.getElementById('imgstatus');
+  const parts = [];
+  if (imgLayer() === 'drone' && cur.droneI != null) parts.push(`drone ${D.droneDates[cur.droneI]}`);
+  if (planetLayersOn() && cur.sceneI != null) parts.push(`Planet ${S.date[cur.sceneI]}` +
+    (S.coreg[cur.sceneI] ? '' : ' (not coregistered, raw geometry)'));
+  el.textContent = pending.size ? `loading ${[...pending.values()].join(', ')}…` : parts.join(' · ');
+  el.classList.toggle('busy', pending.size > 0);
+}
+// Swap an image in once it has loaded, so stepping never shows a blank map.
+function setImage(key, url, label, attrs) {
+  const el = imgEls[key];
+  if (!url) { el.style.display = 'none'; delete el.dataset.url; pending.delete(key); return; }
+  el.style.display = '';
+  if (el.dataset.url === url) return;
+  el.dataset.url = url; el.classList.add('loading'); pending.set(key, label); showStatus();
+  const pre = new Image();
+  pre.onload = pre.onerror = () => {
+    if (el.dataset.url === url) {
+      pending.delete(key);
+      el.classList.remove('loading');
+      if (attrs) for (const [a, v] of Object.entries(attrs)) el.setAttribute(a, v);
+      el.setAttribute('href', url);
+    }
+    showStatus();
+  };
+  pre.src = url;
+}
+function drawImagery() {
+  if (!L) return;
+  svg.classList.toggle('imagery', imgLayer() !== 'none');
+  const flight = imgLayer() === 'drone' && cur.droneI != null ? D.droneDates[cur.droneI] : null;
+  setImage('drone', flight && `drone/${flight}.webp`, `drone ${flight}`);
+  if (!flight) setImage('crop', null);
+  const scene = cur.sceneI != null ? S.name[cur.sceneI] : null;
+  setImage('planet', scene && imgLayer() === 'planet' && `planet/${scene}/rgb.webp`, `Planet ${scene}`);
+  setImage('cloud', scene && wantCloud() && `planet/${scene}/cloud.webp`, `clouds ${scene}`);
+  setImage('score', scene && wantScore() && `planet/${scene}/score.webp`, `scores ${scene}`);
+  requestCrop();
+  showStatus();
+}
+// Near-native drone crop of the visible window, once the overview is coarser
+// than the screen.
+function requestCrop() {
+  clearTimeout(cropTimer);
+  if (!L || imgLayer() !== 'drone' || cur.droneI == null) return;
+  const r = svg.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+  if (vb.w / (r.width * dpr) >= L.overviewRes || vb.w > 400 || vb.h > 400) {
+    setImage('crop', null); return;
+  }
+  const flight = D.droneDates[cur.droneI], v = {...vb};
+  if (imgEls.crop.dataset.flight !== flight) {  // never show another flight's detail
+    imgEls.crop.removeAttribute('href'); imgEls.crop.dataset.flight = flight;
+  }
+  cropTimer = setTimeout(() => {
+    const [ox, oy] = D.origin;
+    const q = `x0=${(ox + v.x).toFixed(2)}&y0=${(oy - v.y - v.h).toFixed(2)}` +
+      `&x1=${(ox + v.x + v.w).toFixed(2)}&y1=${(oy - v.y).toFixed(2)}&w=${Math.round(r.width * dpr)}`;
+    setImage('crop', `drone/${flight}/crop?${q}`, `drone ${flight} detail`,
+             {x: v.x, y: v.y, width: v.w, height: v.h});
+  }, 300);
+}
+function onViewChange() { requestCrop(); }
+window.addEventListener('resize', () => requestCrop());
+function onLayerChange() {
+  if (imgLayer() === 'drone' && cur.droneI == null) setDate(cur.date || D.droneDates[D.droneDates.length - 1]);
+  if (planetLayersOn() && cur.sceneI == null) setDate(cur.date || S.date[0]);
+  const op = document.getElementById('fillop');
+  if (imgLayer() !== 'none' && +op.value === 1) { op.value = 0.35; applyFill(); }
+  drawMap(); drawPlot();
+}
+function applyFill() { crownsG.setAttribute('fill-opacity', document.getElementById('fillop').value); }
+document.getElementById('imglayer').addEventListener('change', onLayerChange);
+document.getElementById('lscore').addEventListener('change', onLayerChange);
+document.getElementById('lcloud').addEventListener('change', onLayerChange);
+document.getElementById('fillop').addEventListener('input', applyFill);
 
 // ---------- crown selection ----------
 const crownSel = document.getElementById('crown');
@@ -254,43 +438,59 @@ function setDate(dateStr, sceneI) {
   const t = tms(dateStr.slice(0, 10));
   cur.droneI = nearest(droneT, t);
   cur.sceneI = sceneI != null ? sceneI : nearest(sceneT, t);
-  cur.date = isPlanet() ? S.date[cur.sceneI] : cur.mode === 'drone'
+  cur.date = series() === 'planet' ? S.date[cur.sceneI] : series() === 'drone'
     ? D.droneDates[cur.droneI] : dateStr.slice(0, 10);
+}
+// The series the ◀ ▶ buttons step: the map colouring's, else the image layer's.
+function series() {
+  if (cur.mode === 'drone') return 'drone';
+  if (isPlanet()) return 'planet';
+  if (L && imgLayer() === 'drone') return 'drone';
+  if (L && planetLayersOn()) return 'planet';
+  return null;
 }
 function updateDateLabel() {
   const el = document.getElementById('curdate');
-  if (cur.mode === 'drone' && cur.droneI != null) el.textContent = `drone flight ${D.droneDates[cur.droneI]}`;
-  else if (isPlanet() && cur.sceneI != null) {
+  if (series() === 'drone' && cur.droneI != null) el.textContent = `drone flight ${D.droneDates[cur.droneI]}`;
+  else if (series() === 'planet' && cur.sceneI != null) {
     const i = cur.sceneI;
     el.textContent = `Planet ${S.date[i]} · ${S.ddrone[i]} d to drone · ${S.dtrain[i]} d to training` +
       (S.env[i] ? '' : ' (outside envelope)') + (S.coreg[i] ? '' : ' · not coregistered');
   } else el.textContent = cur.date || '—';
 }
 function step(dir) {
-  if (cur.mode === 'drone') {
+  // The other series follows to its nearest date, so both image layers
+  // stay on the current date.
+  if (series() === 'drone') {
     cur.droneI = Math.max(0, Math.min(D.droneDates.length - 1, (cur.droneI ?? 0) + dir));
     cur.date = D.droneDates[cur.droneI];
-  } else if (isPlanet()) {
+    cur.sceneI = nearest(sceneT, droneT[cur.droneI]);
+  } else if (series() === 'planet') {
     cur.sceneI = Math.max(0, Math.min(S.date.length - 1, (cur.sceneI ?? 0) + dir));
     cur.date = S.date[cur.sceneI];
+    cur.droneI = nearest(droneT, sceneT[cur.sceneI]);
   } else return;
   drawMap(); drawPlot();
 }
 document.getElementById('prev').onclick = () => step(-1);
 document.getElementById('next').onclick = () => step(1);
 document.addEventListener('keydown', ev => {
-  if (ev.target.tagName === 'INPUT') return;
+  if (ev.target.tagName === 'INPUT' && ev.target.type === 'text') return;
   if (ev.key === 'ArrowLeft') step(-1); if (ev.key === 'ArrowRight') step(1);
 });
 
 // ---------- plot ----------
+// Scenes without a single detection plot as 0 for every crown; hidden unless asked.
+const showEmpty = () => document.getElementById('showempty').checked;
+const sceneShown = s => showEmpty() || !S.ndet || S.ndet[s] > 0;
+document.getElementById('showempty').addEventListener('change', () => drawPlot());
 function speciesShares(sp) {
   const crowns = (sp === '__all' ? C : spMap.get(sp).crowns).filter(c => c.px >= MIN_PX);
   const dn = D.droneDates.map(() => [0, 0]);
   for (const c of crowns) if (c.e) c.e.forEach((v, i) => { if (v >= 0) { dn[i][1]++; if (v > 50) dn[i][0]++; } });
   const pn = S.date.map(() => [0, 0]);
   for (const c of crowns) if (c.ps) c.ps.forEach((s, i) => {
-    if (c.pc[i] >= minClear()) { pn[s][1]++; if (c.pp[i] >= POS_EVENT) pn[s][0]++; }
+    if (c.pc[i] >= minClear() && sceneShown(s)) { pn[s][1]++; if (c.pp[i] >= POS_EVENT) pn[s][0]++; }
   });
   return {dn, pn};
 }
@@ -314,7 +514,9 @@ function drawPlot() {
   }
   if (c.ps) {
     const groups = {in: [], out: []};
-    c.ps.forEach((s, i) => { if (c.pc[i] >= minClear()) groups[S.env[s] ? 'in' : 'out'].push(i); });
+    c.ps.forEach((s, i) => {
+      if (c.pc[i] >= minClear() && sceneShown(s)) groups[S.env[s] ? 'in' : 'out'].push(i);
+    });
     for (const [key, color, name] of [['in', '#2a78d6', 'Planet max score'],
                                        ['out', '#b0b0b0', 'Planet max score, > 30 d from training']]) {
       const idx = groups[key];
@@ -352,7 +554,7 @@ function drawPlot() {
 
   const shapes = [{type: 'line', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: 0.5, y1: 0.5,
                    line: {color: '#1a1a1a', width: 1, dash: 'dot'}}];
-  if (cur.mode !== 'species' && cur.date) {
+  if (series() && cur.date) {
     for (const yref of ['y', 'y2']) shapes.push({type: 'line', xref: 'x', x0: cur.date, x1: cur.date,
       yref: yref + ' domain', y0: 0, y1: 1, line: {color: '#eb6834', width: 1.5}});
   }
@@ -376,7 +578,7 @@ function drawPlot() {
 ts.addEventListener && setTimeout(() => ts.on('plotly_click', ev => {
   const p = ev.points[0];
   const sceneI = (p.customdata && p.data.name.startsWith('Planet')) ? p.customdata[0] : null;
-  if (cur.mode === 'species') { cur.mode = sceneI != null ? 'planet' : 'drone';
+  if (cur.mode === 'species' && !series()) { cur.mode = sceneI != null ? 'planet' : 'drone';
     document.getElementById('mode').value = cur.mode; }
   setDate(String(p.x), sceneI);
   drawMap(); drawPlot();
