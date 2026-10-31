@@ -266,8 +266,10 @@ def episodes(cr):
     e['d'] = pd.to_datetime(e.date, format='%Y_%m_%d')
     e = e.sort_values(['tag', 'kind', 'd'])
     e['ep'] = (e.groupby(['tag', 'kind']).d.diff().dt.days.fillna(np.inf) > 21).cumsum()
-    looks = e.groupby(['ep', 'chip']).agg(kind=('kind', 'first'), det=('det', 'any'))
-    return looks.groupby('ep').agg(kind=('kind', 'first'), n=('det', 'size'), k=('det', 'sum'))
+    looks = e.groupby(['ep', 'chip']).agg(kind=('kind', 'first'), latin=('latin', 'first'),
+                                          det=('det', 'any'))
+    return looks.groupby('ep').agg(kind=('kind', 'first'), latin=('latin', 'first'),
+                                   n=('det', 'size'), k=('det', 'sum'))
 
 
 def look_correlation(cr):
@@ -334,6 +336,11 @@ def summary(outdir, rebuild, min_events, min_crowns, min_clear):
     crowns, vis, days = po.visibility(min_clear)
     size = cr.drop_duplicates('tag').groupby('latin').area_m2.median()
     n_cv = cr[cr.event].groupby(['latin', 'kind']).tag.nunique()
+    # observed: share of temporal-CV episodes detected in at least one of their looks
+    obs = episodes(cr).groupby(['latin', 'kind']).agg(
+        cv_episodes=('n', 'size'), cv_looks=('n', 'median'),
+        observed=('k', lambda k: (k > 0).mean()))
+    obs['observed_per_look'] = cr[cr.event].groupby(['latin', 'kind']).det.mean()
     rows = []
     for (sp, kind), e in ev.groupby(['latin', 'kind']):
         if len(e) < min_events or n_cv.get((sp, kind), 0) < min_crowns or sp not in size:
@@ -354,25 +361,28 @@ def summary(outdir, rebuild, min_events, min_crowns, min_clear):
                          wet_share=e.wet.mean(), clear_views=np.median(n_views),
                          p_clear=np.mean(p_clear), p_det=p_det.mean(),
                          single_look=np.mean(np.array(p_clear) * p_det),
-                         expected=np.mean(p_event)))
+                         expected=np.mean(p_event), **obs.loc[(sp, kind)]))
     df = pd.DataFrame(rows)
 
     fig = plt.figure(figsize=(12.5, 6))
-    panels = [('flowering', 0.155), ('deciduous', 0.655)]
+    panels = [('flowering', 0.155), ('deciduous', 0.645)]
     for kind, x0 in panels:
         d = df[df.kind == kind].sort_values('expected').reset_index(drop=True)
         color = C_FLOWER if kind == 'flowering' else C_DECID
-        ax = fig.add_axes([x0, 0.12, 0.225, 0.8])
+        ax = fig.add_axes([x0, 0.15, 0.21, 0.77])
         y = np.arange(len(d))
-        ax.barh(y, d.expected, height=0.62, color=color, alpha=0.9)
+        ax.barh(y + 0.17, d.expected, height=0.34, color=color, alpha=0.9)
+        ax.barh(y - 0.17, d.observed, height=0.34, color=color, alpha=0.35, hatch='////',
+                ec=color, lw=0)
         ax.plot(d.p_det, y, 'D', color='k', ms=4.5, clip_on=False)
         ax.plot(d.p_clear, y, 'o', mfc='white', mec='k', ms=5.5, mew=1.2, clip_on=False)
         for yi, r in zip(y, d.itertuples()):
-            for xx, txt in ((1.16, f'{r.area_m2:.0f}'), (1.31, f'{r.days:.0f}'),
-                            (1.46, f'{r.clear_views:.0f}')):
+            for xx, txt in ((1.15, f'{r.area_m2:.0f}'), (1.30, f'{r.days:.0f}'),
+                            (1.45, f'{r.clear_views:.0f}'), (1.63, f'{r.cv_episodes:.0f}')):
                 ax.text(xx, yi, txt, va='center', ha='right', fontsize=7.5, color='0.35',
                         transform=ax.get_yaxis_transform())
-        for xx, lab in ((1.16, 'crown\nm²'), (1.31, 'event\ndays'), (1.46, 'clear\nviews')):
+        for xx, lab in ((1.15, 'crown\nm²'), (1.30, 'event\ndays'), (1.45, 'clear\nviews'),
+                        (1.63, 'test\nepis.')):
             ax.text(xx, len(d) - 0.4, lab, transform=ax.get_yaxis_transform(), ha='right',
                     va='bottom', fontsize=7.5, color='0.35')
         ax.set_yticks(y, [po.italic(s) for s in d.latin], fontsize=8.5)
@@ -387,10 +397,12 @@ def summary(outdir, rebuild, min_events, min_crowns, min_clear):
     from matplotlib.lines import Line2D
     h = [Line2D([], [], marker='o', mfc='white', mec='k', mew=1.2, ms=5.5, ls=''),
          Line2D([], [], marker='D', color='k', ms=4.5, ls=''),
-         plt.Rectangle((0, 0), 1, 1, color='0.55')]
+         plt.Rectangle((0, 0), 1, 1, color='0.55'),
+         plt.Rectangle((0, 0), 1, 1, fc=(0.55, 0.55, 0.55, 0.35), hatch='////', ec='0.55', lw=0)]
     l = ['at least one clear view during the event', 'detected in one clear view',
-         'event detected over all its clear views']
-    fig.legend(h, l, loc='lower center', ncol=3, fontsize=9, frameon=False,
+         'event detected over all its clear views (modeled)',
+         'test episodes detected at least once (observed)']
+    fig.legend(h, l, loc='lower center', ncol=2, fontsize=9, frameon=False,
                bbox_to_anchor=(0.5, -0.005))
     save(fig, outdir, 'planet_event_observability')
     out = dict(detection_model_coef=coef, look_correlation=rho,
