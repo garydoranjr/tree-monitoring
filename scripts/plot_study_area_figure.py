@@ -468,10 +468,21 @@ def dated_crown(tag, date):
     """The crown outline of `tag` drawn for drone `date` (crowns_20240803)."""
     import geopandas as gpd
     static = crownmap().geometry[tag]
-    g = gpd.read_file(DATED_CROWNS, bbox=static.bounds)
+    # dated outlines can sit several metres from the static one, so search a margin
+    g = gpd.read_file(DATED_CROWNS, bbox=static.buffer(25).bounds)
     g = g[(pd.to_numeric(g.tag, errors='coerce') == tag)
           & (g.date == pd.Timestamp(date).strftime('%Y_%m_%d'))]
     return g.geometry.iloc[0] if len(g) else static
+
+
+def dated_crown_on(tag, date):
+    """The dated crown-map outline of `tag` on `date`, found by tag alone."""
+    import geopandas as gpd
+    g = gpd.read_file(DATED_CROWNS, where=f"date = '{pd.Timestamp(date):%Y_%m_%d}'")
+    g = g[pd.to_numeric(g.tag, errors='coerce') == tag]
+    if len(g) != 1:
+        raise click.ClickException(f'{len(g)} dated outlines for tag {tag} on {date}')
+    return g.geometry.iloc[0]
 
 
 def utm(gdf):
@@ -1451,16 +1462,23 @@ def label_expansion(outdir, threshold, dpi):
 # --------------------------------------------------------------------------
 # drone-color-transfer
 # --------------------------------------------------------------------------
-# Same-day examples (2024-03-06, both drones flew): rows of the 2022-09-29
-# crown map with their P(flowering) from same_date_crowns.csv (phantom local,
-# mavic with the color transfer) and figs/202610_updates (mavic, per-band).
+# Same-day examples (2024-03-06, both drones flew), by tag in the dated crown
+# map (crowns_20240803), whose 2024-03-06 outlines fit that day's mosaics.
+# The examples were first found as rows 823 and 471 of the 2022-09-29 map;
+# row 471 (labelled Astrocaryum standleyanum, 9 m2) lies inside the dated
+# Triplaris cumingiana crown, the pink-flowering tree in the tiles.
 TRANSFER_DAY = '2024_03_06'
 TRANSFER_EXAMPLES = (
-    (823, 'Cecropia insignis', 'false flowering call removed'),
-    (471, 'Astrocaryum standleyanum', 'flowering on both cameras, kept'),
+    (605232, 'Cecropia insignis', 'false flowering call removed'),
+    (116668, 'Triplaris cumingiana', 'flowering on both cameras, kept'),
 )
-SAME_DATE_BEFORE = FLOWER / 'figs/202610_updates/same_date_crowns.csv'
-SAME_DATE_AFTER = FLOWER / 'figs/20261013_updates/same_date_crowns.csv'
+# crown-mean P(flowering) over the dated outline, from the classification rasters
+TRANSFER_CLASSIFICATIONS = (
+    pu.CLASSIFICATIONS / 'BCI_50ha_2024_03_06_global_classifications.tif',  # phantom
+    FLOWER / 'results/older/classifications_mavic_perband/'
+             'BCI_50ha_2024_03_06_M3M_aligned_global_RGB_classifications.tif',  # before
+    pu.CLASSIFICATIONS / 'BCI_50ha_2024_03_06_M3M_aligned_global_RGB_classifications.tif',
+)
 RADIOMETRY_SAMPLES = FLOWER / 'figs/202610_updates/radiometry'
 
 
@@ -1539,26 +1557,30 @@ def drone_color_transfer(outdir, pad_m, dpi):
                columnspacing=1.0)
 
     # same-day examples: phantom, mavic before, mavic after
-    crowns = gpd.read_file(pu.CROWNMAP)
-    before = pd.read_csv(SAME_DATE_BEFORE)
-    after = pd.read_csv(SAME_DATE_AFTER)
+    import rasterio
+    from rasterio.mask import mask as rio_mask
     day = TRANSFER_DAY.replace('_', '-')
+    outlines = [dated_crown_on(tag, day) for tag, _, _ in TRANSFER_EXAMPLES]
     t, tg, xr0 = 2.0, 0.12, 6.15
     side = max(max(g.bounds[2] - g.bounds[0], g.bounds[3] - g.bounds[1])
-               for g in crowns.geometry.iloc[[c for c, _, _ in TRANSFER_EXAMPLES]]) / 2 + pad_m
-    for r, (c, sp, label) in enumerate(TRANSFER_EXAMPLES):
-        b = crowns.geometry.iloc[c].bounds
+               for g in outlines) / 2 + pad_m
+    for r, ((tag, sp, label), geom) in enumerate(zip(TRANSFER_EXAMPLES, outlines)):
+        b = geom.bounds
         cx, cy = (b[0] + b[2]) / 2, (b[1] + b[3]) / 2
         bounds = (cx - side, cy - side, cx + side, cy + side)
         panels = cdr.transfer_panels(TRANSFER_DAY, bounds, 1, perband, mkl)
-        p_of = lambda df, m: float(df[(df.crown == c) & (df.date == day)  # noqa: E731
-                                      & (df.mosaic == m)].p_flower.iloc[0])
-        probs = (p_of(after, 'phantom local'), p_of(before, 'mavic'), p_of(after, 'mavic'))
+        probs = []
+        for path in TRANSFER_CLASSIFICATIONS:
+            with rasterio.open(path) as src:
+                v, _ = rio_mask(src, [geom], crop=True, indexes=1, filled=False)
+            probs.append(float(v.mean()))
+        click.echo(f'{sp} (tag {tag}, {geom.area:.0f} m2): P(flowering) phantom '
+                   f'{probs[0]:.2f}, mavic before {probs[1]:.2f}, after {probs[2]:.2f}')
         y = 3.15 - r * (t + 0.35)
         for k, ((rgb, ext), (name, color, _), p) in enumerate(zip(panels, styles, probs)):
             a = fig.add_axes([(xr0 + k * (t + tg)) / FIG_W, y / FIG_H, t / FIG_W, t / FIG_H])
             a.imshow(rgb, extent=ext, interpolation='nearest')
-            crowns.iloc[[c]].boundary.plot(ax=a, color='yellow', lw=1.2)
+            gpd.GeoSeries([geom]).boundary.plot(ax=a, color='yellow', lw=1.2)
             a.set_xlim(bounds[0], bounds[2])
             a.set_ylim(bounds[1], bounds[3])
             bare(a)
