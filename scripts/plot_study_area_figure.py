@@ -1074,5 +1074,107 @@ def cloud_seasonality(outdir, montage_year, per_month, chunk_m, min_valid, seed,
                f'{by_month.to_dict()}')
 
 
+# --------------------------------------------------------------------------
+# planet-calibration
+# --------------------------------------------------------------------------
+PLANET_CAL = FLOWER / 'planet_clipped_cal/4band'
+# Four clear clips (>= 97% OCM-clear), all with their own MODIS fit, from all
+# three Dove generations within 2 days: the >= 3-satellite group <= 4 days
+# long with the largest spread in raw-SR plot-mean visible reflectance
+# (raw NIR spread 0.13, calibrated 0.007).
+CAL_EXAMPLE = ('20210130_132220_104a', '20210130_152842_1038',
+               '20210201_155304_09_2307', '20210201_160348_72_1066')
+
+
+@cli.command('planet-calibration')
+@out_option
+@click.option('--chunk-m', default=360.0, show_default=True,
+              help='Side of each image tile, metres, centred on the plot.')
+@click.option('--min-clear', default=0.8, show_default=True,
+              help='Plot clear fraction for a clip to enter the time series.')
+@click.option('--dpi', default=300, show_default=True)
+def planet_calibration(outdir, chunk_m, min_clear, dpi):
+    """Raw vs MODIS-calibrated Planet SR: example clips and the plot-mean NIR record."""
+    from shapely.geometry import shape
+    import evaluate_planet_calibration as ev
+    from util import load_config
+    means = pd.read_csv(ev.CAL / 'planet_calibration_plot_means.csv', parse_dates=['time'])
+    means = means[means.clear_frac >= min_clear]
+    have_cal = set(means.scene_id[means.version == 'CAL'])
+    means = means[means.scene_id.isin(have_cal)]
+    passes = ev.per_acquisition(means)
+    region = shape(load_config(ev.REPO / 'config/clip_50ha_plot.yml')['region'])
+    modis = ev.modis_plot_series(FLOWER / 'modis/mcd43a1_bcnm/reference_nadir_sza45.nc', region)
+    modis = modis[(modis.index >= passes.time.min()) & (modis.index <= passes.time.max())]
+    ex = means[means.scene_id.isin(CAL_EXAMPLE)].set_index(['scene_id', 'version'])
+
+    fig = plt.figure(figsize=(FIG_W, FIG_H))
+    # left: the example clips, raw SR above calibrated. One stretch shared by
+    # all eight tiles (per band, 1st-99th percentile of them pooled), so
+    # differences between tiles are real reflectance differences.
+    cx, cy = plot_outline().centroid.coords[0]
+    half = chunk_m / 2
+    bounds = (cx - half, cy - half, cx + half, cy + half)
+    t, g, x0 = 1.62, 0.08, 0.7
+    y_rows = {'SR': FIG_H - 0.75 - t, 'CAL': FIG_H - 0.75 - 2 * t - 0.4}
+    roots = {'SR': PLANET_SR, 'CAL': PLANET_CAL}
+    tiles = {(sid, v): read_window(roots[v] / sid[:4] / f'{sid}_4band.tif', bounds, [1, 2, 3])
+             for sid in CAL_EXAMPLE for v in y_rows}
+    lo, hi = stretch_limits([a for a, _ in tiles.values()], pct=(1, 99))
+    for j, sid in enumerate(CAL_EXAMPLE):
+        for version, y in y_rows.items():
+            ax = fig.add_axes([(x0 + j * (t + g)) / FIG_W, y / FIG_H, t / FIG_W, t / FIG_H])
+            arr, ext = tiles[(sid, version)]
+            ax.imshow(planet_rgb(arr, lo, hi), extent=ext, interpolation='nearest')
+            ax.set_xlim(bounds[0], bounds[2])
+            ax.set_ylim(bounds[1], bounds[3])
+            bare(ax)
+            nir = ex.loc[(sid, version), 'nir']
+            ax.text(0.04, 0.04, f'NIR {nir:.3f}', transform=ax.transAxes, fontsize=7.5,
+                    va='bottom', bbox=dict(fc='white', ec='none', alpha=0.8, pad=1.2))
+            if version == 'SR':
+                inst = ex.loc[(sid, version), 'instrument']
+                ax.set_title(f'{pd.Timestamp(sid[:8]):%d %b %Y}\n{DOVE_MODELS[inst][0]}',
+                             fontsize=9, color=ev.INSTRUMENT_COLOR[inst], pad=3)
+            if j == 0 and version == 'SR':
+                add_scalebar(ax, 100, '100 m', loc=(0.08, 0.2), lw=2.5)
+    for version, y in y_rows.items():
+        fig.text((x0 - 0.15) / FIG_W, (y + t / 2) / FIG_H,
+                 {'SR': 'raw surface\nreflectance', 'CAL': 'calibrated\nto MODIS'}[version],
+                 rotation=90, ha='center', va='center', fontsize=10)
+
+    # right: plot-mean NIR per pass, raw and calibrated, with the MODIS reference
+    left = x0 + 4 * t + 3 * g + 0.95
+    w = FIG_W - left - 0.2
+    h = (FIG_H - 1.25) / 2
+    axes = {}
+    for k, version in enumerate(('SR', 'CAL')):
+        ax = fig.add_axes([left / FIG_W, (0.65 + (1 - k) * (h + 0.15)) / FIG_H, w / FIG_W,
+                           h / FIG_H], sharex=axes.get('SR'), sharey=axes.get('SR'))
+        axes[version] = ax
+        s = passes[passes.version == version]
+        for inst, gi in s.groupby('instrument'):
+            ax.scatter(gi.time, gi.nir, s=7, lw=0, color=ev.INSTRUMENT_COLOR[inst],
+                       label=DOVE_MODELS[inst][0], zorder=2)
+        ax.plot(modis.index, modis.nir, color='k', lw=1.2, label='MODIS reference', zorder=3)
+        e = ex.xs(version, level='version')
+        ax.scatter(e.time, e.nir, s=40, facecolor='none', edgecolor='k', lw=1.1, zorder=4)
+        m, _ = ev.series_metrics(s, 'nir')
+        ax.text(0.01, 0.03, f'median change between passes ≤ 3 days apart: {m["jitter"]:.3f}',
+                transform=ax.transAxes, fontsize=8, va='bottom')
+        ax.set_ylabel(f'plot-mean NIR\n({"raw" if version == "SR" else "calibrated"})',
+                      fontsize=9.5)
+        ax.tick_params(labelsize=8.5, labelbottom=version == 'CAL')
+        ax.spines[['top', 'right']].set_visible(False)
+        ax.grid(alpha=0.3)
+    axes['SR'].legend(loc='lower left', fontsize=7.5, ncol=2, frameon=False, markerscale=2,
+                      bbox_to_anchor=(0, 1.0))
+    name = 'planet_calibration'
+    for ext in ('png', 'pdf'):
+        fig.savefig(outdir / f'{name}.{ext}', dpi=dpi)
+    plt.close(fig)
+    click.echo(f'Wrote {outdir / name}.png/.pdf ({passes.version.value_counts().to_dict()} passes)')
+
+
 if __name__ == '__main__':
     cli()
