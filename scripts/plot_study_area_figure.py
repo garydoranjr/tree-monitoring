@@ -274,8 +274,7 @@ def candidate_table():
 
 
 def scene_info(scene):
-    sc = planet_scenes()
-    sc = sc.set_index(sc.scene.str.removesuffix('_4band'))
+    sc = planet_scenes().set_index('scene')
     return {'scene': scene, 'sr': sc.sr[scene], 'shift': coreg_shifts().get(scene, (0.0, 0.0))}
 
 
@@ -1174,6 +1173,143 @@ def planet_calibration(outdir, chunk_m, min_clear, dpi):
         fig.savefig(outdir / f'{name}.{ext}', dpi=dpi)
     plt.close(fig)
     click.echo(f'Wrote {outdir / name}.png/.pdf ({passes.version.value_counts().to_dict()} passes)')
+
+
+# --------------------------------------------------------------------------
+# crown-resolution
+# --------------------------------------------------------------------------
+# One example crown per size class, each from a species whose median crown
+# area (2022-09-29 map) is close to that size: about 3, 5, 11, 25 and 70
+# Planet pixels.
+SIZE_EXAMPLES = ('Oenocarpus mapora', 'Cordia bicolor', 'Jacaranda copaia',
+                 'Brosimum alicastrum', 'Ceiba pentandra')
+RES_DATE = '2022-09-29'  # crown map, phantom flight and a 100%-clear Planet scene
+RES_SCENE = '20220929_152408_87_247b_4band'
+
+
+def example_crowns(species):
+    """Per species: the crown nearest the species median area, preferring compact shapes."""
+    import plot_ocm_observability as obs
+    c = crownmap().copy()
+    c['area'] = c.geometry.area
+    c['latin'] = c.mnemonic.str.upper().map(obs.taxa())
+    c['compact'] = 4 * np.pi * c.area / c.geometry.length ** 2
+    out = []
+    for sp in species:
+        g = c[c.latin == sp]
+        med = g.area.median()
+        g = g[(np.log(g.area / med)).abs() < 0.25]  # within ~25% of the median
+        best = g.sort_values('compact', ascending=False).iloc[0]
+        out.append({'tag': best.name, 'latin': sp, 'area': best.area, 'median': med,
+                    'n': int((c.latin == sp).sum()), 'geom': best.geometry})
+    return pd.DataFrame(out), c
+
+
+@cli.command('crown-resolution')
+@out_option
+@click.option('--tile-m', default=46.0, show_default=True,
+              help='Ground width of every example tile, metres.')
+@click.option('--dpi', default=300, show_default=True)
+def crown_resolution(outdir, tile_m, dpi):
+    """Crown-size histogram and example crowns in drone vs Planet resolution."""
+    import geopandas as gpd
+    ex, crowns = example_crowns(SIZE_EXAMPLES)
+    px_area = 9.0
+    fig = plt.figure(figsize=(FIG_W, FIG_H))
+
+    # histogram of crown area, log scale, with Planet pixels on a second axis
+    ax = fig.add_axes([0.07, 4.72 / FIG_H, 0.88, 0.82 / FIG_H])
+    bins = np.logspace(np.log10(2), np.log10(2000), 50)
+    ax.hist(crowns.area, bins=bins, color='0.6', ec='white', lw=0.3)
+    ax.set_xscale('log')
+    ax.set_xlim(bins[0], bins[-1])
+    ax.set_xlabel('crown area (m²)', fontsize=9.5, labelpad=1)
+    ax.set_ylabel('crowns', fontsize=9.5)
+    ax.tick_params(labelsize=8.5)
+    ax.spines[['right']].set_visible(False)
+    med = crowns.area.median()
+    ax.axvline(med, color='k', lw=1, ls=':')
+    ax.text(med * 1.04, ax.get_ylim()[1] * 0.95, f'median {med:.0f} m²', fontsize=8,
+            va='top')
+    for i, r in enumerate(ex.itertuples(), start=1):
+        ax.axvline(r.area, color=C_BOX, lw=1.4)
+        ax.text(r.area, ax.get_ylim()[1] * 1.02, str(i), ha='center', va='bottom',
+                fontsize=9, fontweight='bold', color='#9a7a00')
+    top = ax.secondary_xaxis('top', functions=(lambda a: a / px_area, lambda p: p * px_area))
+    top.set_xlabel('Planet pixels (3 × 3 m)', fontsize=9.5, labelpad=2)
+    top.tick_params(labelsize=8.5)
+    ax.text(0.995, 0.88, f'{len(crowns):,} crowns, 50 ha crown map {RES_DATE}',
+            transform=ax.transAxes, ha='right', va='top', fontsize=8, color='0.35')
+
+    # example tiles: drone with the Planet pixel grid, and Planet itself
+    # MODIS-calibrated SR on the same grid as the raw clip. Each band's dark point
+    # is its own 1st percentile over the five tiles, but all bands share one range
+    # (the widest 1st-99th percentile span): per-band ranges stretch the narrow
+    # visible bands of forest into colour noise
+    s = scene_info(RES_SCENE)
+    dx, dy = s['shift']
+    cal = PLANET_CAL / RES_SCENE[:4] / f'{RES_SCENE}.tif'
+    import rasterio
+    with rasterio.open(cal) as src:
+        gx0, gy0 = src.transform.c, src.transform.f  # Planet pixel corner, Planet frame
+    drone = drone_file('phantom', RES_DATE)
+    n = len(ex)
+    reads = []
+    for r in ex.itertuples():
+        cx, cy = r.geom.centroid.coords[0]
+        pb = (cx - tile_m / 2 - 6, cy - tile_m / 2 - 6, cx + tile_m / 2 + 6, cy + tile_m / 2 + 6)
+        reads.append(read_window(cal, shifted_bounds(pb, (dx, dy)), [1, 2, 3]))
+    plo, phi = stretch_limits([a for a, _ in reads], pct=(1, 99))
+    phi = plo + (phi - plo).max()
+    t, gap = 1.8, 0.42
+    x0 = (FIG_W - n * t - (n - 1) * gap) / 2 + 0.25
+    y_planet = 0.12
+    y_drone = y_planet + t + 0.1
+    for i, r in enumerate(ex.itertuples()):
+        cx, cy = r.geom.centroid.coords[0]
+        b = (cx - tile_m / 2, cy - tile_m / 2, cx + tile_m / 2, cy + tile_m / 2)
+        x = x0 + i * (t + gap)
+        # drone, 4.5 cm, read at ~10 cm
+        a1 = fig.add_axes([x / FIG_W, y_drone / FIG_H, t / FIG_W, t / FIG_H])
+        arr, ext = read_window(drone, b, [1, 2, 3, 4], factor=2)
+        a1.imshow(pu.rgb_display(arr), extent=ext)
+        # Planet pixel edges, moved into the drone frame by the coreg shift
+        kx = np.arange(np.floor((b[0] + dx - gx0) / 3), np.ceil((b[2] + dx - gx0) / 3) + 1)
+        ky = np.arange(np.floor((b[1] + dy - gy0) / 3), np.ceil((b[3] + dy - gy0) / 3) + 1)
+        for k in kx:
+            a1.axvline(gx0 + 3 * k - dx, color='white', lw=0.35, alpha=0.75)
+        for k in ky:
+            a1.axhline(gy0 + 3 * k - dy, color='white', lw=0.35, alpha=0.75)
+        # Planet, 3 m
+        a2 = fig.add_axes([x / FIG_W, y_planet / FIG_H, t / FIG_W, t / FIG_H])
+        parr, pext = reads[i]
+        a2.imshow(planet_rgb(parr, plo, phi, gamma=0.9), extent=unshift_extent(pext, (dx, dy)),
+                  interpolation='nearest')
+        for a in (a1, a2):
+            gpd.GeoSeries([r.geom]).boundary.plot(ax=a, color=C_CROWN, lw=1.1)
+            a.set_xlim(b[0], b[2])
+            a.set_ylim(b[1], b[3])
+            bare(a)
+        a1.set_title(f'{i + 1}. {italic_name(r.latin)}\n{r.area:.0f} m² ≈ '
+                     f'{r.area / px_area:.0f} pixels', fontsize=8.5, pad=3)
+        if i == 0:
+            add_scalebar(a1, 10, '10 m', loc=(0.07, 0.07), lw=2.5)
+            add_scalebar(a2, 10, '10 m', loc=(0.07, 0.07), lw=2.5)
+    xl = (x0 - 0.22) / FIG_W
+    fig.text(xl, (y_drone + t / 2) / FIG_H, 'drone (4.5 cm)\n+ Planet pixel grid',
+             rotation=90, ha='center', va='center', fontsize=9.5)
+    fig.text(xl, (y_planet + t / 2) / FIG_H, 'PlanetScope (3 m)', rotation=90,
+             ha='center', va='center', fontsize=9.5)
+    name = 'crown_resolution'
+    for ext in ('png', 'pdf'):
+        fig.savefig(outdir / f'{name}.{ext}', dpi=dpi)
+    plt.close(fig)
+    click.echo(f'Wrote {outdir / name}.png/.pdf\n'
+               + ex[['tag', 'latin', 'area', 'median', 'n']].round(0).to_string())
+
+
+def italic_name(latin):
+    return ' '.join(f'$\\it{{{w}}}$' for w in latin.split())
 
 
 if __name__ == '__main__':
