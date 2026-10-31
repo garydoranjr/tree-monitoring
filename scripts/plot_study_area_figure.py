@@ -1321,5 +1321,120 @@ def italic_name(latin):
     return ' '.join(f'$\\it{{{w}}}$' for w in latin.split())
 
 
+# --------------------------------------------------------------------------
+# label-expansion
+# --------------------------------------------------------------------------
+VICENTE_LABELS = FLOWER / 'vicente_202509/flowering_dataset.gpkg'
+LABEL_DATE = '2023-03-07'  # the training date with the most labels (91)
+# 400 m square with the most labelled crowns that date, including deciduous and no-event ones
+LABEL_VIEW = (625880, 1011840, 626280, 1012240)
+LABEL_COLORS = {'flowering': '#ff3db8', 'deciduous': '#ffa600', 'none': '#00e5ff'}
+LABEL_NAMES = {'flowering': 'flowering', 'deciduous': 'deciduous', 'none': 'no event'}
+
+
+def vicente_classes(g):
+    """Training classes as generate_drone_image_masks.py builds them: flowering if
+    isFlowering == 'yes', deciduous if leafing < 50, otherwise no event."""
+    flower = g.isFlowering.fillna('no') == 'yes'
+    return np.where(flower, 'flowering', np.where(g.leafing < 50, 'deciduous', 'none'))
+
+
+@cli.command('label-expansion')
+@out_option
+@click.option('--threshold', default=0.5, show_default=True,
+              help='Crown-mean classifier probability for a positive call '
+                   '(compare_classifications_to_gt.py default).')
+@click.option('--dpi', default=300, show_default=True)
+def label_expansion(outdir, threshold, dpi):
+    """Hand labels used for training vs classifier labels for every crown."""
+    import geopandas as gpd
+    import xarray as xr
+    from matplotlib.lines import Line2D
+    from shapely.geometry import box
+    view = box(*LABEL_VIEW)
+    day = pd.Timestamp(LABEL_DATE)
+
+    lab = gpd.read_file(VICENTE_LABELS)
+    lab = lab[lab.date == day.strftime('%Y_%m_%d')].to_crs(UTM)
+    lab['cls'] = vicente_classes(lab)
+    lab = lab[lab.intersects(view)]
+
+    crowns = gpd.read_file(DATED_CROWNS, bbox=LABEL_VIEW)
+    crowns = crowns[crowns.date == day.strftime('%Y_%m_%d')].copy()
+    crowns['tag'] = pd.to_numeric(crowns.tag, errors='coerce')
+    crowns = crowns.dropna(subset=['tag'])
+    crowns = crowns[crowns.intersects(view)]
+    # a crown counts as hand-labelled if a label polygon covers most of it
+    # (rows, not tags: a few tags repeat in the dated map)
+    crowns = crowns.reset_index(drop=True)
+    crowns['row'] = crowns.index
+    covered = gpd.overlay(crowns[['row', 'geometry']], lab[['geometry']], how='intersection')
+    covered['a'] = covered.area
+    frac = covered.groupby('row').a.sum() / crowns.area
+    crowns['labelled'] = frac.reindex(crowns.index).fillna(0) >= 0.5
+
+    with xr.open_dataset(NC4['phantom']) as ds:
+        s = ds.sel(date=day)
+        fp = s.flowering_probability.to_series()
+        dp = s.deciduous_probability.to_series()
+    crowns['fp'] = crowns.tag.map(fp)
+    crowns['dp'] = crowns.tag.map(dp)
+    crowns = crowns.dropna(subset=['fp'])
+    crowns['cls'] = np.where(crowns.fp >= threshold, 'flowering',
+                             np.where(crowns.dp >= threshold, 'deciduous', 'none'))
+    new = crowns[~crowns.labelled]
+
+    fig = plt.figure(figsize=(FIG_W, FIG_H))
+    side = 5.35
+    gap = 0.3
+    x0 = (FIG_W - 2 * side - gap) / 2
+    xs = (x0, x0 + side + gap)
+    y0 = 0.62
+    path = pu.phantom_dir('24782016', 'local') / f"BCI_50ha_{day:%Y_%m_%d}_local.tif"
+    arr, ext = read_window(path, LABEL_VIEW, [1, 2, 3, 4], factor=8)
+    img = pu.rgb_display(arr)
+    axes = []
+    for k, x in enumerate(xs):
+        ax = fig.add_axes([x / FIG_W, y0 / FIG_H, side / FIG_W, side / FIG_H])
+        axes.append(ax)
+        ax.imshow(img, extent=ext)
+        if k == 0:
+            # crowns nobody labelled
+            new.boundary.plot(ax=ax, color='white', lw=0.5, alpha=0.7)
+        else:
+            for c, col in LABEL_COLORS.items():
+                g = new[new.cls == c]
+                if len(g):
+                    g.boundary.plot(ax=ax, color=col, lw=0.7)
+        for c, col in LABEL_COLORS.items():
+            g = lab[lab.cls == c]
+            if len(g):
+                g.boundary.plot(ax=ax, color=col, lw=2.0)
+        ax.set_xlim(LABEL_VIEW[0], LABEL_VIEW[2])
+        ax.set_ylim(LABEL_VIEW[1], LABEL_VIEW[3])
+        bare(ax)
+        add_scalebar(ax, 100, '100 m', loc=(0.05, 0.04))
+    n_lab = lab.cls.value_counts()
+    n_new = new.cls.value_counts()
+    axes[0].set_title(f'Hand labels used for training: {len(lab)} crowns', fontsize=11, pad=5)
+    axes[1].set_title(f'+ classifier labels: {len(new)} more crowns', fontsize=11, pad=5)
+    h0 = [Line2D([], [], color=col, lw=2.0,
+                 label=f'{LABEL_NAMES[c]} ({n_lab.get(c, 0)})') for c, col in LABEL_COLORS.items()]
+    h0.append(Line2D([], [], color='0.55', lw=0.8, label=f'unlabelled ({len(new)})'))
+    axes[0].legend(handles=h0, loc='upper center', bbox_to_anchor=(0.5, -0.01), ncol=4,
+                   fontsize=9, frameon=False, handlelength=1.6)
+    h1 = [Line2D([], [], color=col, lw=0.9,
+                 label=f'{LABEL_NAMES[c]} ({n_new.get(c, 0)})') for c, col in LABEL_COLORS.items()]
+    axes[1].legend(handles=h1, loc='upper center', bbox_to_anchor=(0.5, -0.01), ncol=3,
+                   fontsize=9, frameon=False, handlelength=1.6,
+                   title='classifier (thin outlines)', title_fontsize=9)
+    name = 'label_expansion'
+    for ext_ in ('png', 'pdf'):
+        fig.savefig(outdir / f'{name}.{ext_}', dpi=dpi)
+    plt.close(fig)
+    click.echo(f'Wrote {outdir / name}.png/.pdf\nhand {n_lab.to_dict()}  classifier '
+               f'{n_new.to_dict()}  crowns in view {len(crowns)}')
+
+
 if __name__ == '__main__':
     cli()
