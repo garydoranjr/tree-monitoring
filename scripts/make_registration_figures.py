@@ -203,7 +203,7 @@ def shifts(outdir, dpi):
     h, l = ax.get_legend_handles_labels()
     ax.legend(h[::-1], l[::-1], loc='upper left', fontsize=7.5, frameon=True, framealpha=0.9, markerscale=2,
               handletextpad=0.2, borderpad=0.3)
-    ax.set_title('Planet → drone shift per scene', fontsize=10.5, pad=4)
+    ax.set_title('Planet-to-drone shift per scene', fontsize=10.5, pad=4)
 
     ax2 = fig.add_axes([0.62 / W, 0.5 / H, 3.25 / W, 1.3 / H])
     bins = np.arange(0, 37, 1.5)
