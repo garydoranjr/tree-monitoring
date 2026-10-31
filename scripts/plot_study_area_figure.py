@@ -1339,27 +1339,26 @@ def vicente_classes(g):
     return np.where(flower, 'flowering', np.where(g.leafing < 50, 'deciduous', 'none'))
 
 
-@cli.command('label-expansion')
-@out_option
-@click.option('--threshold', default=0.5, show_default=True,
-              help='Crown-mean classifier probability for a positive call '
-                   '(compare_classifications_to_gt.py default).')
-@click.option('--dpi', default=300, show_default=True)
-def label_expansion(outdir, threshold, dpi):
-    """Hand labels used for training vs classifier labels for every crown."""
+def label_tables(bounds, threshold=0.5, day=LABEL_DATE):
+    """(hand labels, unlabelled crowns with classifier class) inside `bounds`.
+
+    Hand labels are Vicente's training polygons with vicente_classes(); the
+    unlabelled crowns are that date's dated crown-map polygons that hand labels
+    cover less than half of, classed from crown_classifications.nc4: flowering
+    if P(flowering) >= threshold, else deciduous if P(deciduous) >= threshold,
+    else none.
+    """
     import geopandas as gpd
     import xarray as xr
-    from matplotlib.lines import Line2D
     from shapely.geometry import box
-    view = box(*LABEL_VIEW)
-    day = pd.Timestamp(LABEL_DATE)
-
+    view = box(*bounds)
+    day = pd.Timestamp(day)
     lab = gpd.read_file(VICENTE_LABELS)
     lab = lab[lab.date == day.strftime('%Y_%m_%d')].to_crs(UTM)
     lab['cls'] = vicente_classes(lab)
     lab = lab[lab.intersects(view)]
 
-    crowns = gpd.read_file(DATED_CROWNS, bbox=LABEL_VIEW)
+    crowns = gpd.read_file(DATED_CROWNS, bbox=bounds)
     crowns = crowns[crowns.date == day.strftime('%Y_%m_%d')].copy()
     crowns['tag'] = pd.to_numeric(crowns.tag, errors='coerce')
     crowns = crowns.dropna(subset=['tag'])
@@ -1374,15 +1373,28 @@ def label_expansion(outdir, threshold, dpi):
     crowns['labelled'] = frac.reindex(crowns.index).fillna(0) >= 0.5
 
     with xr.open_dataset(NC4['phantom']) as ds:
-        s = ds.sel(date=day)
-        fp = s.flowering_probability.to_series()
-        dp = s.deciduous_probability.to_series()
+        sel = ds.sel(date=day)
+        fp = sel.flowering_probability.to_series()
+        dp = sel.deciduous_probability.to_series()
     crowns['fp'] = crowns.tag.map(fp)
     crowns['dp'] = crowns.tag.map(dp)
     crowns = crowns.dropna(subset=['fp'])
     crowns['cls'] = np.where(crowns.fp >= threshold, 'flowering',
                              np.where(crowns.dp >= threshold, 'deciduous', 'none'))
-    new = crowns[~crowns.labelled]
+    return lab, crowns[~crowns.labelled]
+
+
+@cli.command('label-expansion')
+@out_option
+@click.option('--threshold', default=0.5, show_default=True,
+              help='Crown-mean classifier probability for a positive call '
+                   '(compare_classifications_to_gt.py default).')
+@click.option('--dpi', default=300, show_default=True)
+def label_expansion(outdir, threshold, dpi):
+    """Hand labels used for training vs classifier labels for every crown."""
+    from matplotlib.lines import Line2D
+    day = pd.Timestamp(LABEL_DATE)
+    lab, new = label_tables(LABEL_VIEW, threshold)
 
     fig = plt.figure(figsize=(FIG_W, FIG_H))
     side = 5.35
@@ -1433,7 +1445,7 @@ def label_expansion(outdir, threshold, dpi):
         fig.savefig(outdir / f'{name}.{ext_}', dpi=dpi)
     plt.close(fig)
     click.echo(f'Wrote {outdir / name}.png/.pdf\nhand {n_lab.to_dict()}  classifier '
-               f'{n_new.to_dict()}  crowns in view {len(crowns)}')
+               f'{n_new.to_dict()}')
 
 
 if __name__ == '__main__':
