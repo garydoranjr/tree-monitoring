@@ -16,7 +16,7 @@ Targets follow generate_drone_image_masks.py: flowering if isFlowering is
 'yes' ('maybe' dropped), deciduous if leafing < 50. New labels are restricted
 to segmentation == 'good', where the crown outline matches the crown.
 
-Writes drone_classifier_pr.{png,pdf} and prints the labelling counts for the
+Writes drone_classifier_pr.{png,pdf} and drone_classifier_roc.{png,pdf}, and prints the labelling counts for the
 slide (also written to materials/drone_classifier_counts.json).
 
 Typical usage:
@@ -36,7 +36,8 @@ import click
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from sklearn.metrics import average_precision_score, precision_recall_curve
+from sklearn.metrics import (average_precision_score, precision_recall_curve, roc_auc_score,
+                             roc_curve)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import plot_study_area_figure as sa  # noqa: E402
@@ -154,6 +155,43 @@ def main(outdir, new_labels, size, dpi):
     fig.legend(handles=handles, loc='lower center', ncol=4, fontsize=9.5, frameon=False,
                bbox_to_anchor=(0.53, 0.0))
     name = 'drone_classifier_pr'
+    for ext in ('png', 'pdf'):
+        fig.savefig(outdir / f'{name}.{ext}', dpi=dpi)
+    plt.close(fig)
+    click.echo(f'Wrote {outdir / name}.png/.pdf')
+
+    # ROC curves, same layout
+    fig, axes = plt.subplots(1, 2, figsize=size, sharey=True)
+    fig.subplots_adjust(left=0.09, right=0.98, bottom=0.2, top=0.93, wspace=0.08)
+    for ax, (task, col) in zip(axes, TASKS.items()):
+        for name, df in sets.items():
+            d = df.dropna(subset=[task, col])
+            y, s = d[task].values.astype(int), d[col].values
+            fpr, tpr, _ = roc_curve(y, s)
+            pred = s >= THRESHOLD
+            ax.plot(fpr, tpr, color=SETS[name], lw=2)
+            ax.plot(pred[y == 0].mean(), pred[y == 1].mean(), 'o', color=SETS[name],
+                    mec='k', ms=7, zorder=5)
+            summary[f'{task} | {name}']['auroc'] = roc_auc_score(y, s)
+        ax.plot([0, 1], [0, 1], color='0.5', lw=1, ls=':')
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1.02)
+        ax.set_xlabel('false positive rate', fontsize=11)
+        ax.set_title(task, fontsize=12)
+        ax.grid(alpha=0.3)
+        ax.spines[['top', 'right']].set_visible(False)
+        ax.tick_params(labelsize=9.5)
+        ax.text(0.97, 0.04, '\n'.join(f"{n}: AUROC {summary[f'{task} | {n}']['auroc']:.3f}"
+                                      for n in sets), transform=ax.transAxes, fontsize=9.5,
+                ha='right', va='bottom', bbox=dict(fc='white', ec='0.8', pad=3))
+    axes[0].set_ylabel('true positive rate (recall)', fontsize=11)
+    handles = [Line2D([], [], color=c, lw=2, label=n) for n, c in SETS.items()]
+    handles += [Line2D([], [], marker='o', color='0.4', mec='k', ls='none', ms=7,
+                       label=f'threshold {THRESHOLD}'),
+                Line2D([], [], color='0.5', ls=':', lw=1, label='chance')]
+    fig.legend(handles=handles, loc='lower center', ncol=4, fontsize=9.5, frameon=False,
+               bbox_to_anchor=(0.53, 0.0))
+    name = 'drone_classifier_roc'
     for ext in ('png', 'pdf'):
         fig.savefig(outdir / f'{name}.{ext}', dpi=dpi)
     plt.close(fig)
