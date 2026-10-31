@@ -1251,7 +1251,11 @@ def crown_resolution(outdir, tile_m, dpi):
     for e in ex:
         cx, cy = e['geom'].centroid.coords[0]
         e['box'] = (cx - tile_m / 2, cy - tile_m / 2, cx + tile_m / 2, cy + tile_m / 2)
-        e['shift'] = scene_info(e['scene'])['shift']
+        # only scenes with a successful AROSICS match: scene_info falls back to a
+        # zero shift otherwise, which can leave a scene tens of metres off
+        if e['scene'] not in coreg_shifts() or not any(coreg_shifts()[e['scene']]):
+            raise click.ClickException(f"{e['scene']} has no successful co-registration")
+        e['shift'] = coreg_shifts()[e['scene']]
         e['cal'] = PLANET_CALFILL / e['scene'][:4] / f"{e['scene']}.tif"
         b = e['box']
         pb = (b[0] - 6, b[1] - 6, b[2] + 6, b[3] + 6)
