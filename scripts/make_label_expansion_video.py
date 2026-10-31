@@ -2,8 +2,8 @@
 """Animation of hand labels expanding to classifier labels over the whole 50ha plot.
 
 One Phantom flight (plot_study_area_figure.LABEL_DATE, 2023-03-07). The loop:
-  1. hold: Vicente's training labels (thick outlines: flowering, deciduous, no
-     event); every other crown under a grey mask
+  1. hold: Vicente's training labels of events (thick outlines: flowering,
+     deciduous); every unlabelled crown under a grey mask
   2. cross-fade: the mask fades out while the classifier's flowering and
      deciduous calls fade in (thin outlines); crowns it calls no event get none
   3. hold: hand labels plus classifier labels
@@ -33,6 +33,7 @@ import plot_update_figures as pu  # noqa: E402
 import plot_study_area_figure as sa  # noqa: E402
 
 MASK = '#7f7f7f'
+EVENTS = ('flowering', 'deciduous')
 
 
 def ease(t):
@@ -46,9 +47,9 @@ def ease(t):
               default=sa.DEFAULT_OUT, show_default=True)
 @click.option('--name', default='label_expansion', show_default=True)
 @click.option('--fps', default=20, show_default=True)
-@click.option('--hold', nargs=2, type=float, default=(2.5, 3.5), show_default=True,
+@click.option('--hold', nargs=2, type=float, default=(1.5, 2.0), show_default=True,
               help='Seconds held on the hand labels and on the classifier labels.')
-@click.option('--fade', default=1.5, show_default=True, help='Seconds per cross-fade.')
+@click.option('--fade', default=0.5, show_default=True, help='Seconds per cross-fade.')
 @click.option('--threshold', default=0.5, show_default=True)
 @click.option('--gif-width', default=1280, show_default=True)
 def main(outdir, name, fps, hold, fade, threshold, gif_width):
@@ -79,8 +80,10 @@ def main(outdir, name, fps, hold, fade, threshold, gif_width):
         if len(g):
             g.boundary.plot(ax=ax, color=sa.LABEL_COLORS[c], lw=1.1)
             fades.append(ax.collections[-1])
-    # hand labels, all classes, always on
-    for c, col in sa.LABEL_COLORS.items():
+    # hand labels of events, always on; hand-labelled no-event crowns, like the
+    # classifier's, get no outline (they are unmasked, being labelled)
+    for c in EVENTS:
+        col = sa.LABEL_COLORS[c]
         g = lab[lab.cls == c]
         if len(g):
             g.boundary.plot(ax=ax, color=col, lw=2.4)
@@ -89,17 +92,9 @@ def main(outdir, name, fps, hold, fade, threshold, gif_width):
     n_lab = lab.cls.value_counts()
     handles = [Line2D([], [], color=sa.LABEL_COLORS[c], lw=2.4,
                       label=f'{sa.LABEL_NAMES[c]}: hand label ({n_lab.get(c, 0)})')
-               for c in sa.LABEL_COLORS]
-    fig.legend(handles=handles, loc='lower left', bbox_to_anchor=(0.02, 0.0), ncol=3,
+               for c in EVENTS]
+    fig.legend(handles=handles, loc='lower left', bbox_to_anchor=(0.02, 0.0), ncol=2,
                fontsize=11, frameon=False, handlelength=1.8)
-    t_hand = fig.text(0.98, 0.035, f'Hand labels used for training: {len(lab)} crowns\n'
-                      f'{len(new):,} unlabelled crowns (grey)', ha='right', va='bottom',
-                      fontsize=12)
-    t_cls = fig.text(0.98, 0.035,
-                     f"+ classifier: {n_new.get('flowering', 0)} flowering, "
-                     f"{n_new.get('deciduous', 0)} deciduous (thin)\n"
-                     f"{n_new.get('none', 0):,} no event (no outline)", ha='right',
-                     va='bottom', fontsize=12)
     leg_cls = fig.legend(handles=[Line2D([], [], color='0.3', lw=1.1, label='classifier')],
                          loc='lower left', bbox_to_anchor=(0.02, 0.04), fontsize=11,
                          frameon=False, handlelength=1.8)
@@ -112,8 +107,6 @@ def main(outdir, name, fps, hold, fade, threshold, gif_width):
         mask.set_alpha(0.7 * (1 - s))
         for c in fades:
             c.set_alpha(s)
-        t_hand.set_alpha(1 - s)
-        t_cls.set_alpha(s)
         for t in leg_mask.get_texts() + leg_mask.legend_handles:
             t.set_alpha((1 - s) * (0.7 if isinstance(t, Patch) else 1))
         for t in leg_cls.get_texts() + leg_cls.legend_handles:
