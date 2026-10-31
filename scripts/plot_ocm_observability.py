@@ -189,7 +189,7 @@ def species(latin, outdir, flower_events, decid_events, min_clear, dpi, max_week
     cax = fig.add_axes([0.685, 0.13, 0.012, 0.8])
     hax = fig.add_axes([0.8, 0.13, 0.18, 0.74])
     wmax = 7 * max_weeks
-    im = ax.imshow(model.probablities[:wmax], origin='lower', aspect='auto', cmap='magma',
+    im = ax.imshow(model.probablities[:wmax], origin='lower', aspect='auto', cmap='Greys_r',
                    vmin=0, vmax=1, extent=[0, 365, 0.5 / 7, (wmax + 0.5) / 7])
     for kind, color, marker in (('flowering', C_FLOWER, 'o'), ('deciduous', C_DECID, 's')):
         e = ev[ev.kind == kind]
