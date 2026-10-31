@@ -5,7 +5,7 @@ Written 2026-10-30. **Not started.** This is deferred to a dedicated session.
 ## Why
 
 AROSICS is capped at `max_shift=10` in `compute_coreg_shift` (`scripts/apply_drone_labels_coreg.py`).
-That is 10 Planet pixels, or 30 m, and it is also used by `coreg_planet_to_nearest_drone.py`.
+That is 10 Planet pixels, or 30 m along each axis (successful shifts reach 36 m in magnitude), and it is also used by `coreg_planet_to_nearest_drone.py`.
 Some Planet scenes are mis-georeferenced by more than 30 m. For those scenes AROSICS cannot find
 the true match, reports failure (`ignore_errors=True`), and the pipeline falls back to:
 - **no shift**, as in `build_crown_pixel_series.py`, which uses the unshifted polygons for a
