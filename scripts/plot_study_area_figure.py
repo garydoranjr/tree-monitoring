@@ -1280,9 +1280,9 @@ def crown_resolution(outdir, tile_m, dpi):
         kx = np.arange(np.floor((b[0] + dx - gx0) / 3), np.ceil((b[2] + dx - gx0) / 3) + 1)
         ky = np.arange(np.floor((b[1] + dy - gy0) / 3), np.ceil((b[3] + dy - gy0) / 3) + 1)
         for k in kx:
-            a1.axvline(gx0 + 3 * k - dx, color='white', lw=0.35, alpha=0.75)
+            a1.axvline(gx0 + 3 * k - dx, color='white', lw=0.7, alpha=0.85)
         for k in ky:
-            a1.axhline(gy0 + 3 * k - dy, color='white', lw=0.35, alpha=0.75)
+            a1.axhline(gy0 + 3 * k - dy, color='white', lw=0.7, alpha=0.85)
         # Planet within a day of the flight
         a2 = fig.add_axes([x / FIG_W, y_planet / FIG_H, t / FIG_W, t / FIG_H])
         parr, pext = reads[i]
