@@ -76,10 +76,10 @@ def spatial(outdir):
     wins = {k: _split_window(h, w, k, WINDOW) for k in ('left', 'right')}
     split_x = t.c + wins['left'][3] * t.a
 
-    W, H = SIZE
-    fig = plt.figure(figsize=SIZE)
-    ah = 0.92 * W / H * h / w * (h * CHIP_RES + 40) / (h * CHIP_RES)
-    ax = fig.add_axes([0.04, 0.96 - ah, 0.92, ah])
+    W = SIZE[0]
+    H = W * h / w
+    fig = plt.figure(figsize=(W, H))
+    ax = fig.add_axes([0, 0, 1, 1])
     ax.imshow(img, extent=ext)
     for c in find_contours(mask.astype(float), 0.5):
         ax.plot(t.c + c[:, 1] * t.a, t.f + c[:, 0] * t.e, color='#ffe11a', lw=0.35)
@@ -95,51 +95,42 @@ def spatial(outdir):
                 path_effects=sa.halo(3.5, color))
     ax.axvline(split_x, color='white', lw=1.5, ls='--')
     ax.set_xlim(ext[0], ext[1])
-    ax.set_ylim(ext[2], ext[3] + 40)
+    ax.set_ylim(ext[2], ext[3])
     sa.bare(ax)
     for s in ax.spines.values():
         s.set_visible(False)
     sa.add_scalebar(ax, 100, '100 m', loc=(0.02, 0.05), lw=2.5)
-    side = WINDOW * CHIP_RES
-    notes = [
-        'All 142 training chips (PlanetScope, 2021–2026) are cut\n'
-        '   at the same line (dashed).',
-        f'Train on the west {side:.0f} × {side:.0f} m window of every chip;\n'
-        '   test on the east window.',
-        'Every date is in both train and test: new trees, seen dates.',
-    ]
-    fig.text(0.04, 0.96 - ah - 0.05, '\n'.join('• ' + n for n in notes), fontsize=10,
-             va='top', linespacing=1.5)
-    fig.text(0.04, 0.96 - ah - 0.33, 'Yellow: drone-derived crown labels on one chip '
-             f'(PlanetScope {pd.Timestamp(EXAMPLE_CHIP[:8]):%d %b %Y}).', fontsize=8,
-             color='0.35')
     save(fig, outdir, 'cv_spatial')
 
 
 @cli.command()
 @out_option
-@click.option('--fold', default=2, show_default=True, help='Fold drawn as held out.')
-def temporal(outdir, fold):
-    """Six folds of contiguous date blocks; one held out at a time."""
+@click.option('--fold', default=2, show_default=True,
+              help='Fold drawn as held out in the static image.')
+@click.option('--seconds', default=1.5, show_default=True, help='Seconds per fold in the GIF.')
+@click.option('--dpi', default=150, show_default=True, help='GIF resolution.')
+def temporal(outdir, fold, seconds, dpi):
+    """Six folds of contiguous date blocks; the GIF cycles the held-out fold."""
+    import io
     import matplotlib.dates as mdates
+    from matplotlib.patches import Patch
+    from PIL import Image
     df = pd.read_csv(FOLDS, parse_dates=['planet_date', 'block_start', 'block_end'])
     nf = df.fold.nunique()
-    W, H = SIZE
-    fig = plt.figure(figsize=SIZE)
-    ax = fig.add_axes([0.15, 0.38, 0.82, 0.54])
+    W, H = SIZE[0], 3.6
+    fig = plt.figure(figsize=(W, H))
+    ax = fig.add_axes([0.15, 0.17, 0.82, 0.8])
+    rows = []
     for f in range(nf):
         y = nf - 1 - f
-        held = f == fold
-        color = C_TEST if held else C_TRAIN
         blocks = df[df.fold == f].drop_duplicates('block')
-        for b in blocks.itertuples():
-            ax.barh(y, (b.block_end - b.block_start).days + 6, left=b.block_start
-                    - pd.Timedelta(days=3), height=0.62, color=color, alpha=0.25, lw=0)
-        d = df[df.fold == f]
-        ax.vlines(d.planet_date, y - 0.31, y + 0.31, color=color, lw=1.0)
-        ax.text(-0.01, y, f'fold {f}' + ('\nheld out' if held else ''),
-                transform=ax.get_yaxis_transform(), ha='right', va='center', fontsize=9,
-                color=color, fontweight='bold' if held else 'normal')
+        bars = [ax.barh(y, (b.block_end - b.block_start).days + 6,
+                        left=b.block_start - pd.Timedelta(days=3), height=0.62,
+                        alpha=0.25, lw=0)[0] for b in blocks.itertuples()]
+        ticks = ax.vlines(df.planet_date[df.fold == f], y - 0.31, y + 0.31, lw=1.0)
+        label = ax.text(-0.01, y, '', transform=ax.get_yaxis_transform(), ha='right',
+                        va='center', fontsize=9)
+        rows.append((f, bars, ticks, label))
     ax.set_yticks([])
     ax.set_ylim(-0.6, nf - 0.4)
     ax.xaxis.set_major_locator(mdates.YearLocator())
@@ -148,27 +139,38 @@ def temporal(outdir, fold):
     ax.set_xlim(pd.Timestamp('2020-12-01'), pd.Timestamp('2026-02-15'))
     ax.grid(axis='x', alpha=0.3)
     ax.spines[['left', 'right', 'top']].set_visible(False)
-    ax.set_title(f'{len(df)} chips in {df.block.nunique()} blocks of ≤ 14 days, dealt to '
-                 f'{nf} folds', fontsize=10.5, pad=6)
-    held = df[df.fold == fold]
-    notes = [
-        'Chips from one drone flight stay in one block;\n'
-        '   neighboring blocks never share a fold.',
-        f'Hold out one fold (here fold {fold}, {len(held)} chips), train on the\n'
-        '   other five; repeat for every fold.',
-        'Both windows of every chip are used: seen trees, new dates.',
-        f'Held-out chips are a median {df.days_to_nearest_train.median():.0f} days '
-        f'(range {df.days_to_nearest_train.min()}–{df.days_to_nearest_train.max()})\n'
-        '   from the nearest training chip.',
-    ]
-    fig.text(0.04, 0.27, '\n'.join('• ' + n for n in notes), fontsize=10, va='top',
-             linespacing=1.45)
-    from matplotlib.patches import Patch
     fig.legend(handles=[Patch(color=C_TRAIN, alpha=0.6, label='train'),
-                        Patch(color=C_TEST, alpha=0.6, label='test (held-out dates)')],
-               loc='upper right', ncol=2, fontsize=9, frameon=False,
-               bbox_to_anchor=(0.98, 0.335))
-    save(fig, outdir, 'cv_temporal')
+                        Patch(color=C_TEST, alpha=0.6, label='test (held out)')],
+               loc='lower right', ncol=2, fontsize=9, frameon=False,
+               bbox_to_anchor=(0.99, -0.01))
+
+    def show(k):
+        for f, bars, ticks, label in rows:
+            held = f == k
+            color = C_TEST if held else C_TRAIN
+            for b in bars:
+                b.set_color(color)
+                b.set_alpha(0.25)
+            ticks.set_color(color)
+            label.set_text(f'fold {f}' + ('\nheld out' if held else ''))
+            label.set_color(color)
+            label.set_fontweight('bold' if held else 'normal')
+
+    show(fold)
+    for ext in ('png', 'pdf'):
+        fig.savefig(outdir / f'cv_temporal.{ext}', dpi=300)
+    frames = []
+    for k in range(nf):
+        show(k)
+        buf = io.BytesIO()
+        fig.savefig(buf, format='png', dpi=dpi)
+        frames.append(Image.open(buf).convert('RGB'))
+    plt.close(fig)
+    frames = [f.quantize(colors=128, method=Image.Quantize.MEDIANCUT) for f in frames]
+    gif = outdir / 'cv_temporal.gif'
+    frames[0].save(gif, save_all=True, append_images=frames[1:],
+                   duration=int(seconds * 1000), loop=0)
+    click.echo(f'Wrote {gif} ({nf} frames, {seconds:g} s each)')
 
 
 if __name__ == '__main__':
