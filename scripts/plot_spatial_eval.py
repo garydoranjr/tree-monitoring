@@ -51,7 +51,9 @@ FLOWER = Path('/Volumes/Earth03/flower')
 DEFAULT_OUT = FLOWER / 'figs' / '20261103_presentation'
 CHIPS = FLOWER / '20260706_full_label_application_x4_coreg_4band_stretch_stats_curated'
 CHECKPOINT = FLOWER / 'maskrcnn_results/20260824_maskrcnn_out_min064/epoch_012.pth'
-DATED_CROWNS = FLOWER / 'crowns_20240803/BCI_50ha_crownmap_timeseries.shp'
+# dated crown outlines: phantom dates, then the mavic dates (2024-03-18 outlines carried over)
+DATED_CROWNS = (FLOWER / 'crowns_20240803/BCI_50ha_crownmap_timeseries.shp',
+                FLOWER / 'results/crowns_mavic_dates.gpkg')
 WINDOW = 512
 C_MAIN = '#4c72b0'
 
@@ -109,42 +111,57 @@ def run_inference(checkpoint, device_name, cache):
                         checkpoint=str(checkpoint))
 
 
-def crown_table(z):
-    """One row per (test window, crown): event label, scores, size."""
+def load_dated_crowns():
     import geopandas as gpd
+    crowns = pd.concat([gpd.read_file(p) for p in DATED_CROWNS], ignore_index=True)
+    crowns['tag'] = pd.to_numeric(crowns.tag, errors='coerce')
+    return crowns.drop_duplicates(['tag', 'date', 'area'])
+
+
+def crown_table(chips, windows, score, gt, clear, chip_dir=CHIPS, min_px=64):
+    """One row per (test window, crown): event label, scores, size.
+
+    chips/windows name each window ('left' or 'right'); score/gt/clear are its
+    per-pixel best detection score, ground-truth event mask and OCM-clear mask.
+    Crowns are that window's drone-flight outlines from the dated crown maps,
+    moved by the scene's AROSICS shift as the labels were; a crown is kept if
+    >= 90% of it lies in the window, >= 90% of that is clear, and >= min_px.
+    """
     import rasterio
     from rasterio.features import rasterize
     from rasterio.transform import Affine
-    log = pd.DataFrame(json.loads((CHIPS / 'coreg_log.json').read_text()))
+    log = pd.DataFrame(json.loads((Path(chip_dir) / 'coreg_log.json').read_text()))
     log = log[log.coreg_ok].drop_duplicates('scene').set_index('scene')
-    crowns = gpd.read_file(DATED_CROWNS)
-    crowns['tag'] = pd.to_numeric(crowns.tag, errors='coerce')
+    crowns = load_dated_crowns()
     rows = []
-    for k, chip in enumerate(z['chips']):
+    for k, (chip, window) in enumerate(zip(chips, windows)):
         rec = log.loc[str(chip).replace('.tif', '')]
         day = pd.Series([rec.label]).str.extract(r'(\d{4}_\d{2}_\d{2})')[0].iloc[0]
-        with rasterio.open(CHIPS / str(chip)) as src:
+        with rasterio.open(Path(chip_dir) / str(chip)) as src:
             t, h, w = src.transform, src.height, src.width
-        r0, _, c0, _ = tp._split_window(h, w, 'right', WINDOW)
+        r0, _, c0, _ = tp._split_window(h, w, str(window), WINDOW)
         wt = t * Affine.translation(c0, r0)
         c = crowns[crowns.date == day]
+        if c.empty:
+            raise click.ClickException(f'no dated crown outlines for {day} ({chip})')
         # the labels were moved by the scene's AROSICS shift; move the outlines too
         geoms = c.geometry.translate(rec.x_shift_m, rec.y_shift_m).values
-        score, gt, clear = z['score'][k].astype(np.float32), z['gt'][k], z['clear'][k]
+        sc, g_, cl = score[k].astype(np.float32), gt[k], clear[k]
         ids = rasterize(((g, i + 1) for i, g in enumerate(geoms)), out_shape=(WINDOW, WINDOW),
                         transform=wt, fill=0, dtype='int32').ravel()
         n = len(geoms) + 1
         n_in = np.bincount(ids, minlength=n)
-        n_clear = np.bincount(ids, weights=clear.ravel(), minlength=n)
-        n_gt = np.bincount(ids, weights=gt.ravel(), minlength=n)
-        s_sum = np.bincount(ids, weights=score.ravel(), minlength=n)
+        n_clear = np.bincount(ids, weights=cl.ravel(), minlength=n)
+        n_gt = np.bincount(ids, weights=g_.ravel(), minlength=n)
+        s_sum = np.bincount(ids, weights=sc.ravel(), minlength=n)
         s_max = np.zeros(n)
-        np.maximum.at(s_max, ids, score.ravel())
+        np.maximum.at(s_max, ids, sc.ravel())
         full = np.concatenate([[0], np.array([g.area for g in geoms]) / abs(t.a * t.e)])
         for i in np.flatnonzero(n_in[1:]) + 1:
-            if n_in[i] < 64 or n_in[i] < 0.9 * full[i] or n_clear[i] < 0.9 * n_in[i]:
+            if n_in[i] < min_px or n_in[i] < 0.9 * full[i] or n_clear[i] < 0.9 * n_in[i]:
                 continue
-            rows.append(dict(chip=str(chip), date=day, tag=c.tag.iloc[i - 1], px=int(n_in[i]),
+            rows.append(dict(chip=str(chip), window=str(window), date=day,
+                             tag=c.tag.iloc[i - 1], px=int(n_in[i]),
                              gt_frac=n_gt[i] / n_in[i], score_mean=s_sum[i] / n_in[i],
                              score_max=s_max[i]))
     df = pd.DataFrame(rows)
@@ -181,7 +198,8 @@ def main(outdir, checkpoint, rerun, size, device_name):
     ps, py = z['score'][clear].astype(np.float32), z['gt'][clear]
     pixel_auroc, pixel_ap = roc_auc_score(py, ps), average_precision_score(py, ps)
     # crown ROC
-    crowns = crown_table(z)
+    crowns = crown_table(z['chips'], ['right'] * len(z['chips']), z['score'], z['gt'],
+                         z['clear'])
     cy, cs = crowns.event.values, crowns.score_mean.values
     fpr, tpr, _ = roc_curve(cy, cs)
     crown_auroc, crown_ap = roc_auc_score(cy, cs), average_precision_score(cy, cs)
