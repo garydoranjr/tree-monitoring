@@ -1239,7 +1239,7 @@ def crown_resolution(outdir, tile_m, dpi):
     top.xaxis.set_major_formatter(plain)
     top.set_xlabel('Planet pixels (3 × 3 m)', fontsize=9.5, labelpad=2)
     top.tick_params(labelsize=8.5)
-    ax.text(0.995, 0.88, f'{len(crowns):,} crowns, 50 ha crown map {RES_MAP_DATE}',
+    ax.text(0.995, 0.88, f'{len(crowns):,} crowns',
             transform=ax.transAxes, ha='right', va='top', fontsize=8, color='0.35')
 
     # Planet tiles: MODIS-calibrated SR (calfill), placed with each scene's
