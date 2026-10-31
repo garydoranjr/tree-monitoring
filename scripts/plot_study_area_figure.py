@@ -11,7 +11,7 @@ Subcommands:
               (results/crown_classifications{,_mavic}.nc4). For each, pick the
               peak-flowering flight, a non-flowering baseline flight 3-10 weeks
               earlier, and the nearest Planet scene to each flight that is clear
-              over the crown. Score the Planet colour change of the crown
+              over the crown. Score the Planet color change of the crown
               against its surroundings. Writes materials/crown_candidates.csv
               and a contact sheet, materials/crown_candidates.png.
   figure      The 12.5 x 6 in study-area figure for one chosen crown
@@ -238,7 +238,7 @@ def best_scene(geom, date, max_days=4):
     return None
 
 
-def colour_change(geom, base, event):
+def color_change(geom, base, event):
     """Crown RGB change minus ring change, in units of ring change spread."""
     import rasterio
     vals = {}
@@ -264,7 +264,7 @@ def candidate_table():
             e = best_scene(geom, r.event_date)
             if b is None or e is None:
                 continue
-            score, d = colour_change(geom, b, e)
+            score, d = color_change(geom, b, e)
             rows.append({**r._asdict(), 'base_scene': b['scene'], 'base_days': b['days'],
                          'base_coreg': b['coreg'], 'event_scene': e['scene'],
                          'event_days': e['days'], 'event_coreg': e['coreg'],
@@ -847,7 +847,7 @@ def drone_timeline(outdir, size, dpi):
 # planet-timeline
 # --------------------------------------------------------------------------
 PLANET_CLIPPED = FLOWER / 'planet_clipped/4band'
-# instrument -> (label, colour), oldest model first
+# instrument -> (label, color), oldest model first
 DOVE_MODELS = {
     'PS2': ('Dove Classic', '#7570b3'),
     'PS2.SD': ('Dove-R', '#1b9e77'),
@@ -1246,7 +1246,7 @@ def crown_resolution(outdir, tile_m, dpi):
     # AROSICS shift. Each band's dark point is its own 1st percentile over the
     # five tiles, but all bands share one range (the widest 1st-99th percentile
     # span): per-band ranges stretch the narrow visible bands of forest into
-    # colour noise.
+    # color noise.
     reads = []
     for e in ex:
         cx, cy = e['geom'].centroid.coords[0]
@@ -1449,11 +1449,11 @@ def label_expansion(outdir, threshold, dpi):
 
 
 # --------------------------------------------------------------------------
-# drone-colour-transfer
+# drone-color-transfer
 # --------------------------------------------------------------------------
 # Same-day examples (2024-03-06, both drones flew): rows of the 2022-09-29
 # crown map with their P(flowering) from same_date_crowns.csv (phantom local,
-# mavic with the colour transfer) and figs/202610_updates (mavic, per-band).
+# mavic with the color transfer) and figs/202610_updates (mavic, per-band).
 TRANSFER_DAY = '2024_03_06'
 TRANSFER_EXAMPLES = (
     (823, 'Cecropia insignis', 'false flowering call removed'),
@@ -1464,13 +1464,13 @@ SAME_DATE_AFTER = FLOWER / 'figs/20261013_updates/same_date_crowns.csv'
 RADIOMETRY_SAMPLES = FLOWER / 'figs/202610_updates/radiometry'
 
 
-@cli.command('drone-colour-transfer')
+@cli.command('drone-color-transfer')
 @out_option
 @click.option('--pad-m', default=6.0, show_default=True,
               help='Margin around each example crown (m).')
 @click.option('--dpi', default=300, show_default=True)
-def drone_colour_transfer(outdir, pad_m, dpi):
-    """Mavic -> phantom colour transfer: matrix, distributions and same-day examples."""
+def drone_color_transfer(outdir, pad_m, dpi):
+    """Mavic -> phantom color transfer: matrix, distributions and same-day examples."""
     import geopandas as gpd
     import crown_classification as cc
     import compare_drone_radiometry as cdr
@@ -1478,7 +1478,7 @@ def drone_colour_transfer(outdir, pad_m, dpi):
     mkl = cc.load_scaling(cdr.MKL_CONFIG)
     styles = (('Phantom (target)', pu.C_PHANTOM_EXT, '-'),
               ('Mavic, before\n(per-band scaling)', pu.C_GREY, '--'),
-              ('Mavic, after\n(3×3 colour transfer)', pu.C_MAVIC, '-'))
+              ('Mavic, after\n(3×3 color transfer)', pu.C_MAVIC, '-'))
     fig = plt.figure(figsize=(FIG_W, FIG_H))
 
     # transfer matrix, in 8-bit units (uint8 out per uint8-equivalent in)
@@ -1496,7 +1496,7 @@ def drone_colour_transfer(outdir, pad_m, dpi):
     ax.set_xlabel('Mavic input', fontsize=9.5)
     ax.set_ylabel('Phantom-like output', fontsize=9.5)
     ax.tick_params(labelsize=9, length=0)
-    ax.set_title('3×3 colour transfer matrix', fontsize=10.5, pad=5)
+    ax.set_title('3×3 color transfer matrix', fontsize=10.5, pad=5)
     fig.text(2.8 / FIG_W, 4.75 / FIG_H,
              'out = M (x − μ$_{Mavic}$) + μ$_{Phantom}$', fontsize=10, va='center')
     mu_s = np.array(ct['src_mean']) / 257
@@ -1577,7 +1577,7 @@ def drone_colour_transfer(outdir, pad_m, dpi):
     fig.text((xr0 + 1.5 * t + tg) / FIG_W, (3.15 + t + 0.62) / FIG_H,
              f'Same day, {pd.Timestamp(day):%d %b %Y}: both drones flew', ha='center',
              fontsize=10.5)
-    name = 'drone_colour_transfer'
+    name = 'drone_color_transfer'
     for ext in ('png', 'pdf'):
         fig.savefig(outdir / f'{name}.{ext}', dpi=dpi)
     plt.close(fig)
