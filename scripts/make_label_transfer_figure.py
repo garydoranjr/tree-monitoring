@@ -1,11 +1,12 @@
 #!/usr/bin/env python
 """How drone crown labels become PlanetScope training labels (presentation slide).
 
-Top half: drone flights (Phantom, Mavic) and the PlanetScope scenes within
-+-2 days of a labelled flight (apply_drone_labels_coreg.py --timewindow 2),
-with the scenes kept as training chips after co-registration and vetting.
+Timeline (label_transfer_timeline.{png,pdf}): drone flights (Phantom, Mavic)
+and the PlanetScope scenes within +-2 days of a labelled flight
+(apply_drone_labels_coreg.py --timewindow 2), those AROSICS co-registered,
+and those kept as training chips after vetting.
 
-Bottom half, two examples from the training set
+Animation, two examples from the training set
 (20261012_full_label_extended2_mkl_x4_coreg_4band_cal_curated), each a drone
 tile (the chip's shift-corrected `.drone.png`) and its Planet chip (`.png`):
   A  a clear scene: the label outlines slide from the drone to Planet
@@ -17,8 +18,8 @@ P > 0.5) moved by the scene's AROSICS shift; example B's unfiltered mask is
 rebuilt with apply_drone_labels_coreg's own functions and checked against the
 chip's `.mask.png`.
 
-Writes label_transfer.mp4 / .gif (looping animation) and label_transfer.png
-(final frame).
+The animation is written as label_transfer.mp4 / .gif (looping), with its
+first and last frames as label_transfer_start.png and label_transfer.png.
 
 Typical usage:
     python scripts/make_label_transfer_figure.py
@@ -53,7 +54,8 @@ EXAMPLES = (
 C_LABEL = '#ffe11a'
 C_DROP = '#ff2d2d'
 C_CLOUD = (1.0, 0.45, 0.1)
-W, H = sa.FIG_W, sa.FIG_H
+W = sa.FIG_W
+TIMELINE_H, EX_H = 2.9, 3.45  # inches; the two halves of the slide
 
 
 def chip_records():
@@ -138,20 +140,21 @@ def main(outdir, side_m, fps, dpi):
     import imageio.v3 as iio
     log = chip_records()
     side = int(round(side_m / CHIP_RES))
-    fig = plt.figure(figsize=(W, H), dpi=dpi)
 
-    # ---- timeline (top half) ----
+    # ---- timeline (its own image) ----
     import matplotlib.dates as mdates
-    ax = fig.add_axes([0.13, 0.665, 0.84, 0.31])
+    tfig = plt.figure(figsize=(W, TIMELINE_H))
+    ax = tfig.add_axes([0.13, 0.13, 0.84, 0.8])
     phantom = sorted(set(pu.drone_dates('phantom-24782016')) | set(pu.drone_dates('phantom-C3KW2X')))
     mavic = pu.drone_dates('mavic')
     labelled = set(log.ldate)
-    pairs = log.drop_duplicates('scene')
-    chips = pairs[pairs.chip]
+    scenes = log.groupby('scene').agg(pdate=('pdate', 'first'), ok=('coreg_ok', 'any'),
+                                      chip=('chip', 'any'))
     rows = [('Phantom flights', phantom, pu.C_PHANTOM, 3),
             ('Mavic flights', mavic, pu.C_MAVIC, 2),
-            (f'Planet ±{TIMEWINDOW} days', list(pairs.pdate), '0.7', 1),
-            ('', list(chips.pdate), '0.15', 1)]
+            ('paired', list(scenes.pdate), '0.82', 1),
+            ('co-registered', list(scenes.pdate[scenes.ok]), '0.55', 1),
+            ('chips', list(scenes.pdate[scenes.chip]), '0.1', 1)]
     for label, dates, color, y in rows:
         ax.vlines(dates, y - 0.3, y + 0.3, color=color, lw=1.0 if y > 1 else 1.3)
     ax.set_yticks([3, 2, 1], ['Phantom flights', 'Mavic flights',
@@ -164,23 +167,26 @@ def main(outdir, side_m, fps, dpi):
     ax.set_xlim(pd.Timestamp('2019-11-01'), pd.Timestamp('2026-03-01'))
     ax.grid(axis='x', alpha=0.3)
     ax.spines[['left', 'right', 'top']].set_visible(False)
-    for ex, dx in zip(EXAMPLES, (-7, 7)):  # the two dates are two weeks apart
-        d = pd.Timestamp(ex['stem'][:8])
-        ax.annotate(ex['key'], (d, 1.35), xytext=(dx, 10), textcoords='offset points',
-                    ha='center', fontsize=9, fontweight='bold',
-                    arrowprops=dict(arrowstyle='-|>', color='k', lw=0.8))
-    ax.legend(handles=[Line2D([], [], color='0.7', lw=1.5, label=f'{len(pairs)} paired with a '
+    ax.legend(handles=[Line2D([], [], color='0.82', lw=1.5, label=f'{len(scenes)} paired with a '
                               'labelled flight'),
-                       Line2D([], [], color='0.15', lw=1.5, label=f'{len(chips)} kept as '
-                              'training chips')],
+                       Line2D([], [], color='0.55', lw=1.5, label=f'{scenes.ok.sum()} '
+                              'co-registered to the drone mosaic'),
+                       Line2D([], [], color='0.1', lw=1.5, label=f'{scenes.chip.sum()} '
+                              'kept as training chips (vetted Good)')],
               loc='upper right', bbox_to_anchor=(1.0, 1.04), ncol=1, fontsize=8.5,
               frameon=False)
     n_lab = sum(1 for d in phantom + mavic if d in labelled)
+    for ext in ('png', 'pdf'):
+        tfig.savefig(outdir / f'label_transfer_timeline.{ext}', dpi=300)
+    plt.close(tfig)
 
-    # ---- examples (bottom half) ----
+    # ---- examples (the animation) ----
+    fig = plt.figure(figsize=(W, EX_H), dpi=dpi)
+
     t, g, pg = 2.62, 0.08, 0.5
     x0 = (W - 4 * t - 2 * g - pg) / 2
     y0 = 0.42
+    H = EX_H
     xs = [x0, x0 + t + g, x0 + 2 * t + g + pg, x0 + 3 * t + 2 * g + pg]
     lines = []  # (Line2D, xy in window fraction, drone-tile x, planet-tile x, comp id, example)
     cloud_imgs = []
@@ -224,8 +230,8 @@ def main(outdir, side_m, fps, dpi):
                 a.text(0.06 + 25 / side_m, 0.085, '50 m', ha='center', va='bottom',
                        fontsize=8, color='white', path_effects=sa.halo(1.8))
         fig.text((xd + t + g / 2) / W, (y0 + t + 0.27) / H,
-                 f"{ex['key']}. " + ('clear scene' if not ex['cloudy']
-                                     else 'half-cloudy scene: crowns touching cloud are dropped'),
+                 ('Clear scene' if not ex['cloudy']
+                                     else 'Half-cloudy scene: crowns touching cloud are dropped'),
                  ha='center', fontsize=10.5, fontweight='bold' if False else 'normal')
         ids = np.unique(lab[win])
         ids = ids[ids > 0]
@@ -291,9 +297,10 @@ def main(outdir, side_m, fps, dpi):
                     'fps=12,scale=1280:-1:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff'
                     '[p];[b][p]paletteuse=dither=sierra2_4a', '-loop', '0', str(gif)],
                    check=True)
-    click.echo(f'Wrote {mp4}, {gif}, label_transfer.png (final frame) and '
-               f'label_transfer_start.png\nlabelled flights {n_lab}; Planet scenes paired '
-               f'{len(pairs)}; training chips {len(chips)}')
+    click.echo(f'Wrote label_transfer_timeline.png/.pdf, {mp4}, {gif}, label_transfer.png '
+               f'(final frame) and label_transfer_start.png\nlabelled flights {n_lab}; '
+               f'Planet scenes paired {len(scenes)}, co-registered {scenes.ok.sum()}, '
+               f'training chips {scenes.chip.sum()}')
 
 
 if __name__ == '__main__':
