@@ -1448,5 +1448,141 @@ def label_expansion(outdir, threshold, dpi):
                f'{n_new.to_dict()}')
 
 
+# --------------------------------------------------------------------------
+# drone-colour-transfer
+# --------------------------------------------------------------------------
+# Same-day examples (2024-03-06, both drones flew): rows of the 2022-09-29
+# crown map with their P(flowering) from same_date_crowns.csv (phantom local,
+# mavic with the colour transfer) and figs/202610_updates (mavic, per-band).
+TRANSFER_DAY = '2024_03_06'
+TRANSFER_EXAMPLES = (
+    (823, 'Cecropia insignis', 'false flowering call removed'),
+    (471, 'Astrocaryum standleyanum', 'flowering on both cameras, kept'),
+)
+SAME_DATE_BEFORE = FLOWER / 'figs/202610_updates/same_date_crowns.csv'
+SAME_DATE_AFTER = FLOWER / 'figs/20261013_updates/same_date_crowns.csv'
+RADIOMETRY_SAMPLES = FLOWER / 'figs/202610_updates/radiometry'
+
+
+@cli.command('drone-colour-transfer')
+@out_option
+@click.option('--pad-m', default=6.0, show_default=True,
+              help='Margin around each example crown (m).')
+@click.option('--dpi', default=300, show_default=True)
+def drone_colour_transfer(outdir, pad_m, dpi):
+    """Mavic -> phantom colour transfer: matrix, distributions and same-day examples."""
+    import geopandas as gpd
+    import crown_classification as cc
+    import compare_drone_radiometry as cdr
+    perband = cc.load_scaling(pu.MAVIC_SCALING)
+    mkl = cc.load_scaling(cdr.MKL_CONFIG)
+    styles = (('Phantom (target)', pu.C_PHANTOM_EXT, '-'),
+              ('Mavic, before\n(per-band scaling)', pu.C_GREY, '--'),
+              ('Mavic, after\n(3×3 colour transfer)', pu.C_MAVIC, '-'))
+    fig = plt.figure(figsize=(FIG_W, FIG_H))
+
+    # transfer matrix, in 8-bit units (uint8 out per uint8-equivalent in)
+    import yaml
+    ct = yaml.safe_load(cdr.MKL_CONFIG.read_text())['color_transfer']
+    M = np.array(ct['matrix']) * 257
+    ax = fig.add_axes([0.62 / FIG_W, 3.55 / FIG_H, 1.95 / FIG_W, 1.95 / FIG_H])
+    ax.imshow(M, cmap='Greys', vmin=0, vmax=1.2)
+    for i in range(3):
+        for j in range(3):
+            ax.text(j, i, f'{M[i, j]:.3f}', ha='center', va='center', fontsize=9.5,
+                    color='white' if M[i, j] > 0.6 else 'black')
+    ax.set_xticks(range(3), ['R', 'G', 'B'])
+    ax.set_yticks(range(3), ['R', 'G', 'B'])
+    ax.set_xlabel('Mavic input', fontsize=9.5)
+    ax.set_ylabel('Phantom-like output', fontsize=9.5)
+    ax.tick_params(labelsize=9, length=0)
+    ax.set_title('3×3 colour transfer matrix', fontsize=10.5, pad=5)
+    fig.text(2.8 / FIG_W, 4.75 / FIG_H,
+             'out = M (x − μ$_{Mavic}$) + μ$_{Phantom}$', fontsize=10, va='center')
+    mu_s = np.array(ct['src_mean']) / 257
+    mu_d = np.array(ct['dst_mean'])
+    fig.text(2.8 / FIG_W, 4.2 / FIG_H,
+             'μ$_{Mavic}$ = (' + ', '.join(f'{v:.0f}' for v in mu_s) + ')\n'
+             'μ$_{Phantom}$ = (' + ', '.join(f'{v:.0f}' for v in mu_d) + ')\n'
+             'R, G, B in 8-bit units; fitted on\nboth same-day flights',
+             fontsize=8.5, va='top', color='0.25')
+
+    # distribution shifts, pooled same-day samples
+    samples = [cdr.load_samples(RADIOMETRY_SAMPLES, d) for d in pu.SAME_DATES]
+    pha = np.concatenate([p for p, _ in samples])
+    mav16 = np.concatenate([m for _, m in samples])
+    pixels = (pha, cdr.to_uint8(mav16, perband), cdr.to_uint8(mav16, mkl))
+    x = np.arange(256)
+    w, gap, x0 = 1.3, 0.12, 0.62
+    for k, band in enumerate(('R', 'G', 'B')):
+        a = fig.add_axes([(x0 + k * (w + gap)) / FIG_W, 0.62 / FIG_H, w / FIG_W, 2.05 / FIG_H])
+        for px, (name, color, ls) in zip(pixels, styles):
+            h = np.bincount(px[:, k], minlength=256)[:256] / len(px)
+            a.plot(x, h, color=color, ls=ls, lw=1.3, label=name.replace('\n', ' '))
+        before, after = (np.abs(cdr.cdf(pixels[0][:, k]) - cdr.cdf(p[:, k])).mean()
+                         for p in pixels[1:])
+        a.set_title(f'{band}: {before:.3f} → {after:.3f}', fontsize=9.5, pad=3)
+        a.set_xlim(0, 255)
+        a.set_ylim(0, None)
+        a.set_yticks([])
+        a.set_xticks([0, 128, 255], ['0', '128', '255'])
+        for lab_, ha in zip(a.get_xticklabels(), ('left', 'center', 'right')):
+            lab_.set_ha(ha)
+        a.tick_params(labelsize=8)
+        a.spines[['top', 'right', 'left']].set_visible(False)
+        a.set_xlabel(f'{band} (8-bit)', fontsize=8.5, labelpad=1)
+    fig.text(x0 / FIG_W, 2.98 / FIG_H, 'Pixel distributions (mean |CDF difference| to Phantom)',
+             fontsize=10.5, va='bottom')
+    fig.legend(handles=[plt.Line2D([], [], color=c, ls=ls, lw=1.5, label=n.replace('\n', ' '))
+                        for n, c, ls in styles], loc='lower left', ncol=3, fontsize=7.5,
+               frameon=False, bbox_to_anchor=(x0 / FIG_W - 0.01, 0.0), handlelength=1.6,
+               columnspacing=1.0)
+
+    # same-day examples: phantom, mavic before, mavic after
+    crowns = gpd.read_file(pu.CROWNMAP)
+    before = pd.read_csv(SAME_DATE_BEFORE)
+    after = pd.read_csv(SAME_DATE_AFTER)
+    day = TRANSFER_DAY.replace('_', '-')
+    t, tg, xr0 = 2.0, 0.12, 6.15
+    side = max(max(g.bounds[2] - g.bounds[0], g.bounds[3] - g.bounds[1])
+               for g in crowns.geometry.iloc[[c for c, _, _ in TRANSFER_EXAMPLES]]) / 2 + pad_m
+    for r, (c, sp, label) in enumerate(TRANSFER_EXAMPLES):
+        b = crowns.geometry.iloc[c].bounds
+        cx, cy = (b[0] + b[2]) / 2, (b[1] + b[3]) / 2
+        bounds = (cx - side, cy - side, cx + side, cy + side)
+        panels = cdr.transfer_panels(TRANSFER_DAY, bounds, 1, perband, mkl)
+        p_of = lambda df, m: float(df[(df.crown == c) & (df.date == day)  # noqa: E731
+                                      & (df.mosaic == m)].p_flower.iloc[0])
+        probs = (p_of(after, 'phantom local'), p_of(before, 'mavic'), p_of(after, 'mavic'))
+        y = 3.15 - r * (t + 0.35)
+        for k, ((rgb, ext), (name, color, _), p) in enumerate(zip(panels, styles, probs)):
+            a = fig.add_axes([(xr0 + k * (t + tg)) / FIG_W, y / FIG_H, t / FIG_W, t / FIG_H])
+            a.imshow(rgb, extent=ext, interpolation='nearest')
+            crowns.iloc[[c]].boundary.plot(ax=a, color='yellow', lw=1.2)
+            a.set_xlim(bounds[0], bounds[2])
+            a.set_ylim(bounds[1], bounds[3])
+            bare(a)
+            for sp_ in a.spines.values():
+                sp_.set_edgecolor(color)
+                sp_.set_linewidth(2.5)
+            a.text(0.03, 0.03, f'P(flowering) {p:.2f}', transform=a.transAxes, fontsize=8,
+                   va='bottom', bbox=dict(fc='white', ec='none', alpha=0.85, pad=1.5))
+            if r == 0:
+                a.set_title(name, fontsize=9.5, color=color, pad=4)
+            if k == 0:
+                add_scalebar(a, 5, '5 m', loc=(0.07, 0.83), lw=2.5)
+        fig.text((xr0 - 0.25) / FIG_W, (y + t / 2) / FIG_H,
+                 f'{italic_name(sp)}\n{label}', rotation=90, ha='center', va='center',
+                 fontsize=8.5)
+    fig.text((xr0 + 1.5 * t + tg) / FIG_W, (3.15 + t + 0.62) / FIG_H,
+             f'Same day, {pd.Timestamp(day):%d %b %Y}: both drones flew', ha='center',
+             fontsize=10.5)
+    name = 'drone_colour_transfer'
+    for ext in ('png', 'pdf'):
+        fig.savefig(outdir / f'{name}.{ext}', dpi=dpi)
+    plt.close(fig)
+    click.echo(f'Wrote {outdir / name}.png/.pdf')
+
+
 if __name__ == '__main__':
     cli()
