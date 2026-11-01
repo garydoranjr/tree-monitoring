@@ -122,7 +122,8 @@ def load_as_geoarray(filepath):
     return GeoArray(arr, geotransform=transform.to_gdal(), projection=projection)
 
 
-def compute_coreg_shift(dronefile, planetfile, planet_match_band=1, drone_ga=None):
+def compute_coreg_shift(dronefile, planetfile, planet_match_band=1, drone_ga=None,
+                        max_shift=10):
     # The drone ortho is the expensive side: the mavic M3M mosaics are ~4 GB
     # each, and every Planet scene under a given label date shares one. Callers
     # that loop over scenes pass it in preloaded; None keeps the standalone
@@ -136,7 +137,8 @@ def compute_coreg_shift(dronefile, planetfile, planet_match_band=1, drone_ga=Non
             drone_ga, planet_ga,
             ws=(200, 200),
             align_grids=True,
-            max_shift=10,
+            # In Planet pixels per axis: 10 is 30 m.
+            max_shift=max_shift,
             ignore_errors=True,
             q=True,
             # Match on the Red band of both images. For 3-band RGB chips Red
