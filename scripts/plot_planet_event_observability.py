@@ -189,7 +189,9 @@ def species_eval(outdir, rebuild, min_crowns, k):
     sec.minorticks_off()
     sec.tick_params(labelsize=8)
     sec.set_xlabel('Planet pixels (3 m)', fontsize=8.5)
-    ax2.legend(fontsize=8, frameon=False, loc='upper left')
+    # longest label on top, clear of the leafless line rising beneath it
+    h, l = ax2.get_legend_handles_labels()
+    ax2.legend(h[::-1], l[::-1], fontsize=8, frameon=False, loc='upper left')
     style(ax2)
 
     # by season
