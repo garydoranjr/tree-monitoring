@@ -5,7 +5,7 @@ Written 2026-10-30, updated 2026-11-01.
 | step | status |
 |---|---|
 | 1. Classify the failures | **done** 2026-11-01: [results](#step-1-results-2026-11-01) |
-| 2. Choose new settings and change the code | **done** 2026-11-01: [code changes](#step-2-code-changes-2026-11-01) |
+| 2. Choose new settings and change the code | **done** 2026-11-01: [code changes](#step-2-code-changes-2026-11-01); [decision: use the NCC fallback](#decision-use-the-ncc-fallback-2026-11-01) |
 | 3. Re-run every registration | **not started**: [procedure](#step-3-re-run-the-registrations) |
 | 4. Rebuild the downstream products and experiments | **not started**: [procedure](#step-4-rebuild-downstream-products) |
 
@@ -250,29 +250,20 @@ output is unchanged.
   - The run printed empty "Error in sys.excepthook" lines at exit, with exit code 0. The
     pre-change script prints them too (5 on the same date), so they are not from this change.
 
-## Before step 3: decide on the NCC fallback
+## Decision: use the NCC fallback (2026-11-01)
 
-Every command below takes `$FALLBACK`. Set it once, and use the same value throughout:
-
-```bash
-FALLBACK=--ncc-fallback   # gate + fallback (recommended)
-# FALLBACK=               # gate only
-```
-
-**Gate only.**
-- It recovers the 35 scenes that hit the search limit.
-- Every shift beyond 30 m that it accepts was found by AROSICS and confirmed by NCC.
-
-**Gate + fallback.**
-- It also recovers about 39 scenes on which AROSICS fails to converge, using a shift at 1 m
-  resolution that has not been confirmed by a second method.
-- On the 95 confident controls, NCC agrees with AROSICS within about 3 m.
-- In the crown series a failed scene is used **unshifted**. The fallback scenes' shifts have a
-  median of 8 m (up to 60 m), so leaving them unshifted puts their crown outlines off by
-  several 3 m pixels.
-
-**Recommendation: use the fallback.** `coreg_method` records which scenes took the NCC shift,
-so they can be dropped or compared later.
+**Every registration in step 3 runs with `--ncc-fallback`.** The user chose this on 2026-11-01.
+- **Gate alone.** It recovers the 35 scenes that hit the search limit. Every shift beyond 30 m
+  it accepts was found by AROSICS and confirmed by NCC.
+- **What the fallback adds.** About 39 more scenes on which AROSICS fails to converge. Their
+  shift is the 1 m NCC estimate, which no second method confirms.
+  - On the 95 confident controls, NCC agrees with AROSICS within about 3 m.
+  - In the crown series a failed scene is used **unshifted**. These scenes' shifts have a median
+    of 8 m (up to 60 m), so leaving them unshifted would put their crown outlines off by several
+    3 m pixels.
+- **Tracing them.** `coreg_method: 'ncc'` marks every fallback scene, so they can be dropped or
+  compared later. The flag is not the default in the code, so it must be passed explicitly.
+  Use it in every step, so (a), (b) and (c) stay consistent.
 
 Fix a date tag for the new outputs, e.g. `export RUN=20261103` (the day the re-run starts). The
 Python snippets below read it from the environment.
@@ -300,7 +291,7 @@ python -W ignore scripts/coreg_planet_to_nearest_drone.py \
     --drone-dir $D/stri/globus/RGB \
     --drone-dir $D/stri/C3KW2X/BCI_50ha_timeseries_local_alignment \
     --drone-dir $D/stri/24782016/BCI_50ha_timeseries_local_alignment \
-    --exclude-within-days -1 --min-clear-fraction 0.1 --redo-failed $FALLBACK --workers 2
+    --exclude-within-days -1 --min-clear-fraction 0.1 --redo-failed --ncc-fallback --workers 2
 ```
 
 - **Selection.** The selection flags are the original ones (`docs/crown_temporal_model.md`,
@@ -334,7 +325,8 @@ EOF
 Expected:
 - `cap_recovered`: all 35 are `arosics+ncc`, with the shifts of `x_30`/`y_30` in the causes CSV.
 - `cap_unverified`: all 9 fail.
-- With the fallback, about 39 more are `ncc`, mostly from `arosics_no_converge`.
+- 39 more are `ncc`: all 37 `arosics_no_converge`, 20211122_145420_50 (`cap_not_recovered`) and
+  one `cloud_or_coverage` scene.
 
 AROSICS is deterministic, so a cause that differs from the table needs a look before going on.
 
@@ -378,13 +370,13 @@ for spec in "24782016 full 20260608_full_label_application_x4_coreg_4band_stretc
   LABELS=(); for f in $ORTHO/BCI_50ha_*_local.tif; do LABELS+=($C/$(basename "$f" .tif)_classifications.tif); done
   KMP_DUPLICATE_LIB_OK=TRUE python scripts/apply_drone_labels_coreg.py "${LABELS[@]}" \
     $ORTHO $F/planet_clipped/4band $F/${RUN}_${TOK}_label_application_x4_coreg_4band_stretch_stats_redo \
-    -b 4 -r 4 -t 2 -d 2 -k $F/planet_clipped/ocm --redo-failed $F/$OLDSET/coreg_log.json $FALLBACK
+    -b 4 -r 4 -t 2 -d 2 -k $F/planet_clipped/ocm --redo-failed $F/$OLDSET/coreg_log.json --ncc-fallback
 done
 KMP_DUPLICATE_LIB_OK=TRUE python scripts/apply_drone_labels_coreg.py \
   $C/*M3M_aligned_global_RGB_classifications.tif $F/stri/globus/RGB $F/planet_clipped/4band \
   $F/${RUN}_globus_mkl_label_application_x4_coreg_4band_stretch_stats_redo \
   -b 4 -r 4 -t 2 -d 2 -k $F/planet_clipped/ocm \
-  --redo-failed $F/20260915_globus_label_application_x4_coreg_4band_stretch_stats_rerun/coreg_log.json $FALLBACK
+  --redo-failed $F/20260915_globus_label_application_x4_coreg_4band_stretch_stats_rerun/coreg_log.json --ncc-fallback
 ```
 
 **Failed pairs to redo:** 192 (phantom 2020–23), 45 (C3KW2X) and 216 (mavic).
@@ -407,7 +399,7 @@ failed pairs whose scenes are in the crown series:
 | mavic | 216 | 77 | 5 | 2 |
 
 - 295 of the other 299 failed pairs are scenes below 10 % clear, which will stay failed.
-- So expect roughly 16 new chips with the gate alone, or about 29 with the fallback.
+- So expect about 29 new chips: 16 from the search limit, 13 from the fallback.
 - About 40–50 % of chips have been rated Good in past vetting, so perhaps 8–15 new Good chips.
 
 **Run time.** About 23 s per pair on 64 GB. On the 16 GB Mac the mavic build swaps, at about
@@ -415,8 +407,9 @@ failed pairs whose scenes are in the crown series:
 
 ## Step 4: rebuild downstream products
 
-The steps are in priority order. 4a matters most: today the crown series uses the 35 (or 74)
-recovered scenes *unshifted*, so their crown outlines are 31–82 m off.
+The steps are in priority order. 4a matters most: today the crown series uses the 74
+recovered scenes *unshifted*. Their crown outlines are 31–82 m off on the 35 that hit the search
+limit, and up to 60 m (median 8 m) off on the 39 fallback scenes.
 
 ### 4a. Crown series and the PSE-LTAE experiments (Mac)
 
@@ -444,7 +437,7 @@ commands, folds (`config/temporal_folds_20261012.csv`) and seeds:
   `cv/eval_east`.
 
 **Checks.**
-- `scenes` in the new npz has 840 + 35 (+39) `coreg_ok` scenes.
+- `scenes` in the new npz has about 840 + 74 = 914 `coreg_ok` scenes.
 - For every scene whose coreg record is unchanged, the new `scenes/<scene>.npz` arrays equal
   the old ones (`np.array_equal` on every key). Only the recovered scenes may differ.
 
