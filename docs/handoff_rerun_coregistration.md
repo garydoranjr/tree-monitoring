@@ -1,12 +1,12 @@
 # Handoff: re-run all Planet → drone image registrations
 
-Written 2026-10-30, updated 2026-11-01.
+Written 2026-10-30, updated 2026-11-01 (step 3 run the same day).
 
 | step | status |
 |---|---|
 | 1. Classify the failures | **done** 2026-11-01: [results](#step-1-results-2026-11-01) |
 | 2. Choose new settings and change the code | **done** 2026-11-01: [code changes](#step-2-code-changes-2026-11-01); [decision: use the NCC fallback](#decision-use-the-ncc-fallback-2026-11-01) |
-| 3. Re-run every registration | **not started**: [procedure](#step-3-re-run-the-registrations) |
+| 3. Re-run every registration | **done** 2026-11-01 (`RUN=20261101`): [results](#step-3-results-2026-11-01); 3b not yet copied to gattaca2 |
 | 4. Rebuild the downstream products and experiments | **not started**: [procedure](#step-4-rebuild-downstream-products) |
 
 ## Why
@@ -404,6 +404,56 @@ failed pairs whose scenes are in the crown series:
 
 **Run time.** About 23 s per pair on 64 GB. On the 16 GB Mac the mavic build swaps, at about
 95 s per pair and roughly 6 h. Run them one at a time.
+
+## Step 3 results (2026-11-01)
+
+Run with `RUN=20261101` on the 64 GB Mac (the run-time notes above assume 16 GB). 3a and the
+chip builds ran at the same time without swapping. Logs are in `logs/coreg_redo_crown_series_20261101.log`
+and `logs/redo_chip_builds_20261101.{sh,log}`.
+
+**3a, crown series** (`crown_series_20261101/coreg_all_scenes.json`; 2 h 08 min, 123 ortho groups).
+914 of 1,243 scenes are coregistered, up from 840. All 840 old shifts are unchanged. The check
+matches the diagnosis exactly:
+
+| cause | `arosics+ncc` | `ncc` | fail |
+|---|---|---|---|
+| cap, recovered (35) | 35 | | |
+| cap, unverified (9) | | | 9 |
+| cap, not recovered (2) | | 1 (20211122_145420_50, (51, 60) m) | 1 |
+| AROSICS does not converge (37) | | 37 | |
+| cloud or coverage (214) | | 1 (20230110_152451_23, (4, −2) m) | 213 |
+| no confident match (106) | | | 106 |
+
+The 35 recovered shifts agree with `x_30`/`y_30` in the causes CSV to within 4e-6 m.
+
+**3b, apply JSON.** 45 of the 798 scenes are newly coregistered (20 `arosics+ncc`, 25 `ncc`).
+That makes 591 / 798, up from 546. The old file is `coreg_nearest_drone_maxshift10.json`.
+**Not yet copied to gattaca2.** Before 4b, run:
+
+```bash
+rsync -a /Volumes/Earth03/flower/202610_temporal_apply/coreg_nearest_drone{,_maxshift10}.json \
+    gattaca2:/scratch/tree-monitoring/202610_temporal_apply/
+```
+
+**3c, chip builds.** Each build redid exactly its failed pairs. Every new chip has all five
+files (`.tif`, `.png`, `.drone.png`, `.mask.png`, `.ocm.png`).
+
+| build (`20261101_*_redo`) | pairs | `arosics+ncc` | `ncc` | new chips | run time |
+|---|---|---|---|---|---|
+| `full` (phantom 2020–23) | 192 | 9 | 8 | 17 | 63 min |
+| `phantomext` (C3KW2X) | 45 | 2 | 4 | 6 | 22 min |
+| `globus_mkl` (mavic) | 216 | 6 | 2 | 8 | 2 h 11 min |
+| **total** | 453 | 17 | 14 | **31** | |
+
+- **Against the estimate.** The estimate was about 29 new chips: 16 from the cap and 13 from the
+  fallback. The phantom build has one more `ncc` chip than estimated, and the mavic build has one
+  more of each kind. These come from pairs whose scenes are not in the crown series.
+- **Clear fraction.** Two mavic chips, `20250714_161516_30` (0.09) and `20250801_161545_88`
+  (0.14), are mostly cloud. Expect them to be rated down in vetting.
+- **Mavic masks.** Regenerating the 8 masks with `reapply_drone_labels.py` (the 2d path) from
+  `results/classifications` reproduces them pixel for pixel. They are therefore the
+  colour-transfer masks.
+- **Next.** Viewer review and vetting (4c.1–2). Only these 31 chips need rating.
 
 ## Step 4: rebuild downstream products
 
