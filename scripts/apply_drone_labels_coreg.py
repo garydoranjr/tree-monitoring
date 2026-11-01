@@ -21,6 +21,8 @@ from affine import Affine
 from arosics import COREG
 from geoarray import GeoArray
 
+from coreg_ncc import ncc_confident, ncc_shift
+
 log = logging.getLogger(__name__)
 
 DATE_PATTERN = r"\d{4}_\d{2}_\d{2}"
@@ -122,8 +124,20 @@ def load_as_geoarray(filepath):
     return GeoArray(arr, geotransform=transform.to_gdal(), projection=projection)
 
 
-def compute_coreg_shift(dronefile, planetfile, planet_match_band=1, drone_ga=None,
-                        max_shift=10):
+# AROSICS search limit in Planet pixels (3 m) per axis: 30 is 90 m. It was 10
+# (30 m) until November 2026, which failed every scene whose georeferencing
+# error is larger: 35 of 403 failures in crown_series_20261029, at shifts of
+# 31-82 m. A wider window also admits false matches, so a shift beyond the old
+# limit is accepted only when the NCC check (coreg_ncc.py) agrees with it.
+# See docs/handoff_rerun_coregistration.md.
+COREG_MAX_SHIFT = 30
+NCC_CHECK_ABOVE_M = 30.0
+NCC_AGREE_M = 3.0
+
+
+def arosics_shift(dronefile, planetfile, planet_match_band=1, drone_ga=None,
+                  max_shift=COREG_MAX_SHIFT):
+    """The AROSICS shift alone, with no NCC check: (x_m, y_m, success)."""
     # The drone ortho is the expensive side: the mavic M3M mosaics are ~4 GB
     # each, and every Planet scene under a given label date shares one. Callers
     # that loop over scenes pass it in preloaded; None keeps the standalone
@@ -137,7 +151,7 @@ def compute_coreg_shift(dronefile, planetfile, planet_match_band=1, drone_ga=Non
             drone_ga, planet_ga,
             ws=(200, 200),
             align_grids=True,
-            # In Planet pixels per axis: 10 is 30 m.
+            # In Planet pixels per axis: see COREG_MAX_SHIFT.
             max_shift=max_shift,
             ignore_errors=True,
             q=True,
@@ -163,6 +177,50 @@ def compute_coreg_shift(dronefile, planetfile, planet_match_band=1, drone_ga=Non
     y_shift = None if y_shift is None else float(y_shift)
 
     return x_shift, y_shift, success
+
+
+def compute_coreg_shift(dronefile, planetfile, planet_match_band=1, drone_ga=None,
+                        ocm_path=None, ncc_fallback=False):
+    """Coregistration fields for one scene's log record.
+
+    The AROSICS shift is used as is up to NCC_CHECK_ABOVE_M on both axes.
+    Beyond that it is kept only if the NCC shift agrees within NCC_AGREE_M on
+    both axes. With ncc_fallback, a scene AROSICS fails on (or whose shift NCC
+    rejects) takes the NCC shift when NCC is confident.
+
+    Returns a dict:
+    - coreg_ok, x_shift_m, y_shift_m (None on failure), as before;
+    - coreg_method: 'arosics', 'arosics+ncc' (beyond the old limit, NCC
+      agrees), 'ncc' (the fallback) or None;
+    - arosics_x_m, arosics_y_m: AROSICS's own shift, None if it failed;
+    - ncc_x_m, ncc_y_m, ncc_peak, ncc_second, ncc_clear: the NCC result, None
+      where NCC was not run (it runs only when needed).
+    """
+    x, y, ok = arosics_shift(dronefile, planetfile, planet_match_band, drone_ga)
+    rec = {'coreg_ok': False, 'x_shift_m': None, 'y_shift_m': None,
+           'coreg_method': None, 'arosics_x_m': x if ok else None,
+           'arosics_y_m': y if ok else None, 'ncc_x_m': None, 'ncc_y_m': None,
+           'ncc_peak': None, 'ncc_second': None, 'ncc_clear': None}
+    beyond = ok and max(abs(x), abs(y)) > NCC_CHECK_ABOVE_M
+    if ok and not beyond:
+        rec.update(coreg_ok=True, x_shift_m=x, y_shift_m=y,
+                   coreg_method='arosics')
+        return rec
+    if not (beyond or ncc_fallback):
+        return rec
+
+    ncc = ncc_shift(planetfile, dronefile, ocm_path, planet_match_band)
+    rec.update({k: (None if not np.isfinite(v) else float(v))
+                for k, v in ncc.items()})
+    if beyond and np.isfinite(ncc['ncc_x_m']) and \
+            abs(x - ncc['ncc_x_m']) <= NCC_AGREE_M and \
+            abs(y - ncc['ncc_y_m']) <= NCC_AGREE_M:
+        rec.update(coreg_ok=True, x_shift_m=x, y_shift_m=y,
+                   coreg_method='arosics+ncc')
+    elif ncc_fallback and ncc_confident(ncc):
+        rec.update(coreg_ok=True, x_shift_m=rec['ncc_x_m'],
+                   y_shift_m=rec['ncc_y_m'], coreg_method='ncc')
+    return rec
 
 
 def find_drone(labelfile, dronedir):
@@ -422,9 +480,10 @@ def generate_ocm_png(ocm_path, pimg, outputpath):
     iio.imwrite(outputpath, rgba)
 
 
-def create_mask(dronefile, labelfile, planetfile, planetdir, outputdir, resize, mode, maskdir=None, drone_scale=None, bands=3, drone_ga=None):
+def create_mask(dronefile, labelfile, planetfile, planetdir, outputdir, resize, mode, maskdir=None, drone_scale=None, bands=3, drone_ga=None, ncc_fallback=False):
 
     clear_fraction = None
+    ocm_path = None
     if maskdir is not None:
         ocm_path = find_ocm_mask(planetfile, planetdir, maskdir)
         if ocm_path is not None:
@@ -432,10 +491,12 @@ def create_mask(dronefile, labelfile, planetfile, planetdir, outputdir, resize, 
 
     # Red is band 1 in 3-band RGB chips and band 3 in 4-band (B,G,R,NIR) chips.
     planet_match_band = 3 if bands == 4 else 1
-    x_shift, y_shift, coreg_ok = compute_coreg_shift(
+    coreg = compute_coreg_shift(
         dronefile, planetfile, planet_match_band=planet_match_band,
-        drone_ga=drone_ga,
+        drone_ga=drone_ga, ocm_path=ocm_path, ncc_fallback=ncc_fallback,
     )
+    x_shift, y_shift = coreg['x_shift_m'], coreg['y_shift_m']
+    coreg_ok = coreg['coreg_ok']
 
     with rasterio.open(planetfile) as src:
         planet_res_m = src.res[0]
@@ -452,6 +513,8 @@ def create_mask(dronefile, labelfile, planetfile, planetdir, outputdir, resize, 
         'y_shift_m': y_shift,
         'planet_res_m': planet_res_m,
         'drone_res_m': drone_res_m,
+        **{k: v for k, v in coreg.items()
+           if k not in ('coreg_ok', 'x_shift_m', 'y_shift_m')},
     }
 
     if not coreg_ok:
@@ -472,7 +535,7 @@ def create_mask(dronefile, labelfile, planetfile, planetdir, outputdir, resize, 
     )
 
     ocm_rep = None
-    if maskdir is not None and ocm_path is not None:
+    if ocm_path is not None:
         ocm_rep = reproject_ocm_to_grid(ocm_path, pimg)
 
     if ocm_rep is not None:
@@ -513,13 +576,13 @@ def create_mask(dronefile, labelfile, planetfile, planetdir, outputdir, resize, 
             outputdir / f"{basename}.drone.png",
         )
 
-    if maskdir is not None and ocm_path is not None:
+    if ocm_path is not None:
         generate_ocm_png(ocm_path, pimg, outputdir / f"{basename}.ocm.png")
 
     return record
 
 
-def process_label(dronedir, labelfile, planet_df, planetdir, outputdir, timewindow, resize, mode, maskdir=None, drone_scale=None, bands=3):
+def process_label(dronedir, labelfile, planet_df, planetdir, outputdir, timewindow, resize, mode, maskdir=None, drone_scale=None, bands=3, ncc_fallback=False, only_pairs=None):
     label_date = pd.to_datetime(
         get_cls_date(labelfile),
         format="%Y_%m_%d",
@@ -527,6 +590,10 @@ def process_label(dronedir, labelfile, planet_df, planetdir, outputdir, timewind
 
     date_mask = (planet_df["date"] - label_date).abs() <= pd.Timedelta(days=timewindow)
     planetfiles = planet_df.loc[date_mask]["path"].tolist()
+    if only_pairs is not None:
+        label = Path(labelfile).name
+        planetfiles = [p for p in planetfiles
+                       if (Path(p).stem, label) in only_pairs]
 
     if not planetfiles:
         return []
@@ -538,7 +605,7 @@ def process_label(dronedir, labelfile, planet_df, planetdir, outputdir, timewind
 
     try:
         return [
-            create_mask(dronefile, labelfile, planetfile, planetdir, outputdir, resize, mode, maskdir, drone_scale, bands, drone_ga)
+            create_mask(dronefile, labelfile, planetfile, planetdir, outputdir, resize, mode, maskdir, drone_scale, bands, drone_ga, ncc_fallback)
             for planetfile in planetfiles
         ]
     finally:
@@ -578,8 +645,24 @@ def filter_files(planetfiles, filterdir):
               help='3 = RGB chips from *rgb.tif (default); 4 = RGB+NIR chips '
                    'from *4band.tif, written as a 4-band uint16 GeoTIFF plus '
                    'an RGB QA PNG.')
-def main(labelfiles, dronedir, planetdir, outputdir, timewindow, resize, filterdir, mode, maskdir, drone_scale, bands):
+@click.option('--ncc-fallback', is_flag=True,
+              help='Where AROSICS fails, use the NCC shift when NCC is '
+                   'confident (see compute_coreg_shift).')
+@click.option('--redo-failed', 'redo_log', default=None,
+              type=click.Path(exists=True, dir_okay=False),
+              help='A previous build\'s coreg_log.json: process only its '
+                   '(scene, label) pairs with coreg_ok false. Successful pairs '
+                   'keep their shift under the current settings, so they need '
+                   'no rerun.')
+def main(labelfiles, dronedir, planetdir, outputdir, timewindow, resize, filterdir, mode, maskdir, drone_scale, bands, ncc_fallback, redo_log):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+    only_pairs = None
+    if redo_log is not None:
+        with open(redo_log) as f:
+            only_pairs = {(r['scene'], r['label']) for r in json.load(f)
+                          if not r['coreg_ok']}
+        log.info("Redoing %d failed pairs from %s", len(only_pairs), redo_log)
 
     planet_glob = '*4band.tif' if bands == 4 else '*rgb.tif'
     planetfiles = list(Path(planetdir).rglob(planet_glob))
@@ -601,6 +684,7 @@ def main(labelfiles, dronedir, planetdir, outputdir, timewindow, resize, filterd
         records = process_label(
             dronedir, labelfile, planet_df, planetdir,
             outputdir, timewindow, resize, mode, maskdir, drone_scale, bands,
+            ncc_fallback, only_pairs,
         )
         all_records.extend(records)
         # Rewrite the log after every label date. A multi-hour build that dies

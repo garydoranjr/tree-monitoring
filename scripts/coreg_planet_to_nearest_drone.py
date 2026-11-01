@@ -4,19 +4,23 @@
 The temporal-interpolation model is applied to Planet scenes that have no
 drone flight within a few days, so there is no same-date ortho to align
 them to. Each such scene is matched instead to the drone ortho nearest in
-time, with the same AROSICS settings as the training build
-(`compute_coreg_shift` in apply_drone_labels_coreg.py: Red band in both
-images, ws 200, max_shift 10). The canopy geometry changes little over a
-few weeks, and the shift being estimated is Planet's own geolocation error.
+time, with the same settings as the training build (`compute_coreg_shift` in
+apply_drone_labels_coreg.py: AROSICS on the Red band in both images, ws 200,
+max_shift 30, with an NCC check on shifts beyond 30 m; --ncc-fallback as
+there). The canopy geometry changes little over a few weeks, and the shift
+being estimated is Planet's own geolocation error.
 
 Scenes within --exclude-within-days of any drone flight (the training-time
 scenes) and scenes whose OmniCloudMask clear fraction is below
 --min-clear-fraction are skipped. Scenes are processed grouped by ortho, each
 group in a fresh worker process so a ~4 GB mavic ortho is read once and its
 memory is returned afterwards. The output is rewritten after every group,
-and a rerun skips scenes already in it.
+and a rerun skips scenes already in it. --redo-failed reruns the scenes
+it records as failed, so a JSON built with older settings can be updated
+in place.
 
-Output records follow coreg_log.json, plus the scene's path relative to
+Output records follow coreg_log.json (including the coreg_method, AROSICS
+and NCC fields of compute_coreg_shift), plus the scene's path relative to
 PLANETDIR (so the file can be used on another machine), its date, the
 ortho's date, and the distance in days to the nearest drone flight.
 See docs/planet_temporal_generalization.md.
@@ -63,16 +67,16 @@ def index_orthos(drone_dirs):
 
 def coreg_group(args):
     """Coregister every scene in one ortho group; runs in a worker."""
-    dronefile, scenes = args
+    dronefile, scenes, ncc_fallback = args
     drone_ga = load_as_geoarray(dronefile)
     records = []
     for rec in scenes:
-        x_shift, y_shift, ok = compute_coreg_shift(
+        ocm_path = rec.pop('_ocm')
+        coreg = compute_coreg_shift(
             dronefile, rec['planet_file'], planet_match_band=3,
-            drone_ga=drone_ga,
+            drone_ga=drone_ga, ocm_path=ocm_path, ncc_fallback=ncc_fallback,
         )
-        records.append({**rec, 'drone_file': dronefile, 'coreg_ok': ok,
-                        'x_shift_m': x_shift, 'y_shift_m': y_shift})
+        records.append({**rec, 'drone_file': dronefile, **coreg})
     return records
 
 
@@ -93,10 +97,18 @@ def coreg_group(args):
 @click.option('--workers', default=1, show_default=True,
               help='Ortho groups processed in parallel. Each worker holds '
                    'one ortho in memory (up to ~4 GB for mavic).')
+@click.option('--ncc-fallback', is_flag=True,
+              help='Where AROSICS fails, use the NCC shift when NCC is '
+                   'confident (see compute_coreg_shift).')
+@click.option('--redo-failed', is_flag=True,
+              help='Rerun the scenes OUT_JSON records as failed, replacing '
+                   'their records. Successful records are kept: they keep '
+                   'their shift under the current settings.')
 @click.option('--dry-run', is_flag=True,
               help='Report the scene selection by year and stop.')
 def main(planetdir, ocmdir, out_json, drone_dirs, exclude_within_days,
-         min_clear_fraction, start, end, workers, dry_run):
+         min_clear_fraction, start, end, workers, ncc_fallback, redo_failed,
+         dry_run):
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s %(levelname)s %(message)s')
     orthos = index_orthos(drone_dirs)
@@ -106,6 +118,10 @@ def main(planetdir, ocmdir, out_json, drone_dirs, exclude_within_days,
     if os.path.exists(out_json):
         with open(out_json) as fh:
             done = json.load(fh)
+    if redo_failed:
+        n_failed = sum(not r['coreg_ok'] for r in done)
+        done = [r for r in done if r['coreg_ok']]
+        log.info('redoing the %d failed scenes in %s', n_failed, out_json)
     done_scenes = {r['scene'] for r in done}
 
     planetfiles = sorted(Path(planetdir).rglob('*4band.tif'))
@@ -141,6 +157,7 @@ def main(planetdir, ocmdir, out_json, drone_dirs, exclude_within_days,
             'drone_date': pd.Timestamp(flight_dates[nearest]).strftime('%Y-%m-%d'),
             'days_to_drone': int(days[nearest]),
             '_ortho': orthos.iloc[nearest],
+            '_ocm': ocm_path,
         })
     log.info('%d scenes to coregister (%d already done; skipped %d within '
              '%d days of a flight, %d below clear fraction %.2f, %d without '
@@ -168,7 +185,8 @@ def main(planetdir, ocmdir, out_json, drone_dirs, exclude_within_days,
     # across orthos (it did in reapply_drone_labels.py's single-process run).
     ctx = mp.get_context('spawn')
     with ctx.Pool(workers, maxtasksperchild=1) as pool:
-        for recs in tqdm(pool.imap_unordered(coreg_group, groups.items()),
+        jobs = [(f, recs, ncc_fallback) for f, recs in groups.items()]
+        for recs in tqdm(pool.imap_unordered(coreg_group, jobs),
                          total=len(groups)):
             records.extend(recs)
             records.sort(key=lambda r: r['scene'])

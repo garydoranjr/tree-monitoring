@@ -2,18 +2,13 @@
 """Test whether failed Planet-to-drone registrations fail because the shift
 exceeds AROSICS's search limit.
 
-compute_coreg_shift (apply_drone_labels_coreg.py) searches at most
-max_shift = 10 Planet pixels (30 m) per axis. For every failed scene in a
-coreg JSON (as written by coreg_planet_to_nearest_drone.py), this reruns
-AROSICS at each --max-shift, other settings unchanged, against the same
-ortho. max_shift is in Planet pixels (3 m), so the default 20 and 30 search
-60 m and 90 m. It also runs an independent brute-force match:
-1. The Planet red band is resampled to a 1 m grid on the ortho.
-2. Pixels that OmniCloudMask does not call clear, and nodata, are set to the
-   clear mean.
-3. The part of the scene that stays inside the ortho under any shift up to
-   --ncc-search m is correlated (normalized cross-correlation) against the
-   ortho's red band, block-averaged to 1 m, over every shift in that range.
+Until November 2026, compute_coreg_shift (apply_drone_labels_coreg.py)
+searched at most max_shift = 10 Planet pixels (30 m) per axis. For every
+failed scene in a coreg JSON (as written by coreg_planet_to_nearest_drone.py),
+this reruns AROSICS alone (arosics_shift) at each --max-shift, other settings
+unchanged, against the same ortho. max_shift is in Planet pixels (3 m), so the
+default 20 and 30 search 60 m and 90 m. It also runs the independent
+brute-force NCC match of coreg_ncc.py, searching --ncc-search m.
 
 Controls are scenes that already registered, so the NCC sign convention and
 the stability of a wider search can be checked:
@@ -39,80 +34,16 @@ import os
 import click
 import numpy as np
 import pandas as pd
-import rasterio
-from rasterio.enums import Resampling
-from rasterio.transform import from_origin
-from rasterio.warp import reproject
-from skimage.feature import match_template
 
-from apply_drone_labels_coreg import (compute_coreg_shift, find_ocm_mask,
+from apply_drone_labels_coreg import (arosics_shift, find_ocm_mask,
                                       load_as_geoarray)
-from build_crown_pixel_series import OCM_CLEAR, read_ocm
-
-NCC_RES = 1.0
-SECOND_EXCLUDE_M = 15.0
-
-
-def drone_red_1m(dronefile):
-    """The ortho's red band block-averaged to NCC_RES, its transform, and its
-    valid mask."""
-    with rasterio.open(dronefile) as src:
-        b = src.bounds
-        w = int((b.right - b.left) // NCC_RES)
-        h = int((b.top - b.bottom) // NCC_RES)
-        red = src.read(1, out_shape=(h, w), resampling=Resampling.average,
-                       masked=True)
-        transform = from_origin(b.left, b.top, NCC_RES, NCC_RES)
-        crs = src.crs
-    valid = ~np.ma.getmaskarray(red) & (red.filled(0) > 0)
-    return red.filled(0).astype(np.float32), valid, transform, crs
-
-
-def ncc_shift(planetfile, ocm_path, drone, search_m):
-    """Brute-force NCC shift of a Planet scene against the 1 m ortho."""
-    red_d, valid_d, transform, crs = drone
-    with rasterio.open(planetfile) as src:
-        red_p = src.read(3).astype(np.float32)
-        valid_p = src.read_masks(3) > 0
-        clear = valid_p
-        if ocm_path is not None:
-            cls, _ = read_ocm(ocm_path, src)
-            clear = valid_p & (cls == OCM_CLEAR)
-        on_d = np.zeros(red_d.shape, np.float32)
-        clr_d = np.zeros(red_d.shape, np.uint8)
-        reproject(red_p, on_d, src_transform=src.transform, src_crs=src.crs,
-                  dst_transform=transform, dst_crs=crs,
-                  resampling=Resampling.bilinear)
-        reproject(clear.astype(np.uint8), clr_d, src_transform=src.transform,
-                  src_crs=src.crs, dst_transform=transform, dst_crs=crs,
-                  resampling=Resampling.nearest)
-    m = int(search_m / NCC_RES)
-    tpl = on_d[m:-m, m:-m].copy()
-    tclr = clr_d[m:-m, m:-m].astype(bool)
-    if tclr.mean() < 0.05:
-        return np.nan, np.nan, np.nan, np.nan, float(tclr.mean())
-    tpl[~tclr] = tpl[tclr].mean()
-    img = red_d.copy()
-    img[~valid_d] = img[valid_d].mean()
-    r = match_template(img, tpl)
-    i, j = np.unravel_index(np.argmax(r), r.shape)
-    peak = float(r[i, j])
-    yy, xx = np.ogrid[:r.shape[0], :r.shape[1]]
-    far = (yy - i) ** 2 + (xx - j) ** 2 > (SECOND_EXCLUDE_M / NCC_RES) ** 2
-    second = float(r[far].max()) if far.any() else np.nan
-    # The best match is (j - m, i - m) pixels right and down of the scene's
-    # claimed position. The correction to apply is its negative, in
-    # AROSICS's corrected_shifts_map convention (checked on scenes AROSICS
-    # registers: NCC (-11, -33) m against AROSICS (-10.4, -31.8) m).
-    return (-(j - m) * NCC_RES, (i - m) * NCC_RES, peak, second,
-            float(tclr.mean()))
+from coreg_ncc import ncc_shift
 
 
 def group_rows(args):
     """Every scene of one ortho group; runs in a worker."""
     dronefile, recs, planetdir, ocmdir, max_shifts, search_m = args
     drone_ga = load_as_geoarray(dronefile)
-    drone = drone_red_1m(dronefile)
     rows = []
     for rec in recs:
         planetfile = os.path.join(planetdir, rec['planet_rel'])
@@ -121,13 +52,15 @@ def group_rows(args):
                                    'y_shift_m', 'role')}
         row['drone_file'] = dronefile
         for k in max_shifts:
-            x, y, ok = compute_coreg_shift(dronefile, planetfile,
-                                           planet_match_band=3,
-                                           drone_ga=drone_ga, max_shift=k)
+            x, y, ok = arosics_shift(dronefile, planetfile,
+                                     planet_match_band=3, drone_ga=drone_ga,
+                                     max_shift=k)
             row.update({f'ok_{k}': ok, f'x_{k}': x, f'y_{k}': y})
         ocm = find_ocm_mask(planetfile, planetdir, ocmdir)
-        (row['ncc_x'], row['ncc_y'], row['ncc_peak'], row['ncc_second'],
-         row['ncc_clear']) = ncc_shift(planetfile, ocm, drone, search_m)
+        ncc = ncc_shift(planetfile, dronefile, ocm, search_m=search_m)
+        row.update(ncc_x=ncc['ncc_x_m'], ncc_y=ncc['ncc_y_m'],
+                   **{k: ncc[k] for k in ('ncc_peak', 'ncc_second',
+                                          'ncc_clear')})
         rows.append(row)
     return rows
 

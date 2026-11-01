@@ -87,12 +87,14 @@ def _collect_stems_labelbox(ndjson_path: Path, min_rank: int) -> list[str]:
     return stems
 
 
-def merge_coreg_log(src_log: Path, dst_log: Path) -> tuple[list[dict], int, int, int]:
+def merge_coreg_log(src_log: Path, dst_log: Path) -> tuple[list[dict], int, int, int, int]:
     """Union of the source and destination coreg logs, keyed on (scene, label).
 
     Destination records win on a collision, so re-running against the same
     source is idempotent and an existing curated log is never rewritten by a
-    later build. Returns (merged, n_src, n_dst, n_new).
+    later build. The exception is a failed destination record that the source
+    coregistered: a `--redo-failed` build of apply_drone_labels_coreg.py
+    replaces it. Returns (merged, n_src, n_dst, n_new, n_replaced).
     """
     with src_log.open() as f:
         src_records = json.load(f)
@@ -105,10 +107,18 @@ def merge_coreg_log(src_log: Path, dst_log: Path) -> tuple[list[dict], int, int,
     def key(rec):
         return (rec.get("scene"), rec.get("label"))
 
+    redone = {key(r): r for r in src_records if r.get("coreg_ok")}
+    n_replaced = 0
+    for i, r in enumerate(dst_records):
+        if not r.get("coreg_ok") and key(r) in redone:
+            dst_records[i] = redone[key(r)]
+            n_replaced += 1
+
     seen = {key(r) for r in dst_records}
     new_records = [r for r in src_records if key(r) not in seen]
 
-    return dst_records + new_records, len(src_records), len(dst_records), len(new_records)
+    return (dst_records + new_records, len(src_records), len(dst_records),
+            len(new_records), n_replaced)
 
 
 def copy_good(
@@ -167,7 +177,8 @@ def copy_good(
 
     coreg_src = src_dir / "coreg_log.json"
     if coreg_src.exists():
-        merged, n_src, n_dst, n_new = merge_coreg_log(coreg_src, dst_dir / "coreg_log.json")
+        merged, n_src, n_dst, n_new, n_replaced = merge_coreg_log(
+            coreg_src, dst_dir / "coreg_log.json")
         if dry_run:
             print(f"  [dry-run] coreg_log.json ({len(merged)} records)")
         else:
@@ -175,7 +186,8 @@ def copy_good(
                 json.dump(merged, f, indent=2)
         if n_dst:
             print(f"\ncoreg_log.json: {n_dst} existing + {n_new} new "
-                  f"(of {n_src} in source) = {len(merged)} records")
+                  f"(of {n_src} in source) = {len(merged)} records; "
+                  f"{n_replaced} failed records replaced by a redone success")
         else:
             print(f"\nAlso copied   : coreg_log.json ({len(merged)} records)")
     else:
