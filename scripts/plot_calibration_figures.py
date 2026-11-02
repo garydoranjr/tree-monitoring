@@ -34,6 +34,7 @@ import os
 os.environ.setdefault('MPLBACKEND', 'Agg')
 
 import csv
+import functools
 import json
 import sys
 from pathlib import Path
@@ -271,13 +272,12 @@ def schematic(outdir, key):
     p500 = g.to_display(g.planet500[3] * usable)
     m500 = g.to_display(g.modis[3] * usable)
     vmin, vmax = np.nanpercentile(np.concatenate([p500.ravel(), m500.ravel()]), [1, 99])
-    box_lo, box_hi = pooled_stretch([np.where(g.water | g.cloud, np.nan, g.refl)])
+    lo, hi = shared_stretch()
     masked = np.where((g.water | g.cloud)[None], np.nan, g.refl)
     sid = next(s['scene_id'] for s in g.scenes
                if (FLOWER / 'planet_clipped_cal/4band' / s['scene_id'][:4]
                    / f'{s["scene_id"]}_4band.tif').exists())
     clips, _ = plot_clip(sid)
-    clip_lo, clip_hi = pooled_stretch([clips['SR'], clips['CAL']])
 
     fig = plt.figure(figsize=(13, 3.6))
     gs = fig.add_gridspec(2, 5, width_ratios=[1, 1, 1, 0.95, 1.15], height_ratios=[1, 1],
@@ -286,7 +286,7 @@ def schematic(outdir, key):
               'match means', 'apply to 3 m']
     axes = [fig.add_subplot(gs[:, 0]), fig.add_subplot(gs[:, 1]), fig.add_subplot(gs[:, 2])]
     paper = np.array([0.93, 0.93, 0.91])
-    img = stretch_rgb(masked, box_lo, box_hi)
+    img = stretch_rgb(masked, lo, hi)
     axes[0].imshow(np.where(np.isnan(img).any(axis=-1, keepdims=True), paper, img),
                    interpolation='nearest')
     # Water and cloud in the 3 m panel: masks drawn as flat colors.
@@ -334,7 +334,7 @@ def schematic(outdir, key):
 
     clip_axes = [fig.add_subplot(gs[0, 4]), fig.add_subplot(gs[1, 4])]
     for ax, v, lab in zip(clip_axes, ('SR', 'CAL'), ('raw', 'calibrated')):
-        ax.imshow(np.nan_to_num(stretch_rgb(clips[v], clip_lo, clip_hi), nan=1.0),
+        ax.imshow(np.nan_to_num(stretch_rgb(clips[v], lo, hi), nan=1.0),
                   interpolation='nearest')
         bare(ax)
         ax.text(0.02, 0.05, lab, transform=ax.transAxes, fontsize=7.5, color=INK,
@@ -352,8 +352,7 @@ def schematic(outdir, key):
         fig.add_artist(FancyArrowPatch((x0, 0.5), (x1, 0.5), transform=fig.transFigure,
                                        arrowstyle='-|>', mutation_scale=12, color=MUTED, lw=1.5))
     click.echo(f'clip shown: {sid}; offsets red {g.offset[2]:+.4f}, NIR {g.offset[3]:+.4f}; '
-               f'NIR color scale {vmin:.3f}-{vmax:.3f}; clip stretch lo/hi '
-               + ' '.join(f'{a:.3f}/{b:.3f}' for a, b in zip(clip_lo, clip_hi)))
+               f'NIR color scale {vmin:.3f}-{vmax:.3f}')
     save(fig, outdir, 'calibration_schematic')
 
 
@@ -371,7 +370,7 @@ def modis_example(outdir, key):
     nir = g.to_display(g.modis[3])
     vmax = float(np.nanpercentile(nir, 99.5))
     filled = g.to_display((g.fill[3] > 0).astype(float))
-    p_lo, p_hi = pooled_stretch([np.where((g.water | g.cloud)[None], np.nan, g.refl)])
+    p_lo, p_hi = shared_stretch()
     cat = np.where(~g.land_ok, 0, np.where(g.use, 2, 1)).astype(float)
     cat_d = g.to_display(cat)
     click.echo(f'gap-filled NIR pixels: {int((g.fill[3] > 0).sum())} of {g.fill[3].size}, '
@@ -428,6 +427,23 @@ def example_scenes():
     return [r for _, r in ex.sort_values('time').iterrows()], means
 
 
+@functools.lru_cache(maxsize=None)
+def shared_stretch():
+    """The one true-color stretch of every reflectance image in these figures,
+    so the same surface looks the same in all of them: per band, the 1st-99th
+    percentile of the OCM-clear pixels of the TOA, raw SR and calibrated clips
+    of the four example scenes pooled (the twelve before-after panels). It
+    spans hazy TOA down to over-corrected SR blue. Returns (lo, hi), (4,) each."""
+    arrays = []
+    for s in example_scenes()[0]:
+        clips, clear = plot_clip(s.scene_id)
+        arrays += [np.where(clear[None], a, np.nan) for a in clips.values()]
+    lo, hi = pooled_stretch(arrays)
+    click.echo('shared stretch lo/hi (B,G,R,N) '
+               + ' '.join(f'{a:.3f}/{b:.3f}' for a, b in zip(lo, hi)))
+    return lo, hi
+
+
 @cli.command('sr-vs-toa')
 @out_option
 @click.option('--scene', default=None,
@@ -439,7 +455,7 @@ def sr_vs_toa(outdir, scene):
     if scene is None:
         scene = next(s.scene_id for s in scenes if s.instrument == 'PSB.SD')
     clips, clear = plot_clip(scene)
-    lo, hi = pooled_stretch([np.where(clear[None], clips[v], np.nan) for v in ('TOA', 'SR')])
+    lo, hi = shared_stretch()
 
     fig = plt.figure(figsize=(12.5, 4.6))
     gs = fig.add_gridspec(2, 5, width_ratios=[1.9, 0.85, 0.85, 0.12, 1.2],
@@ -506,8 +522,7 @@ def before_after(outdir):
     scenes, _ = example_scenes()
     data = {s.scene_id: plot_clip(s.scene_id) for s in scenes}
     rows = [('TOA', 'TOA'), ('SR', 'SR'), ('CAL', 'calibrated')]
-    lo, hi = pooled_stretch([np.where(clear[None], c[v], np.nan)
-                             for c, clear in data.values() for v, _ in rows])
+    lo, hi = shared_stretch()
     h, w = next(iter(data.values()))[1].shape
     fig, axes = plt.subplots(3, len(scenes), figsize=(3.1 * len(scenes), 3 * 3.1 * h / w + 0.7))
     for j, s in enumerate(scenes):
