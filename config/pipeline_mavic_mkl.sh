@@ -1,5 +1,5 @@
 # Crown classification pipeline settings for the mavic 50ha RGB mosaics, with
-# the 3x3 colour transfer to phantom (crown_classification_mavic_mkl.yml)
+# the 3x3 color transfer to phantom (crown_classification_mavic_mkl.yml)
 # instead of the per-band uint16 -> uint8 map used by pipeline_mavic.sh.
 # See docs/drone_radiometry.md.
 #
@@ -27,7 +27,7 @@ KEYS="flower decid"
 MODEL_TEMPLATE="drone_{key}_geo_out/epoch_020.pth"
 
 # These mosaics are uint16 while the models were trained on 8-bit data. The
-# colour transfer also corrects mavic's greener, more saturated colour, which
+# color transfer also corrects mavic's greener, more saturated color, which
 # made the flowering model over-call on mavic.
 SCALING_CONFIG=config/crown_classification_mavic_mkl.yml
 

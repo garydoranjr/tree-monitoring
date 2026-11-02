@@ -31,7 +31,7 @@ Writes, with the given output prefix:
 Any two apply runs can be compared (e.g. calibrated against an
 offset-jitter run): --toa-dir is always the first run and --cal-dir the
 second, and the column suffixes stay _toa and _cal. --toa-label, --cal-label,
---toa-color and --cal-color set the plot legend and colours.
+--toa-color and --cal-color set the plot legend and colors.
 
 It prints the same tables, the all-species results by year and by whether
 the scene's calibration offset was fitted or borrowed (--offsets), Cohen's kappa
@@ -221,9 +221,9 @@ def plot(tables, prefix, labels, colors):
 @click.option('--cal-label', default=LABELS['cal'], show_default=True,
               help='Legend label of the --cal-dir run.')
 @click.option('--toa-color', default=COLORS['toa'], show_default=True,
-              help='Colour of the --toa-dir run.')
+              help='Color of the --toa-dir run.')
 @click.option('--cal-color', default=COLORS['cal'], show_default=True,
-              help="Colour of the --cal-dir run, e.g. '#8a5bd6' for an "
+              help="Color of the --cal-dir run, e.g. '#8a5bd6' for an "
                    'offset-jitter run.')
 def main(outputprefix, toa_dir, cal_dir, nc4s, n_species, pos_frac, min_clear,
          min_crown_px, match_days, offsets, n_boot, toa_label, cal_label,

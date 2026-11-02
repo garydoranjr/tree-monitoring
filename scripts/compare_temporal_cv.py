@@ -100,7 +100,7 @@ def strata_table(windows, meta, epoch, n_boot, seed=0):
               help='A temporal_cv.json, as label=path. Repeatable.')
 @click.option('--plot', type=click.Path(dir_okay=False), default=None)
 @click.option('--style', 'styles', multiple=True, metavar='LABEL=COLOR[:LINESTYLE]',
-              help='Colour and matplotlib line style (solid, dashed, dotted) of a '
+              help='Color and matplotlib line style (solid, dashed, dotted) of a '
                    'run in --plot, e.g. nojit=#2a78d6:dashed; non-solid runs get '
                    'hatched bars. Default: the categorical order, solid. Repeatable.')
 @click.option('--windows', 'window_csvs', multiple=True, metavar='LABEL=CSV',
@@ -168,7 +168,7 @@ def main(runs, plot, styles, window_csvs, chip_meta, cmp_epoch, n_boot):
             style[label] = (color, ls or 'solid')
         missing = [label for label in cv if label not in style]
         if missing:
-            raise click.ClickException(f'no colour for {missing}; pass --style')
+            raise click.ClickException(f'no color for {missing}; pass --style')
         hatch = {'solid': None, 'dashed': '///', 'dotted': '...'}
         fig, axes = plt.subplots(1, len(METRICS) + 1, figsize=(4 * (len(METRICS) + 1), 3.4))
         for ax, (k, name) in zip(axes, METRICS.items()):

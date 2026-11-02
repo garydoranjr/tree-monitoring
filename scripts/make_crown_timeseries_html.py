@@ -2,7 +2,7 @@
 """Build a self-contained interactive HTML viewer of per-crown drone and
 Planet classification confidence over time.
 
-The page shows the crown map (clickable; coloured by species, or by drone or
+The page shows the crown map (clickable; colored by species, or by drone or
 Planet confidence on a chosen date) above two linked time series:
 
 - the selected crown: drone p_flowering, p_deciduous and the training-mask

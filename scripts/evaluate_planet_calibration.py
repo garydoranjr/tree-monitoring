@@ -18,7 +18,7 @@ Metrics (results/planet_calibration/planet_calibration_eval.csv), per version an
   inst_*     median residual per instrument, 2020-2022 (sensor-generation offset)
 
 Figures (figs/planet_calibration/):
-  timeseries_plot_mean.png  plot-mean NIR and NDVI per version, coloured by
+  timeseries_plot_mean.png  plot-mean NIR and NDVI per version, colored by
                             instrument, with the MODIS reference over the plot
   residual_sd_by_month.png  residual SD by calendar month per version
   gains_offsets.png         sigma-ratio gain (not applied by default) and applied

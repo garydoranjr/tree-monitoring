@@ -36,9 +36,9 @@ LABEL_RE = re.compile(r'^(?P<run>.+)_e(?P<epoch>\d+)$')
 # recall, so only a readable subset gets a callout.
 ANNOT_EPOCHS = (1, 3, 5, 12, 25, 60, 200)
 
-# Fixed colours for the run prefixes used so far (base = phantom 2020-23 chips,
+# Fixed colors for the run prefixes used so far (base = phantom 2020-23 chips,
 # ext = + mavic, phantom = + C3KW2X phantom, full = all three, full_mkl = all
-# three with colour-transfer mavic masks); others cycle.
+# three with color-transfer mavic masks); others cycle.
 RUN_COLORS = {'base': '#1f77b4', 'ext': '#d62728', 'phantom': '#2ca02c',
               'full': '#9467bd', 'full_mkl': '#ff7f0e'}
 # Peak-callout offsets (points) for runs that peak together at early epochs:

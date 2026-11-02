@@ -1,6 +1,6 @@
 # Settings for the spatial (east/west) Mask R-CNN experiment on gattaca2 with
 # MODIS-calibrated chips and the fixed input stretch: the `full_mkl` run of
-# docs/planet_training_chips_50ha.md ("Colour-transfer mavic masks") repeated
+# docs/planet_training_chips_50ha.md ("Color-transfer mavic masks") repeated
 # on the calibrated copy of the same 142 chips, then scored with the earlier
 # runs on the 56-chip benchmark (right halves of the phantom 2020-23 chips).
 # Source this, then sbatch from the repo root (scripts/slurm/planet_spatial_*.sh).

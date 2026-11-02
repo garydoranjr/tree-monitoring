@@ -409,7 +409,7 @@ def _paste_instances(overlay, img, inst_masks, bank, n_paste, rng,
     counts = {i + 1: int((ids == i + 1).sum()) for i in range(len(inst_masks))}
     next_id = len(inst_masks) + 1
     # Keep adjusted pixels inside the range the model already sees for this
-    # chip, without needing to know which channel is NDVI and which is colour.
+    # chip, without needing to know which channel is NDVI and which is color.
     ch_lo = img.reshape(-1, img.shape[2]).min(axis=0)
     ch_hi = img.reshape(-1, img.shape[2]).max(axis=0)
 
@@ -1235,12 +1235,12 @@ def evaluate(model, dataloader, device, iou_metric, map_metric,
 @click.option('--fixed-stretch', type=click.Path(exists=True, dir_okay=False),
               default=None,
               help='YAML from derive_planet_fixed_stretch.py: stretch every '
-                   'colour/IR channel with one fixed per-band lo/hi instead of '
+                   'color/IR channel with one fixed per-band lo/hi instead of '
                    'the per-image percentile stretch. For calibrated '
                    'reflectance chips (build_calibrated_chips.py).')
 @click.option('--color-jitter/--no-color-jitter', 'color_jitter', default=True,
               help='ColorJitter(brightness=0.2, contrast=0.2) on the stretched '
-                   'colour/IR channels of training chips (default on, as in '
+                   'color/IR channels of training chips (default on, as in '
                    'every run before this flag existed).')
 @click.option('--offset-jitter', default=0.0, show_default=True, type=float,
               help='With --fixed-stretch: add k times the across-scene SD of '

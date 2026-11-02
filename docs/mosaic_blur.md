@@ -187,7 +187,7 @@ length's lower bound exceeds half a pixel. The black ticks at 0° are the
 
 **`blur_exif_crosscheck`** — Phantom 24782016 blur against flight parameters
 from the raw-image EXIF, one point per mosaic (2018-04-04 – 2023-10-24,
-coloured by year). (a) Measured motion length (cm) against predicted forward
+colored by year). (a) Measured motion length (cm) against predicted forward
 motion (flight speed × median exposure time, cm); the dashed line is 1:1.
 (b) Major-axis PSF FWHM (cm) against median exposure time (ms). (c)
 Histograms (10° bins) of three azimuth differences:
@@ -218,7 +218,7 @@ series.
 
 **`blur_mavic_metadata`** — Mavic (2024-03-06 – 2026-01-20) blur against
 flight metadata from `stri/globus/metadata_all.csv`. (a) Isotropic PSF FWHM
-(cm) and (b) motion length (cm) against mosaic GSD (cm), coloured by GNSS
+(cm) and (b) motion length (cm) against mosaic GSD (cm), colored by GNSS
 correction (PPK, RTK or none). Open circles mark flights whose processing
 comments note illumination artifacts, an incomplete mission or a distorted
 DSM.

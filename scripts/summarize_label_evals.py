@@ -2,7 +2,7 @@
 """Side-by-side summary of several compare_classifications_to_gt.py runs.
 
 Each RUN is a name=directory pair holding gt_vs_ml_joined.csv from one run
-(e.g. phantom, mavic, mavic before colour transfer). Metrics are recomputed
+(e.g. phantom, mavic, mavic before color transfer). Metrics are recomputed
 from the joined tables so every run is scored the same way, with
 crown-bootstrap intervals, and runs whose name contains "mavic" are also
 scored on the mavic-only dates (after the last phantom flight). Runs whose

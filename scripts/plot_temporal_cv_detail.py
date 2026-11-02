@@ -10,7 +10,7 @@ Writes four figures with the given output prefix (PNG + PDF each):
   chip's distance in days to the nearest training chip.
 - <prefix>_chips: per-chip IoU, precision and recall at the selected epoch
   (left and right windows summed), against distance to training data and
-  against acquisition date, coloured by fold.
+  against acquisition date, colored by fold.
 - <prefix>_season: the same per-chip values against day of year, all years
   together, with the values pooled over each calendar month.
 """

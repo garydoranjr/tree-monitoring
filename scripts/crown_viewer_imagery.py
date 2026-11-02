@@ -93,7 +93,7 @@ def encode_webp(rgba, quality=85):
 
 def render_drone(path, bounds, width, height):
     """RGBA (H, W, 4) uint8 of `bounds` from a drone mosaic, block-averaged
-    to width x height, with the classifier's display colours (pu.rgb_display)
+    to width x height, with the classifier's display colors (pu.rgb_display)
     and nodata transparent."""
     with rasterio.open(path) as src:
         win = from_bounds(*bounds, transform=src.transform)

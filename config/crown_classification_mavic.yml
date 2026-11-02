@@ -25,7 +25,7 @@
 # Note that band 4 is ignored entirely. In the mavic mosaics it is a {0, 65535}
 # alpha channel; in the uint8 reference set the same band instead carries
 # photogrammetric height (values 3-196, only r=0.20 with RGB brightness) despite
-# its GeoTIFF colour interpretation claiming alpha. Only bands 1-3 (R, G, B) are
+# its GeoTIFF color interpretation claiming alpha. Only bands 1-3 (R, G, B) are
 # ever passed to the model.
 
 # Scaling applied as: uint8 = clip(round(DN * gain + offset), 0, 255)

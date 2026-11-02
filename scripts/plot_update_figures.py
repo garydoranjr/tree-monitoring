@@ -12,7 +12,7 @@ Each subcommand writes <name>.png and <name>.pdf into OUTDIR (default
                              deciduous probability maps
   classification-timeseries  per-crown flowering / deciduous fraction across
                              the phantom 2018-2024 and mavic 2024-2026 mosaics
-  mavic-extension            mavic flowering (or deciduous) rate after colour
+  mavic-extension            mavic flowering (or deciduous) rate after color
                              transfer vs the per-band run, continuing the
                              phantom record
   same-date                  per-crown classifier output on the dates flown by
@@ -99,7 +99,7 @@ C_GREY = '#7f7f7f'
 OCM_COLORS = {1: ('#ffffff', 'thick cloud'), 2: ('#ff9f1c', 'thin cloud'),
               3: ('#7b2cbf', 'cloud shadow')}
 
-# key -> (label, colour, marker)
+# key -> (label, color, marker)
 SERIES = {
     'phantom-24782016': ('phantom (24782016)', C_PHANTOM, 'o'),
     'phantom-C3KW2X': ('phantom (C3KW2X)', C_PHANTOM_EXT, '^'),
@@ -681,12 +681,12 @@ def classification_timeseries(outdir, decimate, threshold, min_pixels):
 @click.option('--before-csv', type=click.Path(dir_okay=False, path_type=Path),
               default=DEFAULT_OUT / 'classification_timeseries.csv', show_default=True,
               help='classification-timeseries CSV whose mavic rows are the '
-                   'per-band (pre-colour-transfer) run.')
+                   'per-band (pre-color-transfer) run.')
 @click.option('--quantity', type=click.Choice(['flowering', 'deciduous']),
               default='flowering', show_default=True,
               help='Plot the share of crowns flowering or deciduous.')
 def mavic_extension(outdir, before_csv, quantity):
-    """Mavic flowering/deciduous rate after colour transfer, continuing the phantom record.
+    """Mavic flowering/deciduous rate after color transfer, continuing the phantom record.
 
     Reads OUTDIR/classification_timeseries.csv (run classification-timeseries
     first) and overlays the old per-band mavic rows from --before-csv. The
@@ -712,7 +712,7 @@ def mavic_extension(outdir, before_csv, quantity):
     for series, (label, color, mk) in SERIES.items():
         g = df[df['source'] == series]
         if series == 'mavic':
-            label = 'mavic, 3x3 colour transfer (after)'
+            label = 'mavic, 3x3 color transfer (after)'
         vals = 100 * g[col]
         ax.plot(g['date'], vals, marker=mk, ms=3.5, color=color, lw=1,
                 label=f'{label}, {len(g)} dates, median {vals.median():.1f}%')

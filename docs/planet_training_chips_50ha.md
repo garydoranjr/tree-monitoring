@@ -264,9 +264,9 @@ under both alignments, and AROSICS gave each almost the same shift either
 way (median difference in magnitude +0.01 m). See `plot_update_figures.py
 coreg-stats-alignment`.
 
-### 2d. Mavic masks after the colour transfer (`20261012` set)
+### 2d. Mavic masks after the color transfer (`20261012` set)
 
-The mavic orthos were re-classified with the 3x3 colour transfer
+The mavic orthos were re-classified with the 3x3 color transfer
 (`config/crown_classification_mavic_mkl.yml`, see
 [drone_radiometry.md](drone_radiometry.md)). AROSICS coregisters the drone
 *ortho*, not the classification, so the shifts, Planet chips, cloud masks,
@@ -293,9 +293,9 @@ dates until the job was killed on the 16 GB laptop.
 `20260915` masks pixel for pixel. Each run takes about 25 min on the
 laptop, against about 10 h with swapping for a full AROSICS rebuild.
 
-**Result.** The colour transfer halves the mavic crown masks:
+**Result.** The color transfer halves the mavic crown masks:
 
-| | old (per-band) masks | new (colour transfer) masks |
+| | old (per-band) masks | new (color transfer) masks |
 |---|---|---|
 | Crown pixels, all 154 chips | 7.59 M | 3.70 M |
 | Median crown fraction, 70 Good chips | 5.59 % | 2.65 % |
@@ -430,7 +430,7 @@ In the all-sources set the five colliding chips are byte-identical to
 their mavic copies. Every chip in both sets crops to 512 × 512 on both
 halves, and none has zero instances.
 
-**All-sources set with colour-transfer mavic masks (`20261012`).** This is the
+**All-sources set with color-transfer mavic masks (`20261012`).** This is the
 same assembly with the `20261012` mavic set (section 2d) in place of
 `20260915`. It still adds the vetted mavic chips before the C3KW2X ones with
 `--no-overwrite`:
@@ -602,10 +602,10 @@ python scripts/plot_headtohead_epochs.py \
   /Volumes/Earth03/flower/figs/202610_updates/maskrcnn_headtohead.png --label ...
 ```
 
-### Colour-transfer mavic masks (`20261012` set)
+### Color-transfer mavic masks (`20261012` set)
 
 `full_mkl` repeats `full` on the `20261012` set from step 2d: the same
-142 chips, but with the colour-transferred mavic masks. The 56 test chips
+142 chips, but with the color-transferred mavic masks. The 56 test chips
 are all phantom 2020-23, so their masks did not change, and the scores
 compare directly with the table above. Stage the new set and the test
 set to `/local` (both copies were checked against `/scratch` with md5),
@@ -654,14 +654,14 @@ cleaner mavic labels help on mavic-era dates.
 
 The figures in `figs/20261020_updates/` compare `full_mkl` with the
 phantom-only baselines, `base` and `phantom`, and leave out `ext` and
-`full`, whose mavic masks predate the full 3 × 3 colour transfer. Both
+`full`, whose mavic masks predate the full 3 × 3 color transfer. Both
 plotters take a repeatable `--run` to pick the runs:
 
 ```bash
 D=/Volumes/Earth03/flower/figs/20261020_updates
 J=$D/headtohead_sweep_202610_mkl.json
 L=(--label base="phantom 2020-23 only (56)" --label phantom="+ phantom 2023-24 (77)"
-   --label full_mkl="all three, colour-transfer mavic (142)")
+   --label full_mkl="all three, color-transfer mavic (142)")
 R=(--run base --run phantom --run full_mkl)
 python scripts/plot_update_figures.py maskrcnn-summary --outdir $D --sweep $J "${L[@]}" "${R[@]}"
 python scripts/plot_headtohead_epochs.py $J $D/maskrcnn_headtohead.png "${L[@]}" "${R[@]}" \
@@ -670,12 +670,12 @@ python scripts/plot_headtohead_epochs.py $J $D/maskrcnn_headtohead.png "${L[@]}"
 
 The `*_mavic_masks` figures isolate the mask change: `full` against
 `full_mkl`, the same 142 chips and settings with old against
-colour-transfer mavic masks. `--name` keeps the summary from overwriting
+color-transfer mavic masks. `--name` keeps the summary from overwriting
 the one above:
 
 ```bash
 L=(--label full="all three, old mavic masks (142)"
-   --label full_mkl="all three, colour-transfer mavic masks (142)")
+   --label full_mkl="all three, color-transfer mavic masks (142)")
 R=(--run full --run full_mkl)
 python scripts/plot_update_figures.py maskrcnn-summary --outdir $D --sweep $J \
   --name maskrcnn_summary_mavic_masks "${L[@]}" "${R[@]}"

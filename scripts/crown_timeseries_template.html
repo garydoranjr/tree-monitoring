@@ -73,7 +73,7 @@ set the map date. Scroll to zoom the map and drag to pan.
     </select></label>
   <label class="inline" title="Planet scenes in which the model made no detection at any score plot as 0 for every crown"><input id="showempty" type="checkbox">
     Show Planet scenes with no detections</label>
-  <label>Map colour
+  <label>Map color
     <select id="mode">
       <option value="species">Highlight species</option>
       <option value="drone">Drone event probability on date</option>
@@ -126,7 +126,7 @@ for (const c of C) {
 }
 const byTag = new Map(C.map(c => [c.tag, c]));
 
-// Scene-major Planet lookup for map colouring.
+// Scene-major Planet lookup for map coloring.
 const sceneVals = S.date.map(() => new Map());
 for (const c of C) if (c.ps) c.ps.forEach((s, i) => sceneVals[s].set(c.tag, i));
 
@@ -441,7 +441,7 @@ function setDate(dateStr, sceneI) {
   cur.date = series() === 'planet' ? S.date[cur.sceneI] : series() === 'drone'
     ? D.droneDates[cur.droneI] : dateStr.slice(0, 10);
 }
-// The series the ◀ ▶ buttons step: the map colouring's, else the image layer's.
+// The series the ◀ ▶ buttons step: the map coloring's, else the image layer's.
 function series() {
   if (cur.mode === 'drone') return 'drone';
   if (isPlanet()) return 'planet';

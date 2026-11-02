@@ -164,7 +164,7 @@ where they can be quantified; the rest are known but not yet quantified.
 8. **Spectral bandpasses.** PS2, PS2.SD and PSB.SD bands differ from each
    other and from MODIS B3/B4/B1/B2; the offset removes the mean difference
    over the box, not the part that depends on spectral shape (e.g. forest vs
-   bare soil, or changing leaf colour).
+   bare soil, or changing leaf color).
 9. **Missing scenes.** 8 Dove Classic (`1105`) scenes behind `planet_clipped/`
    have no SR product and are absent from the calibrated set. One box scene
    (an 18 × 546 px sliver) has no OCM mask because OmniCloudMask failed on it,
@@ -329,7 +329,7 @@ version.
    (bottom row) of the 50ha plot for top-of-atmosphere reflectance from the
    existing clips and metadata coefficients (TOA, left), raw Planet surface
    reflectance (SR, centre) and SR cross-calibrated to MODIS (CAL, right),
-   with points coloured by instrument (blue, Dove Classic PS2; orange, Dove-R
+   with points colored by instrument (blue, Dove Classic PS2; orange, Dove-R
    PS2.SD; green, SuperDove PSB.SD) and the MODIS MCD43A1 reference at nadir
    view and 45° solar zenith averaged over the 8 MODIS pixels touching the plot
    (black line, daily, gap-filled). Each point is the mean over OCM-clear
@@ -346,7 +346,7 @@ version.
    HKU σ-ratio gain (left column, σ_MODIS / σ_Planet over matched 500 m
    pixels; reported but not applied) and the applied offset (right column,
    μ_MODIS − μ_Planet in reflectance units) for blue, green, red and NIR
-   (rows), one point per calibrated date-satellite group, coloured by
+   (rows), one point per calibrated date-satellite group, colored by
    instrument as in Fig. 1, with the no-correction values (gain 1, offset 0)
    as grey lines. Covers the 638 calibrated groups, 2020-01 to 2026-08.
 4. `calibration_success.png` — Seasonality of calibration coverage: share of
@@ -379,7 +379,7 @@ version.
    percentile to [0, 1]; the label in each panel is the plot-mean NIR
    reflectance of that version.
 8. `example_clips_fixed.png` — The same four clips as Fig. 7 as raw SR and
-   calibrated SR, in true colour (R, G, B) and false colour (NIR, R, G)
+   calibrated SR, in true color (R, G, B) and false color (NIR, R, G)
    (rows), with one linear stretch per band shared by all panels (1st–99th
    percentile of all pixels shown, both versions pooled: blue 0.004–0.057,
    green 0.016–0.078, red 0.007–0.065, NIR 0.149–0.448 reflectance), so

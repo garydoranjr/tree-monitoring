@@ -564,7 +564,7 @@ python scripts/make_crown_timeseries_html.py \
 ```
 
 - **The map** is the 2022-09-29 crown map, and a crown is selected by
-  clicking it. It colours crowns by one of:
+  clicking it. It colors crowns by one of:
   - the selected species;
   - the drone event probability at a flight;
   - the Planet `max_score` or `pos_frac` in a scene.
@@ -602,7 +602,7 @@ python scripts/serve_crown_timeseries.py                    # http://127.0.0.1:8
 
 - **Drone flight.** The orthomosaic of the current flight. Phantom uses the
   local alignment that `crown_classifications.nc4` was built from, and mavic
-  uses `globus/RGB`. Colours are the classifier's (mavic is scaled with
+  uses `globus/RGB`. Colors are the classifier's (mavic is scaled with
   `config/crown_classification_mavic.yml`).
   - The mosaics have no overviews, and reading one takes 20 s to 2 min, so a
     0.25 m overview of each of the 200 flights is cached as WebP (about 4 MB
@@ -841,7 +841,7 @@ Candidate explanations for the null temporal-CV result, tested cheapest first:
 | H2 | Too few scenes are calibrated directly (39 % of date-satellite groups) | CV split by offset source |
 | H3 | The architecture is the limit | DINOv3 satellite backbone |
 | H4 | The model uses within-chip contrast, which a per-scene linear correction leaves unchanged | Test-time offset sensitivity |
-| H5 | Calibration removes little of the input variation. What remains is seasonal canopy change, PS2 colour casts, local haze, and sun and view geometry. | Per-chip skill drivers |
+| H5 | Calibration removes little of the input variation. What remains is seasonal canopy change, PS2 color casts, local haze, and sun and view geometry. | Per-chip skill drivers |
 | H6 | Skill comes partly from the persistence of the same trees' state on nearby dates | Persistence baseline from the drone labels |
 | H7 | Label noise caps both runs equally | Per-chip skill by label source and grade |
 | H8 | Training run-to-run variance is unmeasured; each arm was run once with no seed | Chip bootstrap; repeat run |
@@ -1675,7 +1675,7 @@ python scripts/plot_radiometric_sensitivity.py \
   the spatial question.
 - **The label sources are mixed.** Phantom chips (2021–24) and mavic chips
   (2024–26) carry different label characteristics: mavic masks halved after
-  the colour transfer, and median crown fraction is 2.65 % for mavic against
+  the color transfer, and median crown fraction is 2.65 % for mavic against
   4.03 % for phantom. A fold dominated by one source is scored against that
   source's labels.
 - **Tiling changes the model's input context.** The CV scores fixed 512 × 512
@@ -1757,7 +1757,7 @@ python scripts/plot_radiometric_sensitivity.py \
 > match is a mask IoU of at least 0.5) of the Planet Mask R-CNN at the
 > selected epoch 12, under the blocked temporal cross-validation of the 142
 > chips of the 20261012 curated set (2021-01 to 2026-01). Each point is one
-> chip, with its left and right 512 × 512 windows summed, coloured and shaped
+> chip, with its left and right 512 × 512 windows summed, colored and shaped
 > by the fold in which it was held out. Left: against the number of days to
 > the nearest training chip's Planet acquisition. The black segments are the
 > values pooled over each distance bin (0–3, 4–7, 8–14, 15–30 and more than
