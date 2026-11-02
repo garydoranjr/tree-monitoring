@@ -248,7 +248,7 @@ def detection_model(cr):
         return X
 
     X = design(ev.latin.values, ev.kind.values, ev.wet.values, ev.area_m2.values)
-    # unpenalised fixed effects would need statsmodels; a mild L2 on all terms
+    # unpenalized fixed effects would need statsmodels; a mild L2 on all terms
     # shrinks sparse species x type cells toward their event type
     m = LogisticRegression(C=1.0, fit_intercept=False, max_iter=2000)
     m.fit(X, ev.det.values, sample_weight=ev.w.values * len(ev) / ev.w.sum())
@@ -308,7 +308,7 @@ def p_any_detection(p, rho, n):
 
 def clear_view_counts(vis, days, doy, length):
     """Days with a clear view of each crown (rows of vis) in each YEARS year, within
-    the length-day window centred on day of year doy, as in po.capture_model."""
+    the length-day window centered on day of year doy, as in po.capture_model."""
     c = np.concatenate([np.zeros((vis.shape[0], 1), int), np.cumsum(vis, axis=1)], axis=1)
     starts = np.array([(pd.Timestamp(f'{y}-01-01') - days[0]).days for y in po.YEARS])
     s = starts + int(doy) - 1

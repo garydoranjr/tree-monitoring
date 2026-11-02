@@ -12,7 +12,7 @@ rule of plot_crown_species_comparison.py: event when
 1. Flight pairs: for every ordered pair of flights at most --max-gap days
    apart, the second flight's events are predicted by the first's. Counts are
    pooled by gap bin.
-2. CV analogue: for every chip of the fold CSV, its flight's events are
+2. CV analog: for every chip of the fold CSV, its flight's events are
    predicted by the flight of the nearest-dated chip in the other folds (the
    training data that fold's model saw). Counts are pooled by the chip's
    days-to-nearest-training bin, as in eval_temporal_cv.py.

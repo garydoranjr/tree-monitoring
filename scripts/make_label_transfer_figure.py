@@ -2,7 +2,7 @@
 """How drone crown labels become PlanetScope training labels (presentation slide).
 
 Timeline (label_transfer_timeline.{png,pdf}): drone flights (Phantom, Mavic)
-and the PlanetScope scenes within +-2 days of a labelled flight
+and the PlanetScope scenes within +-2 days of a labeled flight
 (apply_drone_labels_coreg.py --timewindow 2), those AROSICS co-registered,
 and those kept as training chips after vetting.
 
@@ -133,7 +133,7 @@ def contours(lab, ids, r0, c0, side_px):
 @click.command()
 @click.option('--outdir', type=click.Path(file_okay=False, path_type=Path),
               default=sa.DEFAULT_OUT, show_default=True)
-@click.option('--side-m', default=200.0, show_default=True, help='Example tile side, metres.')
+@click.option('--side-m', default=200.0, show_default=True, help='Example tile side, meters.')
 @click.option('--fps', default=20, show_default=True)
 @click.option('--dpi', default=150, show_default=True)
 def main(outdir, side_m, fps, dpi):
@@ -147,7 +147,7 @@ def main(outdir, side_m, fps, dpi):
     ax = tfig.add_axes([0.13, 0.13, 0.84, 0.8])
     phantom = sorted(set(pu.drone_dates('phantom-24782016')) | set(pu.drone_dates('phantom-C3KW2X')))
     mavic = pu.drone_dates('mavic')
-    labelled = set(log.ldate)
+    labeled = set(log.ldate)
     scenes = log.groupby('scene').agg(pdate=('pdate', 'first'), ok=('coreg_ok', 'any'),
                                       chip=('chip', 'any'))
     rows = [('Phantom flights', phantom, pu.C_PHANTOM, 3),
@@ -168,14 +168,14 @@ def main(outdir, side_m, fps, dpi):
     ax.grid(axis='x', alpha=0.3)
     ax.spines[['left', 'right', 'top']].set_visible(False)
     ax.legend(handles=[Line2D([], [], color='0.82', lw=1.5, label=f'{len(scenes)} paired with a '
-                              'labelled flight'),
+                              'labeled flight'),
                        Line2D([], [], color='0.55', lw=1.5, label=f'{scenes.ok.sum()} '
                               'co-registered to the drone mosaic'),
                        Line2D([], [], color='0.1', lw=1.5, label=f'{scenes.chip.sum()} '
                               'kept as training chips (vetted Good)')],
               loc='upper right', bbox_to_anchor=(1.0, 1.04), ncol=1, fontsize=8.5,
               frameon=False)
-    n_lab = sum(1 for d in phantom + mavic if d in labelled)
+    n_lab = sum(1 for d in phantom + mavic if d in labeled)
     for ext in ('png', 'pdf'):
         tfig.savefig(outdir / f'label_transfer_timeline.{ext}', dpi=300)
     plt.close(tfig)
@@ -298,7 +298,7 @@ def main(outdir, side_m, fps, dpi):
                     '[p];[b][p]paletteuse=dither=sierra2_4a', '-loop', '0', str(gif)],
                    check=True)
     click.echo(f'Wrote label_transfer_timeline.png/.pdf, {mp4}, {gif}, label_transfer.png '
-               f'(final frame) and label_transfer_start.png\nlabelled flights {n_lab}; '
+               f'(final frame) and label_transfer_start.png\nlabeled flights {n_lab}; '
                f'Planet scenes paired {len(scenes)}, co-registered {scenes.ok.sum()}, '
                f'training chips {scenes.chip.sum()}')
 

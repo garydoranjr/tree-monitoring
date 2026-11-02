@@ -13,7 +13,7 @@ date and satellite so adjacent scenes of one strip count as one observation.
 
 Metrics (results/planet_calibration/planet_calibration_eval.csv), per version and variable:
   jitter     median |difference| between consecutive observations <= 3 days apart
-  resid_sd   SD of residuals from a centred 31-day rolling median
+  resid_sd   SD of residuals from a centered 31-day rolling median
   rel_*      the above divided by the series median
   inst_*     median residual per instrument, 2020-2022 (sensor-generation offset)
 

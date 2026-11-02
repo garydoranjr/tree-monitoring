@@ -16,7 +16,7 @@ Phantom example (held-out: crown-dates in a same-date training chip dropped):
     python scripts/compare_classifications_to_gt.py --exclude-train-chips \
         --output-dir /Volumes/Earth03/flower/figs/20261013_updates/vicente_phantom_eval/heldout
 
-With --labels-gpkg, the labels instead come from a labelling-tool export
+With --labels-gpkg, the labels instead come from a labeling-tool export
 that carries the crown-map `tag` on every crown-date polygon (e.g.
 vicente_202610/latest_paulino_label.gpkg), so no uuid bridge is needed and
 any nc4 built by extract_crown_stats_from_masks.py can be scored, including
@@ -88,7 +88,7 @@ CROWNMAP_DEFAULT = (
 # phantom labels.
 SIZE_BINS_DEFAULT = "60,110,200"
 
-# Labelling-tool gpkg exports mix English and Spanish answers.
+# Labeling-tool gpkg exports mix English and Spanish answers.
 FLOWERING_MAP = {"no": "no", "yes": "yes", "sí": "yes", "si": "yes",
                  "maybe": "maybe", "quizás": "maybe", "quizas": "maybe"}
 # Rows the annotator never opened keep the tool defaults (flowering "No",
@@ -220,7 +220,7 @@ def load_crownmap(paths):
 def snap_labels_to_crownmap(labels, crowns):
     """Replace label polygons with the scored outline of the same tag and date.
 
-    Labelling-tool exports (latest_paulino_label.gpkg) sit about 2.9 m north
+    Labeling-tool exports (latest_paulino_label.gpkg) sit about 2.9 m north
     and 0.7 m west of where their crowns are in every mosaic, while the dated
     crown map fits at about zero shift. Labels with no crown-map polygon on
     their date are translated by the median label-minus-map centroid offset
@@ -265,7 +265,7 @@ def parse_size_bins(spec):
 
 
 def load_labels_gpkg(path):
-    """Crown-date labels from a labelling-tool gpkg that carries `tag`.
+    """Crown-date labels from a labeling-tool gpkg that carries `tag`.
 
     Drops rows flagged `ignore` and rows whose `quality` shows they were
     never checked (UNCHECKED_QUALITY), whose flowering/leafing values are
@@ -289,7 +289,7 @@ def load_labels_gpkg(path):
     fl = gdf["flowering"].astype(str).str.strip().str.lower()
     unknown = sorted(set(fl) - set(FLOWERING_MAP))
     if unknown:
-        raise ValueError(f"unrecognised flowering values in {path}: {unknown}")
+        raise ValueError(f"unrecognized flowering values in {path}: {unknown}")
     gdf["dt"] = pd.to_datetime(gdf["time"]).dt.normalize()
     gdf["date"] = gdf["dt"].dt.strftime("%Y_%m_%d")
     gdf["tag"] = gdf["tag"].astype(int)
@@ -316,7 +316,7 @@ def train_chip_overlap(labels, chips_dir):
     """True where a label polygon falls in a training chip of the same date.
 
     The drone models were trained on the chips in chips_dir (named
-    <uuid>_<YYYY-MM-DD>.tif), and every labelled crown inside a chip is
+    <uuid>_<YYYY-MM-DD>.tif), and every labeled crown inside a chip is
     rasterized into its mask, so any crown overlapping a chip on that date
     was seen in training. Both train and test chips count, because the test
     fold was logged during training.
@@ -884,11 +884,11 @@ def render_discrepancy_report(merged, geoms, drone_index, out_path,
 
     df = df[df["date_str"].isin(drone_index)].copy()
     n_with_image = len(df)
-    # A crown is hand-segmented on only ~5 dates but is GT-labelled and
+    # A crown is hand-segmented on only ~5 dates but is GT-labeled and
     # imaged on nearly all of them; its location is stable across dates,
     # so any per-uuid polygon outlines it correctly. Require only that
     # the crown has *some* geometry, preferring the exact-date polygon
-    # and falling back to a representative one (labelled per card).
+    # and falling back to a representative one (labeled per card).
     df = df[df["uuid"].isin(geoms)].copy()
     n_eligible = len(df)
 
@@ -1113,7 +1113,7 @@ def render_conflict_report(flower_conflicts, geoms, drone_index, out_path,
                    "of --geo-folds, so metrics use held-out crowns only.")
 @click.option("--labels-gpkg", default=None,
               type=click.Path(exists=True, dir_okay=False),
-              help="Score a labelling-tool gpkg with a `tag` per crown-date "
+              help="Score a labeling-tool gpkg with a `tag` per crown-date "
                    "(see load_labels_gpkg) instead of --gt-csv + --gpkg.")
 @click.option("--exclude-train-chips", is_flag=True,
               help="Drop crown-dates whose polygon (from --labels-gpkg or "
@@ -1496,7 +1496,7 @@ def main(gt_csv, gpkg, nc4, geo_folds, exclude_train, labels_gpkg,
             "Agreement between the drone classifier and the ground-truth labels "
             "as a function of crown size: AUROC (black) and AUPRC (red) of the "
             "crown-mean predicted probability, with the label prevalence "
-            "(dashed grey, the AUPRC of a random classifier), for flowering "
+            "(dashed gray, the AUPRC of a random classifier), for flowering "
             "(label yes vs no; 'maybe' excluded) and deciduousness (leafing "
             f"< {leafing_threshold}%). Crown size is the area of the crown's "
             "outline on that date in the dated crown map, the same polygon "

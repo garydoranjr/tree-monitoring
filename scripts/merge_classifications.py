@@ -154,7 +154,7 @@ def mosaic_average_rioxarray(original_path, tile_paths, output_path, dtype=np.fl
         # Mask of valid (non-NaN) pixels
         valid = ~np.isnan(tile_data)
 
-        # Weight by distance from the tile's own centre. The tile occupies a
+        # Weight by distance from the tile's own center. The tile occupies a
         # bounding box within the full grid, so derive the mask over that box
         # and scatter it through `valid`.
         rows = np.any(valid[0], axis=1)

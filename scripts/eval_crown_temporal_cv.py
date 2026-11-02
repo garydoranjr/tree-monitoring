@@ -13,7 +13,7 @@ A crown's score is the mean p_event over those observations. Crowns
 without a clear view are left out, so the model and persistence are scored
 on exactly the same crown-flights. Persistence predicts each crown's event
 from its label on the nearest training flight of the fold CSV, as in
-persistence_baseline.py; crowns unlabelled there are left out of both.
+persistence_baseline.py; crowns unlabeled there are left out of both.
 
 Rows are pooled by the flight's distance to the nearest training flight of
 the fold CSV (the bins of eval_temporal_cv.py) and by season (dry: January

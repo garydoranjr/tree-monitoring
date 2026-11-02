@@ -602,7 +602,7 @@ def make_app(image_paths, cache, worker, split, size, min_instance_size,
 
     def drone_params(show_drone, mode, opacity_val, swipe_val):
         """(drone opacity, swipe fraction) for the composite route. Swiping
-        wipes a hard edge, so the covered part is opaque; blending honours
+        wipes a hard edge, so the covered part is opaque; blending honors
         the opacity slider across the whole frame."""
         if not show_drone:
             return 0.0, 1.0

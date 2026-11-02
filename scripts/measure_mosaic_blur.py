@@ -3,7 +3,7 @@
 
 Blur multiplies an image's power spectrum by |MTF|^2, so on one patch of
 ground the ratio of two mosaics' spectra is their relative |MTF|^2 with the
-scene cancelled; spectra ignore shifts, so the ~0.5 m offsets between global
+scene canceled; spectra ignore shifts, so the ~0.5 m offsets between global
 mosaics do not matter. For a Gaussian-equivalent PSF with covariance Sigma
 (m^2) and spatial frequency f = (f_east, f_north) in cycles/m,
 
@@ -78,7 +78,7 @@ EXIF_CSV = pu.PHANTOM_RELEASES['24782016'] / 'raw_images_metadata.csv'
 MAVIC_META = pu.MAVIC_RGB.parent / 'metadata_all.csv'
 
 TILE_M = 20.48           # tile side (m)
-TILE_GRID = (10, 6)      # columns x rows of tile centres
+TILE_GRID = (10, 6)      # columns x rows of tile centers
 INSET_M = 30.0           # keep tiles this far inside the phantom grid
 F_EDGES = np.arange(0.25, 9.5 + 1e-9, 0.25)   # cycles/m; mavic Nyquist >= 9.63
 N_ANG = 12               # orientation bins over 180 deg
@@ -103,7 +103,7 @@ def global_mosaics():
 
 
 def tile_grid():
-    """DataFrame of tile id, centre x/y (UTM 17N) and bounds."""
+    """DataFrame of tile id, center x/y (UTM 17N) and bounds."""
     import rasterio
     ref = next(pu.phantom_dir('24782016', 'global').glob('*_global.tif'))
     with rasterio.open(ref) as src:
@@ -226,11 +226,11 @@ def mosaic_spectra(lums, res):
                 valid=~np.isnan(noise))
 
 
-def f_centres():
+def f_centers():
     return (F_EDGES[:-1] + F_EDGES[1:]) / 2
 
 
-def ang_centres():
+def ang_centers():
     return np.arange(N_ANG) * np.pi / N_ANG
 
 
@@ -239,8 +239,8 @@ def ang_centres():
 # --------------------------------------------------------------------------
 def design():
     """Columns [1, f_E^2, 2 f_E f_N, f_N^2] x -4 pi^2 on the (f, angle) bins."""
-    f = f_centres()[:, None]
-    a = ang_centres()[None, :]
+    f = f_centers()[:, None]
+    a = ang_centers()[None, :]
     fe, fn = f * np.sin(a), f * np.cos(a)
     k = -4 * np.pi ** 2
     cols = [np.ones_like(fe * fn), k * fe ** 2, k * 2 * fe * fn, k * fn ** 2]
@@ -252,7 +252,7 @@ DESIGN = design()
 
 def fit_dsigma(p_i, p_ref, n_i, n_ref, counts):
     """Weighted LS fit of ln(p_i/p_ref) -> (c, s_EE, s_EN, s_NN) in m^2, or None."""
-    f = np.broadcast_to(f_centres()[:, None], p_i.shape)
+    f = np.broadcast_to(f_centers()[:, None], p_i.shape)
     mask = ((f >= F_LO) & (p_i > SNR * n_i) & (p_ref > SNR * n_ref)
             & (counts > 0) & np.isfinite(p_i) & np.isfinite(p_ref))
     y = np.log(p_i / p_ref)
@@ -292,8 +292,8 @@ def fit_aniso(p, n, counts):
     texture anisotropy that shading gives the canopy is taken as constant
     across f (h0). Returns (h0_cos, h0_sin, a, b), or None.
     """
-    f = f_centres()
-    th = ang_centres()
+    f = f_centers()
+    th = ang_centers()
     ok = (p > SNR * n) & (counts > 0) & np.isfinite(p)
     rows = (f >= F_ANISO_LO) & (f <= F_ANISO_HI) & ok.all(axis=1)
     if rows.sum() < 6:
@@ -336,7 +336,7 @@ def combine_tiles(betas, n_boot=500, seed=0):
 
 def normalized(power):
     """Each tile's spectrum over its mean power in the F_NORM band, and that mean."""
-    f = f_centres()
+    f = f_centers()
     band = (f >= F_NORM[0]) & (f < F_NORM[1])
     norm = np.nanmean(power[:, band], axis=(1, 2))
     return power / norm[:, None, None], norm
@@ -350,7 +350,7 @@ def anchor_model(f, log_a, alpha, sigma, log_n):
 def fit_anchor(radial, f=None):
     """Fit the power-law x Gaussian MTF + noise model to a radial spectrum."""
     from scipy.optimize import curve_fit
-    f = f_centres() if f is None else f
+    f = f_centers() if f is None else f
     ok = np.isfinite(radial) & (radial > 0)
     p0 = [np.log(radial[ok][0]) + 2 * np.log(f[ok][0]), 2.0, 0.03, np.log(radial[ok][-1]) - 1]
     popt, pcov = curve_fit(anchor_model, f[ok], np.log(radial[ok]), p0=p0,
@@ -634,7 +634,7 @@ def validate(cache, outdir, mosaic, pad):
     ax = axes[0]
     ax.plot(g.true_sigma_iso_cm, g.dsigma_iso_cm, 'ko-', ms=4)
     lim = [0, g.true_sigma_iso_cm.max() * 1.1]
-    ax.plot(lim, lim, color=pu.C_GREY, lw=0.8, ls='--')
+    ax.plot(lim, lim, color=pu.C_GRAY, lw=0.8, ls='--')
     ax.set(xlabel='injected Gaussian $\\sigma$ (cm)', ylabel='recovered $\\Delta\\sigma$ (cm)',
            title='(a) isotropic blur')
     m = v[v.kind == 'motion']
@@ -645,11 +645,11 @@ def validate(cache, outdir, mosaic, pad):
         ax.plot(s.true_motion_len_cm, s.motion_len_cm, 'o-', ms=4, color=cmap(i / 3),
                 label=f'{az:.0f}°')
     lim = [0, m.true_motion_len_cm.max() * 1.1]
-    ax.plot(lim, lim, color=pu.C_GREY, lw=0.8, ls='--')
+    ax.plot(lim, lim, color=pu.C_GRAY, lw=0.8, ls='--')
     # beyond ~4 px the box blur's first spectral zero (f = 1/L) falls inside
     # the 0.5-6 cycles/m anisotropy band and the Gaussian model breaks down
     for a in axes[1:]:
-        a.axvspan(4.5 * res * 100, lim[1], color=pu.C_GREY, alpha=0.12, lw=0)
+        a.axvspan(4.5 * res * 100, lim[1], color=pu.C_GRAY, alpha=0.12, lw=0)
     ax.set(xlabel='injected motion length (cm)', ylabel='recovered motion length (cm)',
            title='(b) linear motion')
     ax.legend(title='azimuth', fontsize=7, title_fontsize=7)
@@ -658,7 +658,7 @@ def validate(cache, outdir, mosaic, pad):
         s = m[m.azimuth_in == az]
         ax.scatter(s.true_motion_len_cm, (s.azimuth_out - az + 90) % 180 - 90, s=14,
                    color=cmap(i / 3))
-    ax.axhline(0, color=pu.C_GREY, lw=0.8, ls='--')
+    ax.axhline(0, color=pu.C_GRAY, lw=0.8, ls='--')
     ax.set(xlabel='injected motion length (cm)', ylabel='azimuth error (°)',
            title='(c) motion direction', ylim=(-90, 90))
     for a in axes:
@@ -750,7 +750,7 @@ def exif(outdir):
 def date_axis(ax):
     ax.xaxis.set_major_locator(mdates.YearLocator())
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
-    ax.axvline(pu.release_boundary(), color=pu.C_GREY, lw=0.7, ls=':')
+    ax.axvline(pu.release_boundary(), color=pu.C_GRAY, lw=0.7, ls=':')
     ax.tick_params(labelsize=8)
 
 
@@ -823,7 +823,7 @@ def plot_spectra_examples(df, cache, outdir):
     fig = plt.figure(figsize=(11, 6.2))
     gs = fig.add_gridspec(2, 1 + len(picks) // 2, width_ratios=[1.6] + [1] * (len(picks) // 2))
     ax = fig.add_subplot(gs[:, 0])
-    f = f_centres()
+    f = f_centers()
     for key, which, row in picks:
         i = meta.index[meta.stem == row.stem][0]
         P, _ = normalized(arrs[i]['power'])
@@ -839,7 +839,7 @@ def plot_spectra_examples(df, cache, outdir):
         ax.plot(f ** 2, slope * (f ** 2 - f[k0] ** 2), color=color, ls=ls, lw=0.6, alpha=0.6)
     ax.set_xlabel('$f^2$ (cycles$^2$ m$^{-2}$)', fontsize=9)
     ax.set_ylabel('ln(P / P$_{ref}$), offset to 0 at f = %.2g cyc/m' % F_LO, fontsize=9)
-    ax.axhline(0, color=pu.C_GREY, lw=0.6)
+    ax.axhline(0, color=pu.C_GRAY, lw=0.6)
     ax.set_xlim(0, F_EDGES[-1] ** 2)
     ax.legend(fontsize=7, title='thin lines: fitted Gaussian $\\Delta\\sigma^2$', title_fontsize=7)
     ax.tick_params(labelsize=8)
@@ -864,7 +864,7 @@ def plot_spectra_examples(df, cache, outdir):
 
 def plot_anchor_check(df, cache, outdir):
     r = np.load(cache / 'reference.npz')
-    f = f_centres()
+    f = f_centers()
     fig, axes = plt.subplots(1, 3, figsize=(11, 3.4))
     ax = axes[0]
     ax.loglog(f, r['ref_radial'], 'k.', ms=4, label='reference (median over mosaics, tiles)')
@@ -877,7 +877,7 @@ def plot_anchor_check(df, cache, outdir):
     for s, label, color, marker in series_rows(df):
         ax.scatter(s.sigma_iso_cm, s.sigma_param_cm, marker=marker, s=12, color=color, label=label)
     lim = [0, np.nanmax([df.sigma_iso_cm.max(), df.sigma_param_cm.max()]) * 1.05]
-    ax.plot(lim, lim, color=pu.C_GREY, lw=0.8, ls='--')
+    ax.plot(lim, lim, color=pu.C_GRAY, lw=0.8, ls='--')
     ax.set(xlabel='$\\sigma$ from spectral ratio (cm)', ylabel='$\\sigma$ from own-spectrum fit (cm)')
     ax.legend(fontsize=7)
     ax = axes[2]
@@ -900,7 +900,7 @@ def plot_exif(df, ex, outdir):
     ax = axes[0]
     sc = ax.scatter(m.motion_pred_cm, m.motion_len_cm, c=years, cmap='viridis', norm=norm, s=16)
     lim = [0, np.nanmax([m.motion_pred_cm.max(), m.motion_len_cm.max()]) * 1.05]
-    ax.plot(lim, lim, color=pu.C_GREY, lw=0.8, ls='--')
+    ax.plot(lim, lim, color=pu.C_GRAY, lw=0.8, ls='--')
     ax.set(xlabel='predicted forward motion, speed × exposure (cm)',
            ylabel='measured motion length (cm)')
     ax = axes[1]
@@ -911,7 +911,7 @@ def plot_exif(df, ex, outdir):
     bins = np.arange(-90, 91, 10)
     for vals, label, color in (
             (rel(m.scene_azimuth_deg, m.sun_azimuth_deg), 'texture term − solar azimuth', '#ff7f0e'),
-            (rel(m.azimuth_deg, m.sun_azimuth_deg), 'blur term − solar azimuth', pu.C_GREY),
+            (rel(m.azimuth_deg, m.sun_azimuth_deg), 'blur term − solar azimuth', pu.C_GRAY),
             (rel(m.azimuth_deg, m.line_azimuth_deg), 'blur term − flight-line azimuth', pu.C_PHANTOM)):
         ax.hist(vals, bins=bins, histtype='step', lw=1.4, color=color, label=label)
     ax.set(xlabel='azimuth difference (°)', ylabel='phantom mosaics', xlim=(-90, 90))

@@ -3,7 +3,7 @@
 
 One Phantom flight (plot_study_area_figure.LABEL_DATE, 2023-03-07). The loop:
   1. hold: Vicente's training labels of events (thick outlines: flowering,
-     deciduous); every unlabelled crown under a grey mask
+     deciduous); every unlabeled crown under a gray mask
   2. cross-fade: the mask fades out while the classifier's flowering and
      deciduous calls fade in (thin outlines); crowns it calls no event get none
   3. hold: hand labels plus classifier labels
@@ -70,7 +70,7 @@ def main(outdir, name, fps, hold, fade, threshold, gif_width):
     ax.set_xlim(view[0], view[2])
     ax.set_ylim(view[1], view[3])
     ax.set_axis_off()
-    # grey mask over crowns without a hand label
+    # gray mask over crowns without a hand label
     new.plot(ax=ax, facecolor=MASK, edgecolor='none', alpha=0.7)
     mask = ax.collections[-1]
     # classifier calls: flowering and deciduous only
@@ -80,8 +80,8 @@ def main(outdir, name, fps, hold, fade, threshold, gif_width):
         if len(g):
             g.boundary.plot(ax=ax, color=sa.LABEL_COLORS[c], lw=1.1)
             fades.append(ax.collections[-1])
-    # hand labels of events, always on; hand-labelled no-event crowns, like the
-    # classifier's, get no outline (they are unmasked, being labelled)
+    # hand labels of events, always on; hand-labeled no-event crowns, like the
+    # classifier's, get no outline (they are unmasked, being labeled)
     for c in EVENTS:
         col = sa.LABEL_COLORS[c]
         g = lab[lab.cls == c]
@@ -98,7 +98,7 @@ def main(outdir, name, fps, hold, fade, threshold, gif_width):
     leg_cls = fig.legend(handles=[Line2D([], [], color='0.3', lw=1.1, label='classifier')],
                          loc='lower left', bbox_to_anchor=(0.02, 0.04), fontsize=11,
                          frameon=False, handlelength=1.8)
-    leg_mask = fig.legend(handles=[Patch(facecolor=MASK, alpha=0.7, label='unlabelled')],
+    leg_mask = fig.legend(handles=[Patch(facecolor=MASK, alpha=0.7, label='unlabeled')],
                           loc='lower left', bbox_to_anchor=(0.02, 0.04), fontsize=11,
                           frameon=False, handlelength=1.8)
 

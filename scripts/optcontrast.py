@@ -5,7 +5,7 @@ Mapping from matplotlib perceptual colormaps to their optimal single contrast co
 
 The optimal color is chosen via the geometric-mean-luminance strategy: given a
 colormap whose colors span relative luminances [L_min, L_max], the contrast color
-that maximises the *minimum* WCAG contrast ratio across all colormap values has
+that maximizes the *minimum* WCAG contrast ratio across all colormap values has
 relative luminance:
 
     L_opt = sqrt((L_min + 0.05) * (L_max + 0.05)) - 0.05

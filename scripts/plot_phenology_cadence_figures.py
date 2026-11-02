@@ -233,7 +233,7 @@ MISSED = dict(
 @cli.command('missed-event')
 @out_option
 @click.option('--half', default=30.0, show_default=True,
-              help='Half-width of each tile in metres.')
+              help='Half-width of each tile in meters.')
 def missed_event(outdir, half):
     """A guayacan flowering burst between two weekly drone flights."""
     import geopandas as gpd

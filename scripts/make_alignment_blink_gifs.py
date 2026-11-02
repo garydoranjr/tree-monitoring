@@ -130,7 +130,7 @@ def make_example(n, row, outdir, zoom_px, full_width, ms, setname):
     box = (x0, y0, x0 + zoom_px, y0 + zoom_px)
 
     # Zoom frames at 2x chip resolution: the drone at its native sidecar
-    # resolution, the Planet chip and mask upsampled with nearest neighbour.
+    # resolution, the Planet chip and mask upsampled with nearest neighbor.
     z = 2
     p_zoom = planet.crop(box).resize((zoom_px * z,) * 2, Image.NEAREST)
     d_zoom = drone2x.crop(tuple(v * z for v in box))

@@ -344,7 +344,7 @@ def build_instance_bank(dir_splits, size, channel_kinds, min_instance_size,
             inst_masks = binary_mask_to_instances(
                 mask_crop, min_instance_size=min_instance_size,
             )
-            # All crowns are kept out of the background ring, so a neighbour
+            # All crowns are kept out of the background ring, so a neighbor
             # cannot inflate a donor's measured background level.
             union = inst_masks.sum(axis=0) if inst_masks.shape[0] else None
             for inst in inst_masks:
@@ -1186,7 +1186,7 @@ def evaluate(model, dataloader, device, iou_metric, map_metric,
                    'the per-chip count is drawn uniformly from 1..N, so the '
                    'mean added is about N/2 (halved again by '
                    '--copy-paste-prob). The default is deliberately large: '
-                   'chips already carry tens of labelled crowns (35/chip in '
+                   'chips already carry tens of labeled crowns (35/chip in '
                    'the 20260330 flower set, 64/chip in the 20260706 curated '
                    'set), so a single-digit N moves crown density by only a '
                    'few percent. At N=40 with the default probability, '
@@ -1249,7 +1249,7 @@ def evaluate(model, dataloader, device, iou_metric, map_metric,
                    'drawn per sample. Teaches the model offset errors of the '
                    'size calibration leaves (e.g. borrowed offsets). 0 is off.')
 @click.option('--seed', default=None, type=int,
-              help='Seed Python, NumPy and torch (initialisation, shuffling, '
+              help='Seed Python, NumPy and torch (initialization, shuffling, '
                    'jitter, copy-paste). Unset by default, as in earlier runs. '
                    'cuDNN kernels stay non-deterministic, so seeded runs are '
                    'repeatable only approximately.')

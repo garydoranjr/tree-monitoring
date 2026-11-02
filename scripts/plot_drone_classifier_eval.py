@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Precision-recall of the drone crown classifier, and how much hand labelling it replaced.
+"""Precision-recall of the drone crown classifier, and how much hand labeling it replaced.
 
 Scores are crown-mean probabilities from results/crown_classifications.nc4
 (phantom), joined to two label sets:
@@ -16,7 +16,7 @@ Targets follow generate_drone_image_masks.py: flowering if isFlowering is
 'yes' ('maybe' dropped), deciduous if leafing < 50. New labels are restricted
 to segmentation == 'good', where the crown outline matches the crown.
 
-Writes drone_classifier_pr.{png,pdf} and drone_classifier_roc.{png,pdf}, and prints the labelling counts for the
+Writes drone_classifier_pr.{png,pdf} and drone_classifier_roc.{png,pdf}, and prints the labeling counts for the
 slide (also written to materials/drone_classifier_counts.json).
 
 Typical usage:
@@ -79,7 +79,7 @@ def attach_scores(df, nc4):
 
 
 def classified_counts():
-    """Crown-dates the classifier labelled, and its event calls, phantom + mavic."""
+    """Crown-dates the classifier labeled, and its event calls, phantom + mavic."""
     import xarray as xr
     out = {'crown_dates': 0, 'flowering': 0, 'deciduous': 0, 'crowns': 0, 'dates': 0}
     tags = set()
@@ -197,7 +197,7 @@ def main(outdir, new_labels, size, dpi):
     plt.close(fig)
     click.echo(f'Wrote {outdir / name}.png/.pdf')
 
-    # labelling effort
+    # labeling effort
     trn = tr[tr.split == 'train']
     cls = classified_counts()
     counts = dict(
@@ -211,8 +211,8 @@ def main(outdir, new_labels, size, dpi):
         classified_dates=cls['dates'], classified_flowering=cls['flowering'],
         classified_deciduous=cls['deciduous'],
         new_label_rows_heldout_good=len(new), metrics=summary)
-    counts['pct_hand_labelled_train'] = 100 * counts['hand_labels_train'] / cls['crown_dates']
-    counts['pct_hand_labelled_total'] = 100 * counts['hand_labels_total'] / cls['crown_dates']
+    counts['pct_hand_labeled_train'] = 100 * counts['hand_labels_train'] / cls['crown_dates']
+    counts['pct_hand_labeled_total'] = 100 * counts['hand_labels_total'] / cls['crown_dates']
     counts['pct_flowering_hand_train'] = 100 * counts['hand_flowering_train'] / cls['flowering']
     counts['pct_deciduous_hand_train'] = 100 * counts['hand_deciduous_train'] / cls['deciduous']
     (outdir / 'materials/drone_classifier_counts.json').write_text(

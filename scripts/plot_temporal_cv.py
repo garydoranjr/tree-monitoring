@@ -17,7 +17,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 INK = '#1a1a1a'
-FOLD_GREY = '#b0b0b0'
+FOLD_GRAY = '#b0b0b0'
 
 METRIC_LABELS = {
     'test_map/map_50': 'mask mAP@50',
@@ -52,7 +52,7 @@ def main(cvjson, outputfile, metric):
     for i, k in enumerate(folds):
         ax_ep.plot(epochs, [per_epoch[str(e)]['by_fold'][k][metric]
                             for e in epochs],
-                   color=FOLD_GREY, lw=1, label='single fold' if i == 0 else None)
+                   color=FOLD_GRAY, lw=1, label='single fold' if i == 0 else None)
     pooled = [per_epoch[str(e)]['pooled'][metric] for e in epochs]
     ax_ep.plot(epochs, pooled, color=INK, lw=2, marker='o', ms=5,
                label='pooled over folds')

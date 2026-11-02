@@ -4,7 +4,7 @@
 The timeline of chips is cut into contiguous blocks spanning at most
 --block-days, and the blocks are dealt in time order to --n-folds folds.
 Each block goes to the fold with the fewest chips so far, excluding the
-fold of the block just before it, so neighbouring blocks are never held
+fold of the block just before it, so neighboring blocks are never held
 out together and every held-out gap has training data on both sides. Chips that share a drone flight (and so share a label)
 are kept in the same block. See docs/planet_temporal_generalization.md.
 """

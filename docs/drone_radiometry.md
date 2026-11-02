@@ -272,25 +272,25 @@ crown-map hull, about 15–16 M pixels per mosaic, on the two shared flight date
 the same day, as 1 m block means of the uint8 classifier input. Each panel shows
 the log-scaled density of the 532,547 joint 1 m blocks inside the crown-map hull
 for one band (R, G or B), with mavic on the x-axis and phantom on the y-axis.
-The grey line is 1:1 and the colored line is the ordinary-least-squares fit of
+The gray line is 1:1 and the colored line is the ordinary-least-squares fit of
 phantom on mavic. Block means are area averages of the native-resolution
 mosaics resampled to a common 1 m grid. Data are the shared flight dates
 2024-03-06 (top) and 2024-03-18 (bottom).
 
 **`chromaticity.png`:** Color balance of the two drone cameras. The left and
-centre panels show density contours (enclosing the densest 50%, 90% and 99% of
+center panels show density contours (enclosing the densest 50%, 90% and 99% of
 the pixel distribution) of chromaticity, r = R/(R+G+B) on the x-axis against
 g = G/(R+G+B) on the y-axis, computed from the uint8 classifier input for
 phantom (green) and mavic (red). Pixels are the same native-resolution samples
-as `rgb_cdfs.png`, for 2024-03-06 (left) and 2024-03-18 (centre). The
+as `rgb_cdfs.png`, for 2024-03-06 (left) and 2024-03-18 (center). The
 right panel shows each crown's mavic-minus-phantom change in mean r (x-axis)
 and mean g (y-axis). Crown means are taken over the 1 m blocks of each crown in
 the 2022-09-29 crown map, pooled over both dates. Points are colored by the
-archived classifier outcome: grey, neither camera P(flowering) > 0.5; black,
+archived classifier outcome: gray, neither camera P(flowering) > 0.5; black,
 both; red, mavic > 0.5 and phantom < 0.2; green, phantom > 0.5 and mavic < 0.3.
 
 **`reclassify_examples.png`:** Crowns flowering on mavic but not phantom,
-re-classified after color transfer. Each row is one crown-date, labelled with
+re-classified after color transfer. Each row is one crown-date, labeled with
 its date, crown index in the 2022-09-29 crown map and species; the crowns are
 the 8 with the highest archived mavic P(flowering) among the 42 mavic-only
 crown-dates. From left to right, the six panels are:
@@ -303,7 +303,7 @@ crown-dates. From left to right, the six panels are:
 6. mavic P(flowering) after that transfer.
 
 Each RGB panel is the classifier's own input window: at least 512 × 512 pixels
-centred on the crown, with the crown outline in cyan. Each probability panel
+centered on the crown, with the crown outline in cyan. Each probability panel
 shows the flowering SegFormer output (sigmoid of the class-1 logit; black = 0,
 yellow-white = 1) over that window. The value in its title is the mean over the
 crown polygon, from a local CPU re-run of the production checkpoint.

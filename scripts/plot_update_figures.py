@@ -95,7 +95,7 @@ SAME_DATES = ('2024_03_06', '2024_03_18')
 
 DATE_RE = re.compile(r'(\d{4})_(\d{2})_(\d{2})')
 C_PHANTOM, C_PHANTOM_EXT, C_MAVIC = '#1f77b4', '#2ca02c', '#d62728'
-C_GREY = '#7f7f7f'
+C_GRAY = '#7f7f7f'
 OCM_COLORS = {1: ('#ffffff', 'thick cloud'), 2: ('#ff9f1c', 'thin cloud'),
               3: ('#7b2cbf', 'cloud shadow')}
 
@@ -269,7 +269,7 @@ def coverage(outdir, clear_threshold):
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(13, 7.2), sharex=True,
                                    gridspec_kw={'height_ratios': [1.0, 1.6]})
     by = planet.groupby('month').size()
-    ax1.bar(by.index, by.values, width=25, color=C_GREY,
+    ax1.bar(by.index, by.values, width=25, color=C_GRAY,
             label=f'50ha Planet scenes ({len(planet):,})')
     ax1.plot(clear_monthly.index + pd.Timedelta(days=14), clear_monthly.values,
              color='k', lw=1.2,
@@ -300,7 +300,7 @@ def coverage(outdir, clear_threshold):
     ax2.barh(1.5 - 1.0, s1 - s0, left=s0, height=0.4, color='#bbbbbb')
     ax2.text(s0 + (s1 - s0) / 2, 0.5, 'static 2022-09-29 crown map used to classify every mosaic',
              ha='center', va='center', fontsize=8)
-    ax2.barh(0, d1 - d0, left=d0, height=0.4, color='none', edgecolor=C_GREY,
+    ax2.barh(0, d1 - d0, left=d0, height=0.4, color='none', edgecolor=C_GRAY,
              hatch='///', lw=1)
     ax2.text(d0 + (d1 - d0) / 2, 0, 'dated outlines available (not used)', ha='center',
              va='center', fontsize=8, color='#444', bbox=dict(fc='white', ec='none', pad=1))
@@ -530,7 +530,7 @@ def classification_example(outdir, series, date, decimate, zoom_m):
     cls, t_cls = read_decimated(cls_path, decimate, [1, 2])
 
     # Zoom on the most confidently flowering crown that is far enough inside
-    # the plot for the zoom window to be fully labelled.
+    # the plot for the zoom window to be fully labeled.
     half = zoom_m / 2
     ids = crown_ids(crowns, cls.shape[1:], t_cls)
     sums = np.bincount(ids, weights=np.nan_to_num(cls[0]).ravel(),
@@ -588,7 +588,7 @@ def classification_example(outdir, series, date, decimate, zoom_m):
                     side.set_edgecolor('lime')
                     side.set_linewidth(1.8)
     fig.colorbar(im, ax=axes[:, 1:].ravel().tolist(), shrink=0.6,
-                 label='classifier probability (grey = not classified)')
+                 label='classifier probability (gray = not classified)')
     fig.suptitle(f'HPC crown classification of the {date.replace("_", "-")} {label} '
                  f'mosaic; outlines = static 2022-09-29 crown map '
                  f'({len(crowns):,} crowns); bottom row = {zoom_m:.0f} m zoom on crown '
@@ -703,11 +703,11 @@ def mavic_extension(outdir, before_csv, quantity):
                                   gridspec_kw={'width_ratios': [3, 1.2]})
     old_label = 'mavic, per-band scaling (before)'
     vals = 100 * old[col]
-    ax.plot(old['date'], vals, marker='s', ms=2.5, color=C_GREY, lw=0.8, alpha=0.5,
+    ax.plot(old['date'], vals, marker='s', ms=2.5, color=C_GRAY, lw=0.8, alpha=0.5,
             label=f'{old_label}, {len(old)} dates, median {vals.median():.1f}%')
     ax.hlines(vals.median(), old['date'].min(), old['date'].max(),
-              color=C_GREY, ls='--', lw=1, alpha=0.7)
-    axd.scatter(old['date'].dt.dayofyear, vals, marker='s', s=8, color=C_GREY,
+              color=C_GRAY, ls='--', lw=1, alpha=0.7)
+    axd.scatter(old['date'].dt.dayofyear, vals, marker='s', s=8, color=C_GRAY,
                 alpha=0.35, lw=0)
     for series, (label, color, mk) in SERIES.items():
         g = df[df['source'] == series]
@@ -794,7 +794,7 @@ def same_date(outdir, decimate, threshold):
             ax = axes[r, c]
             x, y = w[(var, 'phantom local')], w[(var, 'mavic')]
             ax.scatter(x, y, s=5, alpha=0.4, color='k', lw=0)
-            ax.plot([0, 1], [0, 1], color=C_GREY, lw=0.8)
+            ax.plot([0, 1], [0, 1], color=C_GRAY, lw=0.8)
             ax.axvline(threshold, color=C_PHANTOM, ls=':', lw=1)
             ax.axhline(threshold, color=C_MAVIC, ls=':', lw=1)
             frac = {m: 100 * (w[(var, m)] > threshold).mean() for m in mosaics}
@@ -867,7 +867,7 @@ def same_date_maps(outdir, decimate):
                 a.set_xticks([])
                 a.set_yticks([])
     fig.colorbar(im, ax=axes.ravel().tolist(), shrink=0.8, pad=0.01,
-                 label='P(flowering) (grey = not classified)')
+                 label='P(flowering) (gray = not classified)')
     fig.suptitle('Same-day flights by both drones, classified by the same flowering model '
                  '(windows placed by the static 2022-09-29 crown map)', fontsize=11)
     save(fig, outdir, 'same_date_maps')
@@ -1127,7 +1127,7 @@ def coreg_stats_alignment(outdir):
     mg = np.hypot(both['x_shift_m_global'], both['y_shift_m_global'])
     ax3.scatter(ml, mg, s=10, color='k', alpha=0.5, lw=0)
     lim = max(ml.max(), mg.max()) * 1.05
-    ax3.plot([0, lim], [0, lim], color=C_GREY, lw=0.8)
+    ax3.plot([0, lim], [0, lim], color=C_GRAY, lw=0.8)
     ax3.set_xlim(0, lim)
     ax3.set_ylim(0, lim)
     ax3.set_aspect('equal')

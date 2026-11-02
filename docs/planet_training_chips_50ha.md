@@ -4,7 +4,7 @@ The Mask R-CNN / SegFormer training set for the BCI 50ha plot: 4-band
 Planet cutouts at 0.75 m paired with a binary crown mask derived from
 drone-imagery crown classifications. Built by
 [`scripts/apply_drone_labels_coreg.py`](../scripts/apply_drone_labels_coreg.py),
-then reduced by a human vetting pass. The AVA-plot analogue, including the
+then reduced by a human vetting pass. The AVA-plot analog, including the
 reasons that build needs a margin-then-crop workflow, is in
 [ava_planet_cutouts.md](ava_planet_cutouts.md).
 
@@ -48,7 +48,7 @@ All files for a scene share the stem `<planet_scene>_4band`:
 A scene appears only if AROSICS converged; failures are recorded in
 `coreg_log.json` with `coreg_ok: false` and no chip files.
 `crown_filter_by_ocm()` drops any connected crown component that touches a
-non-clear OCM pixel, so partly clouded crowns are not labelled.
+non-clear OCM pixel, so partly clouded crowns are not labeled.
 
 ## Inputs
 
@@ -80,8 +80,8 @@ label list from the release's ortho directory.
 
 **Label coverage differs between the two halves.** The 2020–2023 orthos
 (1056 × 572 m) are *smaller* than the 1101 × 615 m chip, so those chips have
-unlabelled margins that training sees as background. The globus orthos are
-larger than the chip, so those chips are labelled edge to edge.
+unlabeled margins that training sees as background. The globus orthos are
+larger than the chip, so those chips are labeled edge to edge.
 
 Planet side: `planet_clipped/4band/<year>/` cutouts
 (`config/clip_50ha_plot.yml`) and their OmniCloudMask masks in
@@ -519,7 +519,7 @@ should be checksummed against `/scratch` before use.
 Then train. Per-epoch checkpoints stay on, because the sweep scores
 twelve of them, and `--no-wandb` is needed because wandb is on by
 default. Run on a GPU node inside the `flower` env; the two runs go
-back to back, since a one-core allocation serialises the in-process
+back to back, since a one-core allocation serializes the in-process
 data loading and gains nothing from overlapping them:
 
 ```bash
@@ -579,8 +579,8 @@ Two caveats before concluding that more chips do not pay. First, the
 test halves are the right halves of the 56 base chips, whose left halves
 are in *every* run's training set; `base` draws its entire training
 distribution from those scenes while `ext`/`full` dilute it with mavic
-2024-26 scenes, so the benchmark structurally favours `base` and says
-nothing about generalisation to new dates. Second, all four runs peak
+2024-26 scenes, so the benchmark structurally favors `base` and says
+nothing about generalization to new dates. Second, all four runs peak
 between e005 and e012 on the scored grid and then collapse (`phantom`
 falls from 0.1562 at e005 to 0.0475 at e200), so these are
 early-stopping scores on a heavily
@@ -748,15 +748,15 @@ python scripts/plot_update_figures.py maskrcnn-summary --outdir logs --sweep $J 
 > Held-out performance of the Planet Mask R-CNN against training epoch (log
 > scale, 12 checkpoints from 1 to 200) for four training sets, scored on the
 > right 512 × 512 windows of the 56 phantom 2020-23 benchmark chips (crowns of
-> at least 64 px, cloud-centred predictions removed): phantom 2020-23 only
+> at least 64 px, cloud-centered predictions removed): phantom 2020-23 only
 > (blue, 56 chips), plus phantom 2023-24 (green, 77 chips), all three sources
 > with TOA chips and per-image 0th–99.9th percentile stretch (orange, 142
 > chips) and the same 142 chips as MODIS-calibrated surface reflectance with
 > one fixed per-band stretch (purple). Top left: mask mAP at IoU 0.5; top
-> right: binary IoU of the union of predicted and labelled crown masks over
+> right: binary IoU of the union of predicted and labeled crown masks over
 > clear pixels, with each run's peak starred; bottom left: crown precision
 > (solid circles) and recall (dashed squares), where a predicted crown matching
-> a labelled crown at mask IoU 0.5 or more after greedy matching is a true
+> a labeled crown at mask IoU 0.5 or more after greedy matching is a true
 > positive; bottom right: the same precision against recall, with marker fill
 > giving the epoch. Every run is trained on the left windows of its chips, at
 > flat learning rate 1e-4 and batch 4.
@@ -770,7 +770,7 @@ Both loaders glob `*.mask.png` and pair it with the sibling `.tif`:
   `.ocm.png` sidecar for `--ocm-masks` cloud-aware loss)
 
 `get_split(..., 'left'|'right')` takes a 512 × 512 window abutting the
-horizontal centre of the chip, which is how train and validation are kept
+horizontal center of the chip, which is how train and validation are kept
 geographically disjoint within a scene.
 
 For generalization to new dates rather than new ground,

@@ -123,7 +123,7 @@ def main(imagedir, outputdir, split, size, min_instance_size, fourth_band,
         n_new = masks.shape[0] - n_orig
 
         axes[row][0].imshow(_display_rgb(plain_img))
-        axes[row][0].set_title(f"original: {n_orig} labelled crowns",
+        axes[row][0].set_title(f"original: {n_orig} labeled crowns",
                                fontsize=9)
 
         axes[row][1].imshow(_display_rgb(cp_img))

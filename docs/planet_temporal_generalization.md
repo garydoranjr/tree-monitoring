@@ -32,7 +32,7 @@ within the repo. The command lines below are the record.
 ## Question
 
 The model will be used for **temporal interpolation over the same plot**:
-1. It is trained on Planet chips within ±2 days of a drone flight, labelled
+1. It is trained on Planet chips within ±2 days of a drone flight, labeled
    from that flight's crown classifications.
 2. It is then applied to the Planet scenes in between, which are more than a
    few days from any flight but no more than about a month from a training
@@ -73,7 +73,7 @@ same, and the date is new.
    **6 folds** (`--n-folds`). Each block goes to the fold with the fewest chips
    so far, excluding the fold of the previous block. So:
    - folds are balanced;
-   - neighbouring blocks are never held out together;
+   - neighboring blocks are never held out together;
    - every held-out gap has training data on both sides unless the record
      itself has a gap there.
 
@@ -117,7 +117,7 @@ furthest from its training data.
 Whole chips are not used, for two reasons:
 - torchvision's detection transform rescales inputs to `min_size=800`, so a
   1468 × 820 chip would be seen at a different scale from the 512 windows;
-- the 2020–23 phantom chips have unlabelled margins.
+- the 2020–23 phantom chips have unlabeled margins.
 
 A held-out chip shows the same trees as the training chips on other dates,
 which is the deployment situation.
@@ -293,7 +293,7 @@ delivered on a 353 × 191 px grid onto the common 1468 × 820 grid.
 **Tiled prediction.**
 - The model runs on 512 × 512 tiles at stride 384.
 - A detection is kept only from the tile whose core (overlaps split at their
-  midpoint) holds its box centre, and dropped if that centre is cloudy, as in
+  midpoint) holds its box center, and dropped if that center is cloudy, as in
   `evaluate()`.
 - Masks are binarized at 0.5.
 - Every detection the model returns (score ≥ 0.05) is kept in the rasters.
@@ -576,7 +576,7 @@ python scripts/make_crown_timeseries_html.py \
   - the Planet `max_score` at every scene, with `pos_frac` available from
     the legend.
 
-  Grey points are outside the 30-day envelope, and open circles are scenes
+  Gray points are outside the 30-day envelope, and open circles are scenes
   that were not coregistered. Hovering over a point gives its clear fraction
   and its distances to the nearest drone flight and training chip. Clicking a
   point moves the map to that date.
@@ -636,7 +636,7 @@ python scripts/serve_crown_timeseries.py                    # http://127.0.0.1:8
 - ***Zanthoxylum's* September–October drone peak is missed entirely.** This
   matches the wet-season weakness in the temporal CV.
 - Before 2021 and after 2026-01, almost every Planet scene is outside the
-  envelope (grey in the time series). There the Planet shares still rise
+  envelope (gray in the time series). There the Planet shares still rise
   with the drone in season, but they are not validated.
 
 ### Calibrated apply run against the drone labels
@@ -941,7 +941,7 @@ python scripts/compare_temporal_cv.py \
 ### Persistence baseline (H6)
 
 `persistence_baseline.py` uses no imagery. It predicts one drone flight's crown
-events from another flight's labels, with the labelling rule and the 64 px crown
+events from another flight's labels, with the labeling rule and the 64 px crown
 minimum of `plot_crown_species_comparison.py` (2,000 crowns, 200 flights). It
 runs in about a minute on the Mac:
 
@@ -950,7 +950,7 @@ python scripts/persistence_baseline.py --folds config/temporal_folds_20261012.cs
   --cv-json /Volumes/Earth03/flower/202610_temporal/temporal_cv.json
 ```
 
-The CV analogue predicts each chip's flight from the flight of the
+The CV analog predicts each chip's flight from the flight of the
 nearest-dated chip in the other folds, which is the training data that fold's
 model saw. "Area Jaccard" weights crowns by their area (crown pixels that are
 events on both dates over those that are events on either), as an
@@ -1012,7 +1012,7 @@ With 142 chips, |ρ| above about 0.17 is significant at 5 %.
 |---|---|---|---|---|
 | Days to nearest training chip | −0.66 | | +0.12 | |
 | Persistence area Jaccard | +0.64 | +0.12 | −0.09 | +0.03 |
-| Labelled crowns per chip | +0.62 | +0.48 | −0.02 | +0.04 |
+| Labeled crowns per chip | +0.62 | +0.48 | −0.02 | +0.04 |
 | Crown contrast-to-noise, TOA red input | +0.52 | +0.46 | −0.10 | −0.07 |
 | Day of year | −0.42 | −0.18 | +0.14 | +0.09 |
 | Clear fraction | +0.28 | +0.25 | −0.01 | +0.01 |
@@ -1039,7 +1039,7 @@ With 142 chips, |ρ| above about 0.17 is significant at 5 %.
   corrected ones. They are not, so there was little for calibration to fix.
 - **Skill follows the crowns' contrast in the image and the label content.**
   Crown contrast-to-noise (ρ +0.46 after removing distance) and the number of
-  labelled crowns (+0.48) are the strongest predictors after distance and
+  labeled crowns (+0.48) are the strongest predictors after distance and
   persistence. Contrast-to-noise is unchanged by a per-scene linear correction
   (H4). Chips with few events score low IoU partly because IoU is unstable with
   small denominators.
@@ -1338,7 +1338,7 @@ pretraining from DINOv3 itself.
 - **Loss and instances.** The loss is BCE plus soft Dice on the union of the
   kept crowns. Dropped crowns and cloudy pixels are ignored. Instances for
   scoring are the 8-connected components of probability ≥ 0.5, scored by mean
-  probability, with the cloudy-centre rule of `filtered_predictions`.
+  probability, with the cloudy-center rule of `filtered_predictions`.
   `eval_temporal_cv.py` recognizes the checkpoints (`'kind': 'dinov3'`) and
   scores them through the same path as the Mask R-CNN. Fed the ground truth,
   that path returns 1.0 on every metric.
@@ -1462,7 +1462,7 @@ own score floor of 0.05. The 0.5 in its settings binarizes masks; it is not a
 score cutoff. Pooled IoU and crown precision and recall therefore depend on
 how many detections a checkpoint emits, and that number falls steadily with
 training epoch. For the TOA run it falls from 44,932 at epoch 5 to 7,687 at
-epoch 40, against 10,107 labelled crowns. Over the same range, precision rises
+epoch 40, against 10,107 labeled crowns. Over the same range, precision rises
 from 0.11 to 0.55, IoU from 0.23 to 0.42, and recall falls. A run that emits
 fewer detections at a given epoch thus looks better on IoU and precision,
 without ranking crowns any better. `map_50` ranks detections by score, so it
@@ -1712,8 +1712,8 @@ python scripts/plot_radiometric_sensitivity.py \
 > days of Planet acquisition dates, and each block is held out with training
 > data on both sides. Left: mask mAP at IoU 0.5 against training epoch (log
 > scale) for the windows of all six held-out folds pooled together (black,
-> two 512 × 512 windows per chip, crowns of at least 64 px, cloud-centred
-> predictions removed). Each fold scored on its own is also shown (grey), and
+> two 512 × 512 windows per chip, crowns of at least 64 px, cloud-centered
+> predictions removed). Each fold scored on its own is also shown (gray), and
 > the dashed line marks the epoch selected for the full-record model. Right:
 > the same pooled metric at the selected epoch, split by the number of days
 > between a held-out chip's Planet acquisition and the nearest training chip's
@@ -1727,13 +1727,13 @@ python scripts/plot_radiometric_sensitivity.py \
 > `temporal_cv.png` (142 chips of the 20261012 curated set, 2021-01 to
 > 2026-01, 6 folds of contiguous blocks of at most 14 days). The four panels
 > show mask mAP at IoU 0.5 (top left), binary IoU of the union of predicted
-> and labelled crown masks over clear pixels (top right), crown precision
+> and labeled crown masks over clear pixels (top right), crown precision
 > (bottom left) and crown recall (bottom right). For the last two, a predicted
-> crown counts as a true positive when it matches a labelled crown at mask
+> crown counts as a true positive when it matches a labeled crown at mask
 > IoU 0.5 or more, after greedy matching. Each panel shows the metric for the
 > windows of all six held-out folds pooled together (black, two 512 × 512
-> windows per chip, crowns of at least 64 px, cloud-centred predictions
-> removed), with each fold scored on its own in grey. The dashed line marks
+> windows per chip, crowns of at least 64 px, cloud-centered predictions
+> removed), with each fold scored on its own in gray. The dashed line marks
 > the epoch selected by pooled mAP@50 (epoch 12).
 
 `temporal_cv_bins.png`:
@@ -1743,7 +1743,7 @@ python scripts/plot_radiometric_sensitivity.py \
 > nearest training chip's acquisition, under the blocked temporal
 > cross-validation of the 142 chips of the 20261012 curated set (2021-01 to
 > 2026-01). The bars in each bin show, from dark to light: mask mAP at IoU
-> 0.5, binary IoU of the predicted and labelled crown masks over clear
+> 0.5, binary IoU of the predicted and labeled crown masks over clear
 > pixels, crown precision and crown recall (a match is a mask IoU of at least
 > 0.5). All are pooled over every held-out window in the bin. The number of
 > held-out chips in each bin is given under its label. The hatched bin
@@ -1752,7 +1752,7 @@ python scripts/plot_radiometric_sensitivity.py \
 
 `temporal_cv_chips.png`:
 
-> Per-chip held-out binary IoU (top row, predicted and labelled crown masks
+> Per-chip held-out binary IoU (top row, predicted and labeled crown masks
 > over clear pixels), crown precision (middle) and crown recall (bottom; a
 > match is a mask IoU of at least 0.5) of the Planet Mask R-CNN at the
 > selected epoch 12, under the blocked temporal cross-validation of the 142
@@ -1768,7 +1768,7 @@ python scripts/plot_radiometric_sensitivity.py \
 `temporal_cv_season.png`:
 
 > Seasonal variation in the per-chip held-out binary IoU (top, predicted and
-> labelled crown masks over clear pixels), crown precision (middle) and crown
+> labeled crown masks over clear pixels), crown precision (middle) and crown
 > recall (bottom; a match is a mask IoU of at least 0.5) of the Planet Mask
 > R-CNN at the selected epoch 12, under the blocked temporal cross-validation
 > of the 142 chips of the 20261012 curated set. The x-axis is the chip's
@@ -1788,10 +1788,10 @@ python scripts/plot_radiometric_sensitivity.py \
 > (blue) and on the same chips as MODIS-calibrated surface reflectance with
 > one fixed per-band stretch (green). The first four panels show, against
 > training epoch (log scale), mask mAP at IoU 0.5, binary IoU of the union of
-> predicted and labelled crown masks over clear pixels, crown precision and
+> predicted and labeled crown masks over clear pixels, crown precision and
 > crown recall (a match is a mask IoU of at least 0.5), each pooled over the
 > windows of all six held-out folds (two 512 × 512 windows per chip, crowns of
-> at least 64 px, cloud-centred predictions removed); circles mark each run's
+> at least 64 px, cloud-centered predictions removed); circles mark each run's
 > epoch selected by pooled mAP@50 (epoch 12 for both). The right panel gives
 > mAP@50 at that epoch by the number of days between a held-out chip's Planet
 > acquisition and the nearest training chip's acquisition.
@@ -1809,10 +1809,10 @@ python scripts/plot_radiometric_sensitivity.py \
 > reflectance with one fixed per-band stretch, with ColorJitter (green solid)
 > and without it (green dashed). The first four panels show, against training
 > epoch (log scale), mask mAP at IoU 0.5, binary IoU of the union of predicted
-> and labelled crown masks over clear pixels, crown precision and crown recall
+> and labeled crown masks over clear pixels, crown precision and crown recall
 > (a match is a mask IoU of at least 0.5). Each is pooled over the windows of
 > all six held-out folds (two 512 × 512 windows per chip, crowns of at least
-> 64 px, cloud-centred predictions removed). Circles mark each run's epoch
+> 64 px, cloud-centered predictions removed). Circles mark each run's epoch
 > selected by pooled mAP@50 (12, 17, 8, 12 and 17 in the order above). The
 > right panel gives mAP@50 at that epoch, by the number of days between a
 > held-out chip's Planet acquisition and the nearest training chip's
@@ -1831,10 +1831,10 @@ python scripts/plot_radiometric_sensitivity.py \
 > with only its decoder trained. Its instances are the 8-connected components
 > of event probability of at least 0.5, scored by their mean probability.
 > The first four panels show, against training epoch (log scale), mask mAP at
-> IoU 0.5, binary IoU of the union of predicted and labelled crown masks over
+> IoU 0.5, binary IoU of the union of predicted and labeled crown masks over
 > clear pixels, crown precision and crown recall (a match is a mask IoU of at
 > least 0.5). Each is pooled over the windows of all six held-out folds (two
-> 512 × 512 windows per chip, crowns of at least 64 px, cloud-centred
+> 512 × 512 windows per chip, crowns of at least 64 px, cloud-centered
 > predictions removed). Circles mark each run's epoch selected by pooled
 > mAP@50 (12 for Mask R-CNN, 40, the last epoch trained, for both DINOv3
 > runs). The right panel gives mAP@50 at that epoch, by the number of days
@@ -1856,10 +1856,10 @@ python scripts/plot_radiometric_sensitivity.py \
 > calibrated copy. The other was trained on MODIS-calibrated surface
 > reflectance with one fixed per-band stretch (green). The first four panels
 > show, against k, mask mAP at IoU 0.5, binary IoU of the union of predicted
-> and labelled crown masks over clear pixels, crown precision and crown recall
+> and labeled crown masks over clear pixels, crown precision and crown recall
 > (a match is a mask IoU of at least 0.5). Each is pooled over both 512 × 512
 > windows of the held-out chips of all six folds (crowns of at least 64 px,
-> cloud-centred predictions removed, masks binarized at 0.5, every detection
+> cloud-centered predictions removed, masks binarized at 0.5, every detection
 > scoring 0.05 or more kept). The right panel
 > gives the change in pooled binary IoU from k = 0 at k = −1 (solid) and
 > k = +1 (hatched), by the number of days between a held-out chip's Planet
@@ -1883,10 +1883,10 @@ python scripts/plot_radiometric_sensitivity.py \
 > SDs added to each training sample, k drawn from a normal distribution with
 > SD 0.5 (orange, epoch 12) or 1 (violet, epoch 17). The first four panels
 > show, against k, mask mAP at IoU 0.5, binary IoU of the union of predicted
-> and labelled crown masks over clear pixels, crown precision and crown
+> and labeled crown masks over clear pixels, crown precision and crown
 > recall (a match is a mask IoU of at least 0.5). Each is pooled over both
 > 512 × 512 windows of the held-out chips of all six folds (crowns of at
-> least 64 px, cloud-centred predictions removed, masks binarized at 0.5,
+> least 64 px, cloud-centered predictions removed, masks binarized at 0.5,
 > every detection scoring 0.05 or more kept). The right panel gives the
 > change in pooled binary IoU from k = 0 at k = −1 (solid) and k = +1
 > (hatched), by the number of days between a held-out chip's Planet
@@ -1894,16 +1894,16 @@ python scripts/plot_radiometric_sensitivity.py \
 
 `figs/planet_temporal/temporal_cv_detections.png`:
 
-> Held-out binary IoU (left, union of predicted and labelled crown masks over
+> Held-out binary IoU (left, union of predicted and labeled crown masks over
 > clear pixels), crown precision (middle) and crown recall (right; a match is
 > a mask IoU of at least 0.5) of six Planet Mask R-CNN training runs, each
 > against its total number of detections (log scale) over the held-out
 > windows. The data are the blocked temporal cross-validation of
 > `temporal_cv.png` (142 chips of the 20261012 curated set, 2021-01 to
-> 2026-01, 6 folds, 10,107 labelled crowns). Each marker is one training epoch
+> 2026-01, 6 folds, 10,107 labeled crowns). Each marker is one training epoch
 > (5, 8, 12, 17, 25 and 40, detections falling as training proceeds). Each
 > metric is pooled over both 512 × 512 windows of the held-out chips of all
-> six folds (crowns of at least 64 px, cloud-centred predictions removed,
+> six folds (crowns of at least 64 px, cloud-centered predictions removed,
 > masks binarized at 0.5, every detection scoring 0.05 or more kept). The
 > runs are: TOA chips with a per-image 0th–99.9th percentile stretch, seeds 0
 > (blue solid) and 1 (blue dotted); MODIS-calibrated surface reflectance with
@@ -1926,7 +1926,7 @@ python scripts/plot_radiometric_sensitivity.py \
 > least 25 % of its clear pixels lie under a detection of the epoch-12
 > temporal Mask R-CNN scoring 0.5 or more. It uses only crowns at least 50 %
 > clear, and scenes with at least 5 such crowns of the species. Scenes 30 days
-> or less from a training chip are blue, and scenes further away grey.
+> or less from a training chip are blue, and scenes further away gray.
 
 `crown_species_season.png`:
 

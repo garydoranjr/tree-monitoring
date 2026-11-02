@@ -86,7 +86,7 @@ def capture_model(vis, days):
     """EmpiricalCountModel over the crowns in `vis` (rows) and YEARS.
 
     P[w, s]: share of crown-years with a visible scene within the w-day window
-    centred on day-of-year s (s = 0 .. 364), as in fit_empirical_count_models.
+    centered on day-of-year s (s = 0 .. 364), as in fit_empirical_count_models.
     """
     c = np.concatenate([np.zeros((vis.shape[0], 1), int), np.cumsum(vis, axis=1)], axis=1)
     windows = np.arange(1, MAX_WINDOW + 1)

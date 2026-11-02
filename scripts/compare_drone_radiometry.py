@@ -69,14 +69,14 @@ def mavic_path(d):
 
 
 def grid_bounds(crowns, pad=5.0):
-    """Crown-map extent snapped outward to whole metres."""
+    """Crown-map extent snapped outward to whole meters."""
     b = crowns.total_bounds
     return (np.floor(b[0] - pad), np.floor(b[1] - pad),
             np.ceil(b[2] + pad), np.ceil(b[3] + pad))
 
 
 def read_on_grid(path, bounds, res, nodata=0):
-    """Area-averaged RGB on a res-metre grid over `bounds`.
+    """Area-averaged RGB on a res-meter grid over `bounds`.
 
     Returns (float32 array (3, H, W) in source DN, valid mask, transform).
     Pixels where every RGB band equals `nodata` are excluded from the average
@@ -124,7 +124,7 @@ def read_native_sample(path, bounds, step):
 
 
 def sample_on_mask(arr, t, mask, mask_t):
-    """Pixels of arr (3, h, w) whose centres fall on True cells of mask."""
+    """Pixels of arr (3, h, w) whose centers fall on True cells of mask."""
     h, w = arr.shape[1:]
     cols, rows = np.meshgrid(np.arange(w) + 0.5, np.arange(h) + 0.5)
     x, y = t * (cols, rows)
@@ -419,7 +419,7 @@ def plot_hexbin(days, fits, outdir):
             ax.hexbin(mav[:, k], pha[:, k], gridsize=80, bins='log', cmap='Greys',
                       extent=(0, 255, 0, 255), mincnt=1)
             x = np.array([0, 255])
-            ax.plot(x, x, color=pu.C_GREY, lw=0.8, label='1:1')
+            ax.plot(x, x, color=pu.C_GRAY, lw=0.8, label='1:1')
             ax.plot(x, f[f'{b}_ols_gain'] * x + f[f'{b}_ols_offset'], color=BAND_COLORS[k],
                     label=f'OLS: {f[f"{b}_ols_gain"]:.2f}x {f[f"{b}_ols_offset"]:+.1f}, '
                           f'R$^2$={f[f"{b}_ols_r2"]:.2f}')
@@ -457,8 +457,8 @@ def plot_chroma(days, crown_df, outdir):
         ax.scatter(sub.dr_chroma, sub.dg_chroma, s=6 if case == 'neither' else 18,
                    color=color, alpha=0.5 if case == 'neither' else 0.9, lw=0,
                    label=f'{case} (n={len(sub)})')
-    ax.axhline(0, color=pu.C_GREY, lw=0.6)
-    ax.axvline(0, color=pu.C_GREY, lw=0.6)
+    ax.axhline(0, color=pu.C_GRAY, lw=0.6)
+    ax.axvline(0, color=pu.C_GRAY, lw=0.6)
     ax.set_xlabel('crown mean r, mavic - phantom')
     ax.set_ylabel('crown mean g, mavic - phantom')
     ax.set_title('Per-crown chromaticity shift by classifier case', fontsize=10)
@@ -654,10 +654,10 @@ def mkl_config_yaml(tf):
 # transfer-figures
 # --------------------------------------------------------------------------
 MKL_CONFIG = Path(__file__).resolve().parent.parent / 'config/crown_classification_mavic_mkl.yml'
-# Encodings shared by the transfer figures: phantom is the target, grey the
+# Encodings shared by the transfer figures: phantom is the target, gray the
 # old per-band mavic input, red the color-transferred mavic input.
 TRANSFER_STYLES = (('phantom (C3KW2X global, target)', pu.C_PHANTOM_EXT, '-'),
-                   ('mavic, per-band scaling (before)', pu.C_GREY, '--'),
+                   ('mavic, per-band scaling (before)', pu.C_GRAY, '--'),
                    ('mavic, 3x3 color transfer (after)', pu.C_MAVIC, '-'))
 
 
@@ -861,7 +861,7 @@ def plot_transfer_covariance(pixels, perband, mkl, outdir):
 # reclassify
 # --------------------------------------------------------------------------
 def select_crowns(n_controls, seed):
-    """Crown-dates to re-run, labelled by how the archived classifiers disagree.
+    """Crown-dates to re-run, labeled by how the archived classifiers disagree.
 
     Cases are defined against phantom local, as in plot_update_figures.py
     `same-date-examples`.

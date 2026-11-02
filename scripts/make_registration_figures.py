@@ -81,7 +81,7 @@ def busiest_window(crowns, side, view=sa.PLOT_VIEW, step=10):
 
 @cli.command()
 @out_option
-@click.option('--side', default=150.0, show_default=True, help='Window side, metres.')
+@click.option('--side', default=150.0, show_default=True, help='Window side, meters.')
 @click.option('--period', default=0.7, show_default=True, help='Seconds per blink state.')
 @click.option('--dpi', default=150, show_default=True)
 def blink(outdir, side, period, dpi):

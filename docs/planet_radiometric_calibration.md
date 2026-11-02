@@ -39,16 +39,16 @@ Wu's group at HKU:
    or 1 and requires QA30 (more than 30% of an 11 × 11 pixel, ~5 km window
    passes). Each pixel, band and year is gap-filled daily by the number N of
    good days: N ≥ 250, shape-preserving (PCHIP) cubic through the pixel;
-   50 ≤ N < 250, the 5 km neighbourhood seasonality (that year, Gaussian-kernel
+   50 ≤ N < 250, the 5 km neighborhood seasonality (that year, Gaussian-kernel
    smoothed with σ = 8 days, if it has ≥ 250 good days, else the 2005–2026
    day-of-year mean) shifted to the pixel's good days; N < 50, the
-   neighbourhood day-of-year mean. The neighbourhood series is the pixel's
-   long-term median plus the mean anomaly of good neighbours of the same
+   neighborhood day-of-year mean. The neighborhood series is the pixel's
+   long-term median plus the mean anomaly of good neighbors of the same
    cover class (land where the long-term median NIR is ≥ 0.15).
 4. **Histogram matching** (`calibrate_planet_modis.py`). Scenes are grouped by
    date and satellite and mosaicked on a 3 m grid over the box; clear land
    reflectance is aggregated onto the MODIS 500 m sinusoidal grid. MODIS pixels
-   that are ≥ 99% land, whose 3 × 3 neighbourhood is ≥ 90% land, and that are
+   that are ≥ 99% land, whose 3 × 3 neighborhood is ≥ 90% land, and that are
    ≥ 95% clear in Planet are used. Per band, offset = μ_MODIS − gain · μ_Planet
    with gain fixed at 1 (default, `--gain-mode fixed`); the HKU gain
    σ_MODIS / σ_Planet is available as `--gain-mode sd` and is always reported.
@@ -58,7 +58,7 @@ Wu's group at HKU:
 ### Deviations from HKU
 
 - **Box:** the existing BCNM order box (~12 × 14 km, mostly lake) instead of a
-  10 × 10 km box centred on the site.
+  10 × 10 km box centered on the site.
 - **Grouping:** one fit per date *and satellite* instead of per date, so two
   sensors are never forced to share a gain.
 - **Cloud mask:** OmniCloudMask instead of the group's STI-ACSS.
@@ -67,7 +67,7 @@ Wu's group at HKU:
   an explicit one-MODIS-pixel land buffer.
 - **Gain:** fixed at 1 (mean matching only) instead of σ_MODIS / σ_Planet; see
   *Sources of uncertainty*.
-- **Gap-fill neighbourhood and smoothers.** HKU's neighbourhood is the plain
+- **Gap-fill neighborhood and smoothers.** HKU's neighborhood is the plain
   mean of good pixels in the 5 km window, smoothed or interpolated with cubic
   splines. Around BCI ~40% of each window is lake, and the share of water
   among the good pixels changes with the season (59% in July vs ~40% in other
@@ -75,11 +75,11 @@ Wu's group at HKU:
   not the forest. Wet-season fills were also wild: Jun–Sep 2022 at the 50ha
   pixel ranged 0.08–1.19 NIR (observed 0.29–0.33), and over all land pixels
   the 1st/99th percentiles of flag-2 fills were −1.69/1.88. Two causes: the
-  splines overshot across long gaps, and the neighbourhood mean divided by a
+  splines overshot across long gaps, and the neighborhood mean divided by a
   good-pixel fraction that `uniform_filter` leaves at ~1e-17 instead of 0 when
   no pixel in the window is good, giving values up to 0.86 NIR on days with
-  no good neighbour (a 0.44 NIR hump over the plot in July 2021). The
-  neighbourhood is now a same-class anomaly mean that needs at least half a
+  no good neighbor (a 0.44 NIR hump over the plot in July 2021). The
+  neighborhood is now a same-class anomaly mean that needs at least half a
   good pixel, and the splines are replaced by PCHIP and a Gaussian-kernel
   mean. In the rebuilt 2005–2026 reference, land NIR 0.1st/50th/99.9th
   percentiles are 0.084/0.293/0.411 observed, 0.115/0.303/0.395 for flag 2
@@ -131,9 +131,9 @@ where they can be quantified; the rest are known but not yet quantified.
    QA30 days kept: 45–48% of pixel-days, 2005–2026), and of the gap fill on
    the other days (`fill_flag` 1–4 in the reference). Fewer than 0.5% of
    filled days come from the pixel's own series (N ≥ 250 good days in a year
-   is rare in Panama); nearly all are the neighbourhood seasonality shifted
+   is rare in Panama); nearly all are the neighborhood seasonality shifted
    to the pixel, 22–30% from that year and 69–78% from the multi-year mean
-   (by band), so wet-season references are largely modelled. HKU's
+   (by band), so wet-season references are largely modeled. HKU's
    scenarios i + ii (N ≥ 50) cover 99.8–99.9% of filled days, as in their
    >99%. Each fit records the share of
    its matched MODIS pixels that were observed that day
@@ -180,7 +180,7 @@ where they can be quantified; the rest are known but not yet quantified.
    RMSE is 0.015 / 0.014 / 0.013 / 0.027 (blue / green / red / NIR), vs
    0.025 / 0.023 / 0.024 / 0.066 for no offset (raw SR), with bias below
    0.001. It removes the sensor and seasonal part of the offset but not
-   the day-to-day atmospheric error, which neighbouring dates do not
+   the day-to-day atmospheric error, which neighboring dates do not
    predict. Same-satellite (±30 days) and same-instrument (±15 days)
    donors score alike (RMSE 0.0144 vs 0.0151 in blue). That residual is
    about the size of the 1 SD offset in the classifier sensitivity test
@@ -305,7 +305,7 @@ is 0.278/0.347/0.397 (TOA), 0.305/0.354/0.404 (SR) and 0.291/0.303/0.317
 | CAL | 0.0053 | 0.0083 | 0.0101 | 0.0141 | 0.0127 |
 
 Jitter is the median |Δ| between passes ≤ 3 days apart; residual SD is around
-a centred 31-day rolling median. In 2020–2022, the median NIR residual per
+a centered 31-day rolling median. In 2020–2022, the median NIR residual per
 instrument is −0.025 / +0.032 / +0.010 (PS2 / PS2.SD / PSB.SD) in TOA,
 −0.019 / +0.028 / +0.009 in SR and within ±0.0005 in CAL; for NDVI,
 −0.070 / 0.000 / +0.020 (TOA), −0.035 / −0.025 / +0.019 (SR) and
@@ -328,7 +328,7 @@ version.
 1. `timeseries_plot_mean.png` — Plot-mean NIR reflectance (top row) and NDVI
    (bottom row) of the 50ha plot for top-of-atmosphere reflectance from the
    existing clips and metadata coefficients (TOA, left), raw Planet surface
-   reflectance (SR, centre) and SR cross-calibrated to MODIS (CAL, right),
+   reflectance (SR, center) and SR cross-calibrated to MODIS (CAL, right),
    with points colored by instrument (blue, Dove Classic PS2; orange, Dove-R
    PS2.SD; green, SuperDove PSB.SD) and the MODIS MCD43A1 reference at nadir
    view and 45° solar zenith averaged over the 8 MODIS pixels touching the plot
@@ -338,7 +338,7 @@ version.
    shown, and the MODIS line covers the same period.
 2. `residual_sd_by_month.png` — Seasonal pattern of short-term noise in the
    plot-mean series: standard deviation, by calendar month, of residuals of
-   plot-mean NIR reflectance (left) and NDVI (right) from a centred 31-day
+   plot-mean NIR reflectance (left) and NDVI (right) from a centered 31-day
    rolling median, for TOA (blue), raw SR (orange) and calibrated SR (green).
    Residuals are pooled over the 350 date-satellite passes of Fig. 1,
    2020-01 to 2026-08, and over years for each month.
@@ -348,10 +348,10 @@ version.
    μ_MODIS − μ_Planet in reflectance units) for blue, green, red and NIR
    (rows), one point per calibrated date-satellite group, colored by
    instrument as in Fig. 1, with the no-correction values (gain 1, offset 0)
-   as grey lines. Covers the 638 calibrated groups, 2020-01 to 2026-08.
+   as gray lines. Covers the 638 calibrated groups, 2020-01 to 2026-08.
 4. `calibration_success.png` — Seasonality of calibration coverage: share of
    date-satellite groups by calendar month with at least 30 usable MODIS
-   pixels (≥ 99% land, 3 × 3 neighbourhood ≥ 90% land, ≥ 95% clear in
+   pixels (≥ 99% land, 3 × 3 neighborhood ≥ 90% land, ≥ 95% clear in
    Planet), with the number of groups in each month above the bar; all
    1,651 groups, 2020-01 to 2026-08, pooled over years.
 5. `matched_pixels.png` — Agreement of Planet with the MODIS reference at
@@ -447,7 +447,7 @@ relative to the background's own spread is unchanged (2.1 / 0.9 / 1.9),
 since both stretches are linear within a chip. What remains uneven: the
 4 hazy chips (whitish blue), real seasonal change (bright green leaf flush in
 May 2024, darker canopy in October 2024), and some 2021–2022 Dove Classic
-(PS2) chips that look greyer or redder.
+(PS2) chips that look grayer or redder.
 
 **Training results** (2026-10-24). The calibrated chips with the fixed stretch
 help the spatial benchmark but not temporal transfer. On the east/west split
@@ -535,7 +535,7 @@ TOA per-image stretch would have absorbed it.
    percentile stretch per band) and the new one (bottom row: MODIS-calibrated
    chip, fixed stretch of `config/planet_fixed_stretch.yml`), shown as the
    R, G, B channels in [0, 1] exactly as `build_input_channels` returns them,
-   before ImageNet normalisation. Each panel is the central 400 × 400 chip
+   before ImageNet normalization. Each panel is the central 400 × 400 chip
    pixels (300 × 300 m at 0.75 m). Chips are the darkest and brightest current
    inputs, the most saturated new input (hazy), one borrowed-offset chip and
    four dates spread over 2021-01 to 2026-01.

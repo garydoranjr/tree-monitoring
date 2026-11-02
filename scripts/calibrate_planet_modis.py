@@ -14,7 +14,7 @@ box (~12 x 14 km) around Barro Colorado Island:
    the reference (scripts/build_modis_reference.py) as sums over each MODIS
    pixel, giving the mean reflectance and the clear-land fraction per pixel.
 3. MODIS pixels are used when they are at least --min-land land, their 3 x 3
-   neighbourhood is at least --min-land-nbhd land on average (a one-pixel
+   neighborhood is at least --min-land-nbhd land on average (a one-pixel
    buffer against MODIS geolocation error and point-spread blur from the
    lake), and they are at least --min-clear clear in the Planet mosaic.
 4. Per band, Gaussian fits (mean, standard deviation) of the upscaled Planet

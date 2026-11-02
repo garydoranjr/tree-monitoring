@@ -50,7 +50,7 @@ Terrain and illumination shade is not masked either.
 
 ### 1. Coregister every scene, including those near flights
 
-Labelled observations are the scenes within 2 days of a flight. The apply
+Labeled observations are the scenes within 2 days of a flight. The apply
 step's `coreg_nearest_drone.json` excludes exactly those scenes
 (`--exclude-within-days 2`). It was therefore copied, and the missing scenes
 were added to the copy with the same AROSICS settings, each against the ortho
@@ -121,13 +121,13 @@ python scripts/eval_crown_temporal_cv.py $D/crown_series_20261029/cv \
 **Model** (after Garnot et al. 2020).
 - **Pixel-set encoder.** Each valid observation contributes up to 16 clear
   pixels: all of them if the crown has 16 or fewer, otherwise a random draw.
-  Each pixel carries B, G, R, N, NDVI and the green-red index, standardised.
+  Each pixel carries B, G, R, N, NDVI and the green-red index, standardized.
   A shared MLP (6 → 32 → 64) is followed by masked mean and standard-deviation
   pooling. The pooled vector is joined with log crown area, clear fraction,
   log clear-pixel count, `coreg_ok` and a SuperDove flag, then passed through
   a second MLP to d = 128.
 - **Temporal transformer.** Each observation's position is the sinusoidal
-  encoding of its day offset from the window centre (τ = 1000, as in the
+  encoding of its day offset from the window center (τ = 1000, as in the
   paper) plus a projection of day-of-year sin and cos. Then come 2
   pre-norm transformer layers (4 heads) with the padding mask, and one event
   logit per observation. The original L-TAE pools the whole series into one
@@ -137,12 +137,12 @@ The window is relative, not absolute, so the model cannot tie events to
 calendar dates beyond the season.
 
 **Training.**
-- **Samples.** One sample per labelled (crown, training flight): a 120-day
-  window centred on the flight, with ±30 days of jitter, holding at most 96
+- **Samples.** One sample per labeled (crown, training flight): a 120-day
+  window centered on the flight, with ±30 days of jitter, holding at most 96
   observations.
 - **Augmentation.** 20 % of the window's observations are dropped at random,
   as extra simulated cloud.
-- **Loss and optimiser.** BCE on the labelled observations only. AdamW with
+- **Loss and optimizer.** BCE on the labeled observations only. AdamW with
   a one-cycle learning rate peaking at 1e-3, batch 64.
 
 **Labels.** Each crown's drone event
@@ -161,8 +161,8 @@ R-CNN CV. Two options extend this:
 - `--crown-folds N --crown-fold J` also withholds the crowns in one of N
   east-west strips.
 
-**Prediction.** Windows are centred every 30 days. Each observation takes its
-score from the window whose centre is nearest, so every prediction sees at
+**Prediction.** Windows are centered every 30 days. Each observation takes its
+score from the window whose center is nearest, so every prediction sees at
 least 45 days of context on each side, except at the ends of the record.
 
 **Evaluation.** Each withheld flight is scored on the crowns that have a label
@@ -175,7 +175,7 @@ on exactly the same crown-flights.
 
 Six-fold temporal CV, 15 epochs per fold. Training took about 90 s per epoch
 on MPS, about 25 min per fold with prediction. Each fold's withheld flights
-are scored on the crowns that are labelled there and on the nearest training
+are scored on the crowns that are labeled there and on the nearest training
 flight, and that have a clear view within 2 days. That gives 119,446
 crown-flights on 62 flights, 5.0 % of them events. Rows are binned by the
 flight's distance to the nearest training flight of the fold CSV. "Model at k"
@@ -415,7 +415,7 @@ number of calls.
   on the same 25 flights is 0.57. This is context, not a like-for-like comparison:
   - pixels against crowns;
   - the 384 m right window against all 1,110 eastern crowns;
-  - every labelled crown pixel against crowns with a clear view within 2 days.
+  - every labeled crown pixel against crowns with a clear view within 2 days.
 
 **By event type**, pooled over the 62 flights:
 

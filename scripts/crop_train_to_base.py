@@ -5,7 +5,7 @@ square SegFormer tile.
 The AVA plot is too small to coregister directly (AROSICS ws=(200,200) needs
 >=200 px), so `apply_drone_labels_coreg.py` is run on the larger *margin*
 cutouts. The drone crown labels, however, only cover the plot itself, so the
-300 m margin around it is unlabelled forest that must not become training
+300 m margin around it is unlabeled forest that must not become training
 "background". The 4-band training pipeline
 (`scripts/train_planet_image_segformer_4b.py`) also consumes chips at 0.75 m
 (`--resize 4`) and, for AVA, whole 512x512 tiles. This script therefore:
@@ -18,7 +18,7 @@ cutouts. The drone crown labels, however, only cover the plot itself, so the
 2. Center-pads the cropped chip up to a square tile (512x512 px by default) so
    the training loader can consume it whole without a left/right split. The
    4-band image is padded with its nodata value and the mask with 0
-   (background) -- the pad genuinely contains no labelled crowns, and constant
+   (background) -- the pad genuinely contains no labeled crowns, and constant
    (not reflect) padding avoids duplicating real crowns into the pad.
 
 Typical usage:
@@ -138,7 +138,7 @@ def crop_one(margin_tif: Path, bounds: tuple[float, float, float, float],
 
 
 def _crop_array(arr: np.ndarray, col_off: int, row_off: int, h: int, w: int) -> np.ndarray:
-    """Window a plain (H,W[,C]) array with boundless behaviour, zero-filled."""
+    """Window a plain (H,W[,C]) array with boundless behavior, zero-filled."""
     ah, aw = arr.shape[:2]
     shape = (h, w) + arr.shape[2:]
     out = np.zeros(shape, dtype=arr.dtype)

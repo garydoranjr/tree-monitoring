@@ -54,7 +54,7 @@ Local-alignment mosaics are left out because their warping could read as blur.
 
 ## Method
 
-**Tiles.** A fixed grid of 60 tiles, each 20.48 m square (10 × 6 centres),
+**Tiles.** A fixed grid of 60 tiles, each 20.48 m square (10 × 6 centers),
 inside the phantom 50ha grid, inset 30 m from its edge. Each tile is read at
 native resolution from every mosaic, with no resampling: 90 + 16 phantom and
 96 mavic. Tiles are converted to luminance.
@@ -141,7 +141,7 @@ joined into `mosaic_blur.csv`.
 
 - Wind moving the canopy during an exposure counts as blur. Phenology changes
   the texture. Both are reduced, but not removed, by taking medians over 60
-  tiles and using the scene-cancelling ratio.
+  tiles and using the scene-canceling ratio.
 - Each tile mixes source photos blended by the mosaicking software.
 - The Gaussian-equivalent width summarizes the PSF's second moment, not its
   shape. Pixel-scale sharpening or smoothing above 9.5 cycles/m is outside the
@@ -193,7 +193,7 @@ motion (flight speed × median exposure time, cm); the dashed line is 1:1.
 Histograms (10° bins) of three azimuth differences:
 - the frequency-flat canopy-texture anisotropy minus the solar azimuth at
   mid-flight (orange);
-- the f²-scaling blur anisotropy minus the solar azimuth (grey);
+- the f²-scaling blur anisotropy minus the solar azimuth (gray);
 - the blur anisotropy minus the flight-line azimuth (blue).
 
 **`blur_spectra_examples`** — Spectral evidence for blur differences, with

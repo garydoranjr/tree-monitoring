@@ -19,7 +19,7 @@ their own fit (source "fit").
 
 The same rules are scored leave-one-group-out on the calibrated groups: each
 one's offset is predicted from the others and compared with its fit
-(--validation CSV, summarised on stdout).
+(--validation CSV, summarized on stdout).
 
 Outputs:
   --output       one row per scene and band: offset, source, n_groups (the
