@@ -131,7 +131,7 @@ def _to_grid(path, bands, bounds, res, shift=(0.0, 0.0), dtype=np.float32):
     viewer grid; NaN outside the raster."""
     transform, width, height = _grid(bounds, res)
     with rasterio.open(path) as src:
-        src_t = Affine.translation(-shift[0], -shift[1]) @ src.transform
+        src_t = Affine.translation(-shift[0], -shift[1]) * src.transform
         out = np.full((len(bands), height, width), np.nan, dtype=np.float32)
         for k, b in enumerate(bands):
             reproject(src.read(b).astype(np.float32), out[k], src_transform=src_t,

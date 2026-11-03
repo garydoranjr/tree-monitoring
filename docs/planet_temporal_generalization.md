@@ -653,7 +653,8 @@ python scripts/make_crown_timeseries_html.py \
   --apply-dir /Volumes/Earth03/flower/202610_temporal_apply_cal
 python scripts/serve_crown_timeseries.py \
   --apply-dir /Volumes/Earth03/flower/202610_temporal_apply_cal \
-  --planet-dir /Volumes/Earth03/flower/planet_clipped_cal/4band
+  --planet-dir /Volumes/Earth03/flower/planet_clipped_calfill/4band \
+  --coreg-json /Volumes/Earth03/flower/202610_temporal_apply/coreg_nearest_drone.json
 python scripts/compare_crown_agreement.py \
   /Volumes/Earth03/flower/202610_temporal_apply_cal/crown_agreement_toa_vs_cal
 ```

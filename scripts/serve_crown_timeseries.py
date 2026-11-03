@@ -15,7 +15,8 @@ under the crown map:
     python scripts/serve_crown_timeseries.py            # http://127.0.0.1:8050
     python scripts/serve_crown_timeseries.py \\
         --apply-dir /Volumes/Earth03/flower/202610_temporal_apply_cal \\
-        --planet-dir /Volumes/Earth03/flower/planet_clipped_cal/4band
+        --planet-dir /Volumes/Earth03/flower/planet_clipped_calfill/4band \\
+        --coreg-json /Volumes/Earth03/flower/202610_temporal_apply/coreg_nearest_drone.json
 """
 import json
 import os
@@ -55,7 +56,7 @@ class _LRU:
                 self._data.popitem(last=False)
 
 
-def make_app(data, apply_dir, planet_dir, cache_dir, alignment):
+def make_app(data, apply_dir, planet_dir, cache_dir, alignment, coreg_json):
     bounds = cv.grid_bounds(CROWNMAP)
     ox, oy = data['origin']
     data['layers'] = {
@@ -67,7 +68,7 @@ def make_app(data, apply_dir, planet_dir, cache_dir, alignment):
     page = render_page(data, plotlyjs='plotly.js')
     plotlyjs = get_plotlyjs()
     flights = {d: cv.drone_file(d, alignment) for d in data['droneDates']}
-    with open(os.path.join(apply_dir, 'coreg_nearest_drone.json')) as fh:
+    with open(coreg_json) as fh:
         coreg = {r['scene']: r for r in json.load(fh)}
     scenes = set(data['scenes']['name'])
     cache = _LRU(64)
@@ -164,6 +165,9 @@ def make_app(data, apply_dir, planet_dir, cache_dir, alignment):
 @click.option('--planet-dir', default=str(cv.PLANET_DIR), show_default=True,
               type=click.Path(exists=True, file_okay=False),
               help='Planet 4-band scenes the apply run read (planet_rel paths).')
+@click.option('--coreg-json', type=click.Path(exists=True, dir_okay=False),
+              help='Coregistration log the apply run read '
+                   '[default: APPLY_DIR/coreg_nearest_drone.json].')
 @click.option('--cache-dir', default=str(cv.CACHE_DIR), show_default=True,
               type=click.Path(file_okay=False),
               help='Drone overview cache (crown_viewer_imagery.py prerender).')
@@ -175,10 +179,11 @@ def make_app(data, apply_dir, planet_dir, cache_dir, alignment):
 @click.option('--simplify-m', default=0.3, show_default=True)
 @click.option('--host', default='127.0.0.1', show_default=True)
 @click.option('--port', default=8050, show_default=True)
-def main(apply_dir, planet_dir, cache_dir, alignment, nc4s, store_min_clear,
-         simplify_m, host, port):
+def main(apply_dir, planet_dir, coreg_json, cache_dir, alignment, nc4s,
+         store_min_clear, simplify_m, host, port):
+    coreg_json = coreg_json or os.path.join(apply_dir, 'coreg_nearest_drone.json')
     data = build_data(apply_dir, CROWNMAP, nc4s, store_min_clear, simplify_m)
-    app = make_app(data, apply_dir, planet_dir, cache_dir, alignment)
+    app = make_app(data, apply_dir, planet_dir, cache_dir, alignment, coreg_json)
     click.echo(f'Serving on http://{host}:{port}/')
     app.run(host=host, port=port, threaded=True)
 
