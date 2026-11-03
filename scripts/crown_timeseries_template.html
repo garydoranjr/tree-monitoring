@@ -31,9 +31,9 @@
   #map.dragging { cursor: grabbing; }
   #map image.planet { image-rendering: pixelated; }
   #map image.loading { opacity: .45; }
-  .layers { display: none; flex-wrap: wrap; gap: 14px; align-items: center; margin-bottom: 8px; }
-  .layers.on { display: flex; }
-  .layers label.inline, .controls label.inline { flex-direction: row; align-items: center; gap: 4px; }
+  #layers { display: none; flex-wrap: wrap; gap: 14px; align-items: center; margin-bottom: 8px; }
+  #layers.on { display: flex; }
+  #layers label.inline, .controls label.inline { flex-direction: row; align-items: center; gap: 4px; }
   #imgstatus { color: var(--ink2); font-size: 12px; }
   #imgstatus.busy { color: var(--orange); }
   #tip { position: absolute; pointer-events: none; background: rgba(255,255,255,.96);
@@ -541,13 +541,13 @@ function drawPlot() {
   const sh = speciesShares(cur.sp);
   const spName = cur.sp === '__all' ? 'all species' : cur.sp;
   traces.push({x: dd, y: sh.dn.map(([e, n]) => n ? e / n : null), name: 'species: drone share',
-    xaxis: 'x', yaxis: 'y2', mode: 'lines+markers', line: {color: '#1a1a1a', width: 1.5},
+    xaxis: 'x', yaxis: 'y2', legend: 'legend2', mode: 'lines+markers', line: {color: '#1a1a1a', width: 1.5},
     marker: {size: 4}, connectgaps: true, customdata: sh.dn.map(([e, n]) => [e, n]),
     hovertemplate: '%{x}<br>drone: %{customdata[0]} of %{customdata[1]} crowns<extra></extra>'});
   const keep = S.date.map((_, s) => sh.pn[s][1] >= MIN_OBS);
   const sIdx = S.date.map((_, s) => s).filter(s => keep[s]);
   traces.push({x: sIdx.map(s => S.date[s]), y: sIdx.map(s => sh.pn[s][0] / sh.pn[s][1]),
-    name: 'species: Planet share', xaxis: 'x', yaxis: 'y2', mode: 'markers',
+    name: 'species: Planet share', xaxis: 'x', yaxis: 'y2', legend: 'legend2', mode: 'markers',
     marker: {size: 5, color: sIdx.map(s => S.env[s] ? '#2a78d6' : '#b0b0b0')},
     customdata: sIdx.map(s => sh.pn[s]),
     hovertemplate: '%{x}<br>Planet: %{customdata[0]} of %{customdata[1]} clear crowns<extra></extra>'});
@@ -562,6 +562,9 @@ function drawPlot() {
   const layout = {
     margin: {l: 60, r: 20, t: 30, b: 40}, hovermode: 'closest', showlegend: true,
     legend: {orientation: 'h', y: 1.08, x: 0, font: {size: 11}},
+    // The species panel's own legend, inside its top-right corner.
+    legend2: {orientation: 'h', y: 0.32, yanchor: 'top', x: 1, xanchor: 'right',
+              bgcolor: 'rgba(255,255,255,0.8)', font: {size: 11}},
     xaxis: {type: 'date', anchor: 'y2', gridcolor: '#e6e6e6', range: prev,
             rangeslider: {visible: false}},
     yaxis: {domain: [0.42, 1], range: [-0.03, 1.03], title: {text: `crown ${c.tag}`},
