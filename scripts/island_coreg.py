@@ -108,8 +108,8 @@ OUTLIER_PX = 2.0           # vs the 3x3 tile-neighbor median
 SIGMA_TILES = 1.5          # local field smoothing, in tiles (x STRIDE px)
 HOLDOUT_SPACING = 4        # test tiles every 4th lattice point; exclude their 3x3 ring
 MODELS = ('T', 'A', 'L')
-MODEL_NAMES = {'raw': 'uncorrected', 'T': 'translation', 'A': 'affine', 'L': 'local warp',
-               'Lh': 'local warp (hold-out)'}
+MODEL_NAMES = {'raw': 'uncorrected', 'T': 'translation', 'Tc': 'translation + archive-mean field',
+               'A': 'affine', 'L': 'local warp', 'Lh': 'local warp (hold-out)'}
 INSTRUMENTS = {'PS2': ('Dove Classic', '#1f77b4'), 'PS2.SD': ('Dove-R', '#ff7f0e'),
                'PSB.SD': ('SuperDove', '#2ca02c')}
 
@@ -894,8 +894,9 @@ def warp(results, kind, jobs, limit):
             'fraction_clear', 'offset_blue', 'offset_green', 'offset_red', 'offset_nir', 'offset_source']
     idx = df[df.scene_id.isin(ids)][cols].copy()
     idx['model'] = kind
-    for c in ('med_raw', 'med_T', 'med_A', 'med_Lh', 'noise_px'):
+    for c in ('med_raw', 'med_T', 'med_A', 'med_Lh'):
         idx[f'{c}_px'] = idx.scene_id.map(sm[c])
+    idx['noise_px'] = idx.scene_id.map(sm.noise_px)
     idx['path'] = idx.scene_id.map(lambda s: str(outdir / s[:4] / f'{s}_4band.tif'))
     idx.to_csv(outdir / 'index.csv', index=False)
     click.echo(f'{len(ids)} scenes -> {outdir}; index.csv written')
@@ -1258,11 +1259,17 @@ def fig_residuals(sm, tr, outdir, dpi):
     import matplotlib.pyplot as plt
     b = sm[sm.band == 'both'].copy()
     t = tr[tr.band == 'both']
+    # Tc: translation plus one fixed field, the mean translation residual of all scenes
+    # at each tile position (what re-referencing to the archive consensus would give).
+    mean_field = t.groupby(['ri', 'ci'])[['rT_dy', 'rT_dx']].transform('mean')
+    tc_dy, tc_dx = t.rT_dy - mean_field.rT_dy, t.rT_dx - mean_field.rT_dx
     mags = {'raw': np.hypot(t.dy_px, t.dx_px), 'T': np.hypot(t.rT_dy, t.rT_dx),
+            'Tc': np.hypot(tc_dy, tc_dx),
             'A': np.hypot(t.rA_dy, t.rA_dx), 'L': np.hypot(t.rL_dy, t.rL_dx),
             'Lh': np.hypot(t.rLh_dy, t.rLh_dx)}
-    colors = {'raw': '0.3', 'T': '#1f77b4', 'A': '#ff7f0e', 'L': '#2ca02c', 'Lh': '#2ca02c'}
-    styles = {'raw': ':', 'T': '-', 'A': '-', 'L': '--', 'Lh': '-'}
+    b['med_Tc'] = t.assign(m=mags['Tc']).groupby('scene_id').m.median().reindex(b.scene_id).values
+    colors = {'raw': '0.3', 'T': '#1f77b4', 'Tc': '#1f77b4', 'A': '#ff7f0e', 'L': '#2ca02c', 'Lh': '#2ca02c'}
+    styles = {'raw': ':', 'T': '-', 'Tc': '--', 'A': '-', 'L': '--', 'Lh': '-'}
     fig, axes = plt.subplots(1, 3, figsize=(12.5, 4.0))
     fig.subplots_adjust(left=0.06, right=0.99, bottom=0.15, top=0.90, wspace=0.28)
     ax = axes[0]
@@ -1329,7 +1336,10 @@ def fig_residuals(sm, tr, outdir, dpi):
         f'Residual misalignment of PlanetScope scenes over Barro Colorado Island relative to the master '
         f'scene under three alignment models. (a) Cumulative distribution over all tiles (64 px = 192 m '
         f'tiles on a 32 px stride, red and NIR pooled) of the residual displacement magnitude in meters '
-        f'before any correction (dotted gray) and after a per-scene translation (blue), affine (orange), '
+        f'before any correction (dotted gray) and after a per-scene translation (blue), the translation '
+        f'plus one fixed field shared by all scenes (dashed blue; the mean over scenes of the translation '
+        f'residual at each tile position, which is what re-referencing to the archive consensus instead '
+        f'of one master scene would give), affine (orange), '
         f'local warp evaluated in-sample (dashed green) and local warp evaluated by hold-out (solid green: '
         f'each tile predicted from a Gaussian-smoothed field, sigma 144 m, fitted to tiles that share no '
         f'pixels with it); the dash-dotted line is the measurement-noise floor, the median over scenes of '
@@ -1341,7 +1351,7 @@ def fig_residuals(sm, tr, outdir, dpi):
         f'line is what the local warp buys. {len(b)} scenes, {COVERAGE}.')
     notes = [f'median residual over all tiles (m): {med}',
              f'median over scenes of the per-scene median (m): ' +
-             str({k: round(float(b[f"med_{k}"].median() * RES), 2) for k in ('raw', 'T', 'A', 'L', 'Lh')}),
+             str({k: round(float(b[f"med_{k}"].median() * RES), 2) for k in ('raw', 'T', 'Tc', 'A', 'L', 'Lh')}),
              f'noise floor median {noise:.2f} m; coherence (red-NIR correlation of affine residuals) '
              f'median {b.coherence.median():.2f}',
              f'share of scenes with p90 residual > 3 m (1 px): {share}; > 1.5 m: {share_half}',
@@ -1597,14 +1607,16 @@ def fig_worst_cases(sm, tr, results, outdir, dpi, n=3, zoom=100):
         ax = axes[i, 0]
         outline.boundary.plot(ax=ax, color='k', lw=0.5)
         mag = np.hypot(t.rT_dy, t.rT_dx) * RES
+        vmax = float(np.percentile(mag, 95))
         ax.quiver(cc[t.ci] * RES + ISLAND_BOUNDS[0], ISLAND_BOUNDS[3] - rc[t.ri] * RES,
-                  t.rT_dx * RES, -t.rT_dy * RES, mag, cmap='viridis', clim=(0, 4), scale=80,
-                  scale_units='width', width=0.003)
+                  t.rT_dx * RES, -t.rT_dy * RES, mag, cmap='viridis', clim=(0, vmax),
+                  scale=20 * vmax, scale_units='width', width=0.003)
         ax.set_xlim(ext[0], ext[1])
         ax.set_ylim(ext[2], ext[3])
         ax.set_aspect('equal')
         bare(ax)
-        ax.set_title(f'{scene_label(df.loc[sid])}: residual after translation', fontsize=9)
+        ax.set_title(f'{scene_label(df.loc[sid])}: residual after translation (color 0-{vmax:.0f} m)',
+                     fontsize=9)
         # zoom where |L - T| is largest on the lattice
         d = np.hypot(model['field_dy'] - model['t'][0], model['field_dx'] - model['t'][1])
         d[~model['support']] = -1
@@ -1656,8 +1668,8 @@ def fig_worst_cases(sm, tr, results, outdir, dpi, n=3, zoom=100):
         f'The {n} video scenes (at least 80% island-clear) that gain most from a local warp over a '
         f'translation. Left column: the residual displacement of every tile (64 px = 192 m tiles on a 32 px '
         f'stride, red and NIR pooled) after the scene\'s own translation, as arrows pointing from the '
-        f'master position to where the content appears in the scene, colored by magnitude in meters (0-4 m '
-        f'scale), over the island shoreline; the red square is the 300 x 300 m zoom shown to its right, '
+        f'master position to where the content appears in the scene, colored by magnitude in meters (scale '
+        f'from 0 to the scene\'s 95th percentile, given in the row title), over the island shoreline; the red square is the 300 x 300 m zoom shown to its right, '
         f'placed where the local and translation models disagree most. Right three columns: the zoom in the '
         f'master scene, in the scene after its translation, and after its local warp, all as true color '
         f'(R, G, B) of MODIS-calibrated surface reflectance on the fixed stretch of '
