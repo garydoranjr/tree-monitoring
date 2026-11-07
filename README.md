@@ -150,7 +150,7 @@ planet_out_*/     Planet processing outputs
 |---|---|
 | Utilities | `util.py` |
 | Data acquisition | `fetch_planet.py`, `select_relevant_planet_images.py` |
-| Image processing | `coreg.py`, `planet_coreg.py`, `coreg_ncc.py` (NCC check of Planet-to-drone shifts; see [docs/handoff_rerun_coregistration.md](docs/handoff_rerun_coregistration.md)), `calculate_ndvi.py`, `clip_planet_image.py`, `cloud_mask_planet.py` |
+| Image processing | `coreg.py`, `planet_coreg.py`, `coreg_ncc.py` (NCC check of Planet-to-drone shifts; see [docs/handoff_rerun_coregistration.md](docs/handoff_rerun_coregistration.md)), `island_coreg.py` (whole-island Planet-to-Planet alignment and the translation / affine / local-warp comparison; see [docs/island_coregistration.md](docs/island_coregistration.md)), `calculate_ndvi.py`, `clip_planet_image.py`, `cloud_mask_planet.py` |
 | Radiometric calibration | `fetch_modis_opendap.py`, `build_modis_reference.py`, `build_bcnm_water_mask.py`, `calibrate_planet_modis.py`, `evaluate_planet_calibration.py`, `plot_planet_calibration_examples.py`, `fill_planet_calibration.py`, `derive_planet_fixed_stretch.py`, `build_calibrated_chips.py`, `plot_planet_fixed_stretch_examples.py` (Planet SR cross-calibrated to MODIS MCD43A1) — see [docs/planet_radiometric_calibration.md](docs/planet_radiometric_calibration.md) |
 | Machine learning | `train_drone_image_segformer.py`, `crown_classification.py`, `deploy_drone_image_segformer.py`, `sam2_segmentation.py` |
 | Crown extraction | `crown_extractor.py`, `extract_labeled_crowns.py`, `coreg_crown_sequence.py`, `match_crowns_to_labels.py` |
@@ -158,7 +158,7 @@ planet_out_*/     Planet processing outputs
 | Analysis | `parse_*.py`, `*_analysis.py`, `illumination.py` |
 | Visualization | `plot_*.py` |
 | Interactive review | `deploy_planet_image_maskrcnn_interactive.py` (layers and predictions), `vet_planet_chips.py` (chip quality rating) — see [VISUALIZATION.md](VISUALIZATION.md) |
-| Video | `generate_sequence_video.py`, `crown_timelapse_mosaic.py` |
+| Video | `generate_sequence_video.py`, `crown_timelapse_mosaic.py`, `island_coreg.py video` (aligned whole-island Planet time-lapse) |
 
 ### Data flow
 
