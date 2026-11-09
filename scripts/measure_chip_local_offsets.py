@@ -178,7 +178,7 @@ def parse_multi(values, what):
 @click.argument('outdir', type=click.Path(file_okay=False, path_type=Path))
 @click.option('--set', 'sets', multiple=True, required=True,
               help='NAME=CHIPDIR; repeatable, and a NAME may be repeated to '
-                   'pool several directories. Order sets the plot colours.')
+                   'pool several directories. Order sets the plot colors.')
 @click.option('--vetting', 'vettings', multiple=True,
               help='NAME=vetting.json; restrict that set to chips rated at '
                    'least --min-quality. Repeat to pool several rating files.')
@@ -201,7 +201,7 @@ def parse_multi(values, what):
               help='Chips with fewer accepted windows are not summarized.')
 @click.option('--prefix', default='residual_offsets', show_default=True)
 @click.option('--color', 'set_colors', multiple=True,
-              help='NAME=COLOR; overrides the order-based colour of a set.')
+              help='NAME=COLOR; overrides the order-based color of a set.')
 @click.option('--drone-meta', 'drone_metas', multiple=True,
               help='NAME=metadata_all.csv; mark that set\'s chips by the GNSS '
                    'correction (antenna column) of their mavic flight.')

@@ -25,7 +25,7 @@ def load_scaling(config_file):
 
     * `uint16_to_uint8`: per-band gains/offsets, returned as a
       (gains, offsets) tuple (config/crown_classification_mavic.yml).
-    * `color_transfer`: a 3x3 colour matrix with source and target means,
+    * `color_transfer`: a 3x3 color matrix with source and target means,
       returned as a dict with 'matrix', 'src_mean' and 'dst_mean' arrays
       (config/crown_classification_mavic_mkl.yml).
 
@@ -71,7 +71,7 @@ def to_uint8(data, scaling):
 
     The models were trained on 8-bit imagery. When `scaling` is provided, the
     window is mapped into that training domain either band by band with a
-    gain/offset, or with a 3x3 colour transfer that also corrects cross-band
+    gain/offset, or with a 3x3 color transfer that also corrects cross-band
     (hue and saturation) differences. See config/crown_classification_mavic.yml
     and config/crown_classification_mavic_mkl.yml for how each was fitted and
     why both are fixed rather than per-image.
@@ -393,7 +393,7 @@ def select_polygons(shp, image_file):
 @click.option('--scaling-config', default=None,
               type=click.Path(exists=True, dir_okay=False),
               help='YAML with the uint16 -> uint8 conversion (per-band '
-                   'gains/offsets or a 3x3 colour transfer). Required for uint16 '
+                   'gains/offsets or a 3x3 color transfer). Required for uint16 '
                    'imagery such as the mavic 50ha mosaics.')
 def main(modelfile, image_file, shapefile_path, output_dir, scaling_config):
 

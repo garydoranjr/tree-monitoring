@@ -141,7 +141,7 @@ def arosics_shift(dronefile, planetfile, planet_match_band=1, drone_ga=None,
     # The drone ortho is the expensive side: the mavic M3M mosaics are ~4 GB
     # each, and every Planet scene under a given label date shares one. Callers
     # that loop over scenes pass it in preloaded; None keeps the standalone
-    # behaviour.
+    # behavior.
     if drone_ga is None:
         drone_ga = load_as_geoarray(dronefile)
     planet_ga = load_as_geoarray(planetfile)

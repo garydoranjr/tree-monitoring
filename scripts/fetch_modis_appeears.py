@@ -6,7 +6,7 @@ geo) and the per-band mandatory quality of the four MODIS bands that match the
 PlanetScope 4-band sensor (MODIS B3 blue, B4 green, B1 red, B2 NIR), in the
 native MODIS sinusoidal projection, as netCDF. The AOI is the Planet order box
 of `config/planet_search.yml` buffered by ~5 km so that QA30 and the 5 km
-neighbourhood climatology (see scripts/build_modis_reference.py) are defined at
+neighborhood climatology (see scripts/build_modis_reference.py) are defined at
 the box edges.
 
 Credentials are read from the `urs.earthdata.nasa.gov` entry of ~/.netrc and

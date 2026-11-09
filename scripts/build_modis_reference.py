@@ -15,20 +15,20 @@ to, following Wang et al. (2020, RSE 246:111865) as described in Wu et al.
    days in that year:
      N >= 250       shape-preserving (PCHIP) cubic through the good days of
                     the pixel;
-     50 <= N < 250  the 5 km neighbourhood seasonality (that year, smoothed
-                    with a Gaussian kernel, if the neighbourhood has >= 250
+     50 <= N < 250  the 5 km neighborhood seasonality (that year, smoothed
+                    with a Gaussian kernel, if the neighborhood has >= 250
                     good days, else its multi-year day-of-year mean), shifted
                     by the mean pixel-minus-reference difference on the good
                     days;
-     N < 50         the neighbourhood multi-year day-of-year mean, unshifted.
+     N < 50         the neighborhood multi-year day-of-year mean, unshifted.
    Good days keep their observed value.
 
    Deviations from HKU, forced by Gatun Lake (~40% of each 5 km window):
-   the neighbourhood series is the pixel's own long-term median plus the mean
-   anomaly (value minus that pixel's long-term median) of good neighbours of
+   the neighborhood series is the pixel's own long-term median plus the mean
+   anomaly (value minus that pixel's long-term median) of good neighbors of
    the same cover class (land: long-term median NIR >= 0.15), so the
    seasonality no longer follows the day-to-day land/water mix of the good
-   pixels (in July 59% of the good neighbours of the 50ha pixel are water vs
+   pixels (in July 59% of the good neighbors of the 50ha pixel are water vs
    ~40% otherwise). The interpolating cubic and smoothing splines are
    replaced by PCHIP and a Gaussian-kernel mean, which cannot overshoot across
    long wet-season gaps (the splines gave 0.08-1.19 NIR in Jun-Sep 2022 at the
@@ -37,8 +37,8 @@ to, following Wang et al. (2020, RSE 246:111865) as described in Wu et al.
 Output netCDF (sinusoidal grid of the input) holds `reflectance`
 (band, time, y, x) for MODIS bands blue (B3), green (B4), red (B1) and NIR (B2),
 i.e. in PlanetScope 4-band order, and `fill_flag` with
-0 = observed, 1 = pixel spline, 2 = shifted current-year neighbourhood,
-3 = shifted multi-year neighbourhood, 4 = multi-year neighbourhood unshifted.
+0 = observed, 1 = pixel spline, 2 = shifted current-year neighborhood,
+3 = shifted multi-year neighborhood, 4 = multi-year neighborhood unshifted.
 
 Typical usage:
     python scripts/build_modis_reference.py \\
@@ -61,9 +61,9 @@ PLANET_BANDS = ['blue', 'green', 'red', 'nir']
 MODIS_BAND_FOR = {'blue': 3, 'green': 4, 'red': 1, 'nir': 2}
 WINDOW = 11          # ~5 km at 463 m
 QA30 = 0.3
-N_SPLINE, N_NEIGHBOUR = 250, 50
-EDGE_DAYS = 30       # neighbouring-year days used to stabilise spline ends
-SMOOTH_DAYS = 8.0    # Gaussian sigma of the current-year neighbourhood series
+N_SPLINE, N_NEIGHBOR = 250, 50
+EDGE_DAYS = 30       # neighboring-year days used to stabilize spline ends
+SMOOTH_DAYS = 8.0    # Gaussian sigma of the current-year neighborhood series
 LAND_NIR = 0.15      # long-term median NIR separating land from water
 DEFAULT_OUT = Path('/Volumes/Earth03/flower/modis/mcd43a1_bcnm/reference_nadir_sza45.nc')
 
@@ -114,7 +114,7 @@ def load_mcd43a1(path: Path) -> tuple[xr.Dataset, dict[int, np.ndarray], dict[in
 # ---------------------------------------------------------------------------
 # QC and gap filling
 
-def neighbourhood_mean(values: np.ndarray, good: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def neighborhood_mean(values: np.ndarray, good: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Per-day WINDOW x WINDOW mean of good values and good fraction; (t, y, x)."""
     v = np.where(good, values, 0).astype(np.float64)
     s = uniform_filter(v, size=(1, WINDOW, WINDOW), mode='nearest')
@@ -127,10 +127,10 @@ def neighbourhood_mean(values: np.ndarray, good: np.ndarray) -> tuple[np.ndarray
     return mean, frac
 
 
-def neighbourhood_anomaly(values: np.ndarray, good: np.ndarray, land: np.ndarray
+def neighborhood_anomaly(values: np.ndarray, good: np.ndarray, land: np.ndarray
                           ) -> np.ndarray:
-    """Per-day neighbourhood series that ignores the land/water mix: each pixel's
-    long-term median plus the WINDOW x WINDOW mean anomaly of good neighbours
+    """Per-day neighborhood series that ignores the land/water mix: each pixel's
+    long-term median plus the WINDOW x WINDOW mean anomaly of good neighbors
     of the same class (`land`, (y, x) bool); (t, y, x)."""
     with np.errstate(invalid='ignore'):
         med = np.nanmedian(np.where(good, values, np.nan), axis=0)
@@ -138,7 +138,7 @@ def neighbourhood_anomaly(values: np.ndarray, good: np.ndarray, land: np.ndarray
     out = np.full(values.shape, np.nan)
     for cls in (True, False):
         g = good & (land == cls)
-        m, frac = neighbourhood_mean(anom, g)
+        m, frac = neighborhood_mean(anom, g)
         out[:, land == cls] = m[:, land == cls]
     return med + out
 
@@ -179,7 +179,7 @@ def smooth_periodic(clim: np.ndarray) -> np.ndarray:
 def gap_fill_band(refl: np.ndarray, good: np.ndarray, times: pd.DatetimeIndex,
                   land: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Gap-fill one band; refl/good are (t, y, x), land (y, x). Returns (filled, flag)."""
-    nb_mean = neighbourhood_anomaly(refl, good, land)
+    nb_mean = neighborhood_anomaly(refl, good, land)
     nb_smooth = kernel_smooth(nb_mean)
     doy = times.dayofyear.values
     clim = doy_climatology(nb_mean, doy)
@@ -208,7 +208,7 @@ def gap_fill_band(refl: np.ndarray, good: np.ndarray, times: pd.DatetimeIndex,
                     gw = good[win, i, j]
                     cs = PchipInterpolator(tnum[win][gw], refl[win, i, j][gw])
                     est, code = cs(tnum[in_yr]), 1
-                elif n >= N_NEIGHBOUR:
+                elif n >= N_NEIGHBOR:
                     nb_yr = nb_mean[in_yr, i, j]
                     if np.isfinite(nb_yr).sum() >= N_SPLINE:
                         ref = nb_smooth[in_yr, i, j]
@@ -246,7 +246,7 @@ def main(mcd43a1, output, sza):
         qa = np.concatenate([p[2][b] for p in parts])[order]
         refl = par[..., 0] + kvol * par[..., 1] + kgeo * par[..., 2]
         good = np.isfinite(refl) & (qa <= 1)
-        _, frac = neighbourhood_mean(refl, good)
+        _, frac = neighborhood_mean(refl, good)
         return refl, good & (frac > QA30)
 
     refl, good = reflectance_qc('nir')
@@ -272,8 +272,8 @@ def main(mcd43a1, output, sza):
                'Kvol': kvol, 'Kgeo': kgeo,
                'modis_bands': 'blue=B3 green=B4 red=B1 nir=B2',
                'fill_flag': '0 observed, 1 pixel spline, 2 shifted current-year '
-                            'neighbourhood, 3 shifted multi-year neighbourhood, '
-                            '4 multi-year neighbourhood'},
+                            'neighborhood, 3 shifted multi-year neighborhood, '
+                            '4 multi-year neighborhood'},
     )
     if 'crs' in ds0:
         out['crs'] = ds0['crs']

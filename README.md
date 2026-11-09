@@ -68,18 +68,18 @@ The per-crown tables in `/Volumes/Earth03/flower/results/` (rebuilt October 2026
 | file | crown map | rasters |
 |---|---|---|
 | `crown_classifications.nc4` | `crowns_20240803/BCI_50ha_crownmap_timeseries.shp` (106 dated maps, 2,345 crowns each) | all 106 phantom `classifications/*_local_classifications.tif`, 2018-04-04 to 2024-03-18 (24782016 and C3KW2X) |
-| `crown_classifications_mavic.nc4` | `results/crowns_mavic_dates.gpkg`: the 2024-03-18 dated polygons copied onto each mavic date by `scripts/make_mavic_crown_dates.py` (the dated map ends at the last phantom flight) | all 96 `classifications/*_M3M_aligned_global_RGB_classifications.tif` (3x3 colour transfer), 2024-03-06 to 2026-01-20 |
+| `crown_classifications_mavic.nc4` | `results/crowns_mavic_dates.gpkg`: the 2024-03-18 dated polygons copied onto each mavic date by `scripts/make_mavic_crown_dates.py` (the dated map ends at the last phantom flight) | all 96 `classifications/*_M3M_aligned_global_RGB_classifications.tif` (3x3 color transfer), 2024-03-06 to 2026-01-20 |
 | `older/crown_classifications_mavic_perband.nc4` | as for mavic | the archived per-band mavic run in `older/classifications_mavic_perband/` |
 
 The January 2026 table (24782016 only, 90 dates) is archived as `older/crown_classifications_24782016_20260118.nc4`; it is the one behind the untracked `reports/` and `reports_w_train/` evaluations. The rebuilt phantom table reproduces it to within 3e-7 on all 90 of its dates, which confirms it was built from the same dated crown map.
 
 `compare_classifications_to_gt.py` scores Vicente's phantom labels (`vicente_20260618/vicente_20260618_labels.csv`) against `crown_classifications.nc4`.
-- It joins them through the dated crown map (`--crownmap`), which covers all 2,342 labelled crowns. It drops the 98 crowns whose tag another crown shares, because the nc4 keeps only one of them.
+- It joins them through the dated crown map (`--crownmap`), which covers all 2,342 labeled crowns. It drops the 98 crowns whose tag another crown shares, because the nc4 keeps only one of them.
 - The June 2026 reports joined through `flowering_dataset.gpkg` and so covered only its 251 crowns; `--crownmap ''` reproduces that join.
 - The script reports metrics overall, per species, and per crown-area bin (`--size-bins`, m² of that date's outline), alone and crossed with species.
 - `--exclude-train-chips` drops crown-dates inside a same-date training chip.
 
-`compare_classifications_to_gt.py --labels-gpkg <gpkg> --nc4 <nc4>` scores a labelling-tool export that carries the crown `tag` on each crown-date polygon (e.g. `vicente_202610/latest_paulino_label.gpkg`) against any of these tables; `summarize_label_evals.py` puts several such runs side by side. The outlines in `latest_paulino_label.gpkg` sit about 2.9 m north and 0.7 m west of their crowns in every mosaic (phantom local, phantom global and mavic), while the dated crown map fits at about zero shift. The script therefore replaces each label outline with the scored outline of the same tag and date, taken from `--crownmap`; for mavic runs, pass the dated map and `results/crowns_mavic_dates.gpkg` together, comma-separated.
+`compare_classifications_to_gt.py --labels-gpkg <gpkg> --nc4 <nc4>` scores a labeling-tool export that carries the crown `tag` on each crown-date polygon (e.g. `vicente_202610/latest_paulino_label.gpkg`) against any of these tables; `summarize_label_evals.py` puts several such runs side by side. The outlines in `latest_paulino_label.gpkg` sit about 2.9 m north and 0.7 m west of their crowns in every mosaic (phantom local, phantom global and mavic), while the dated crown map fits at about zero shift. The script therefore replaces each label outline with the scored outline of the same tag and date, taken from `--crownmap`; for mavic runs, pass the dated map and `results/crowns_mavic_dates.gpkg` together, comma-separated.
 
 Batch shell scripts: `run_classification_flower.sh`, `run_classification_decid.sh`, `run_merge_flower.sh`, `run_merge_decid.sh`.
 
@@ -150,7 +150,7 @@ planet_out_*/     Planet processing outputs
 |---|---|
 | Utilities | `util.py` |
 | Data acquisition | `fetch_planet.py`, `select_relevant_planet_images.py` |
-| Image processing | `coreg.py`, `planet_coreg.py`, `coreg_ncc.py` (NCC check of Planet-to-drone shifts; see [docs/handoff_rerun_coregistration.md](docs/handoff_rerun_coregistration.md)), `calculate_ndvi.py`, `clip_planet_image.py`, `cloud_mask_planet.py` |
+| Image processing | `coreg.py`, `planet_coreg.py`, `coreg_ncc.py` (NCC check of Planet-to-drone shifts; see [docs/handoff_rerun_coregistration.md](docs/handoff_rerun_coregistration.md)), `island_coreg.py` (whole-island Planet-to-Planet alignment and the translation / affine / local-warp comparison; see [docs/island_coregistration.md](docs/island_coregistration.md)), `calculate_ndvi.py`, `clip_planet_image.py`, `cloud_mask_planet.py` |
 | Radiometric calibration | `fetch_modis_opendap.py`, `build_modis_reference.py`, `build_bcnm_water_mask.py`, `calibrate_planet_modis.py`, `evaluate_planet_calibration.py`, `plot_planet_calibration_examples.py`, `fill_planet_calibration.py`, `derive_planet_fixed_stretch.py`, `build_calibrated_chips.py`, `plot_planet_fixed_stretch_examples.py` (Planet SR cross-calibrated to MODIS MCD43A1) — see [docs/planet_radiometric_calibration.md](docs/planet_radiometric_calibration.md) |
 | Machine learning | `train_drone_image_segformer.py`, `crown_classification.py`, `deploy_drone_image_segformer.py`, `sam2_segmentation.py` |
 | Crown extraction | `crown_extractor.py`, `extract_labeled_crowns.py`, `coreg_crown_sequence.py`, `match_crowns_to_labels.py` |
@@ -158,7 +158,7 @@ planet_out_*/     Planet processing outputs
 | Analysis | `parse_*.py`, `*_analysis.py`, `illumination.py` |
 | Visualization | `plot_*.py` |
 | Interactive review | `deploy_planet_image_maskrcnn_interactive.py` (layers and predictions), `vet_planet_chips.py` (chip quality rating) — see [VISUALIZATION.md](VISUALIZATION.md) |
-| Video | `generate_sequence_video.py`, `crown_timelapse_mosaic.py` |
+| Video | `generate_sequence_video.py`, `crown_timelapse_mosaic.py`, `island_coreg.py video` (aligned whole-island Planet time-lapse) |
 
 ### Data flow
 

@@ -1,4 +1,4 @@
-# Phantom vs mavic colour calibration and the flowering classifier
+# Phantom vs mavic color calibration and the flowering classifier
 
 Script: [`scripts/compare_drone_radiometry.py`](../scripts/compare_drone_radiometry.py).
 Outputs (October 2026 run): `/Volumes/Earth03/flower/figs/202610_updates/radiometry/`
@@ -20,16 +20,16 @@ through the fixed per-band gain and offset in
 Those coefficients were fitted by matching p2 and p98 pooled over *different*
 dates of each camera.
 
-The hypothesis tested here is that the excess comes from colour calibration:
-the two cameras lack colour constancy, and the fixed mapping does not correct
+The hypothesis tested here is that the excess comes from color calibration:
+the two cameras lack color constancy, and the fixed mapping does not correct
 for it. Because both drones imaged the same canopy on the same days, the two
 dates make a controlled test.
 
 ## Result
 
-Colour calibration accounts for most of the excess mavic flowering calls.
+Color calibration accounts for most of the excess mavic flowering calls.
 
-A transform that matches the mavic colour distribution to phantom's removes
+A transform that matches the mavic color distribution to phantom's removes
 **33 of the 42** mavic-only positives (`mkl`, fitted on the other date). It
 keeps **13 of the 16** crowns flowering on both cameras, and it creates no
 positives among 60 control crowns. A per-band histogram match does about the
@@ -37,7 +37,7 @@ same: it removes 36 of 42 and keeps 11 of 16.
 
 A transform that matches only each band's mean and standard deviation does
 little: it removes 14 of 42. The difference lies in the tails of each band and
-in the colour (cross-band) structure, not in overall brightness.
+in the color (cross-band) structure, not in overall brightness.
 
 ### 1. Same-day RGB distributions (`distributions`)
 
@@ -67,14 +67,14 @@ more saturated. Both cameras shift the same way on both days. The shift is 3–4
 larger than phantom's own hue change between the two dates.
 
 **The scenes also differ in illumination.** Matching 1 m blocks give phantom ~
-mavic R² of only 0.28–0.53. A full 3×3 colour matrix adds less than 0.01 R²
+mavic R² of only 0.28–0.53. A full 3×3 color matrix adds less than 0.01 R²
 over per-band fits. In the example chips the phantom flights look visibly
 hazier and flatter than mavic, most of all on 2024-03-18.
 
 **The disagreeing crowns are not shifted more than the rest.** The 40
-mavic-only crowns in the per-crown table have the same colour shift as the
+mavic-only crowns in the per-crown table have the same color shift as the
 crowns where neither camera says flowering. Their green shift is, if anything,
-smaller (Mann–Whitney p = 0.002). The colour cast is global, and the
+smaller (Mann–Whitney p = 0.002). The color cast is global, and the
 classifier's response to it is what concentrates on particular crowns.
 
 ### 2. Renormalization (`fit-renorm`)
@@ -86,7 +86,7 @@ distribution over the joint footprint:
 |---|---|
 | `linear` | per-band gain and offset matching each band's mean and standard deviation |
 | `histmatch` | per-band quantile mapping |
-| `mkl` | linear Monge–Kantorovich colour transfer (Pitié & Kokaram 2007), matching the mean and the full 3×3 covariance |
+| `mkl` | linear Monge–Kantorovich color transfer (Pitié & Kokaram 2007), matching the mean and the full 3×3 covariance |
 
 Each was also fitted in reverse, mapping phantom onto mavic-as-the-model-sees-it.
 
@@ -144,7 +144,7 @@ survivors look plausibly real:
 - 6 of the 9 are *Jacaranda copaia* (crowns 748, 1386, 1461, 1766, 2269), a
   dry-season flowerer that was already suspected of real early flowering.
 - The others are *Trichilia tuberculata* 1150, *Quararibea asterolepis* 606
-  and *Miconia argentea* 873. Crown 1150 shows orange flower colour in the mavic
+  and *Miconia argentea* 873. Crown 1150 shows orange flower color in the mavic
   RGB.
 
 Among the 16 crowns flowering on both cameras, the two lost are *Cordia
@@ -152,14 +152,14 @@ alliodora* 747 and *Dipteryx oleifera* 1941.
 
 **The reverse test is only partial.** Making phantom look like mavic raises
 phantom's positives among the 42 mavic-only crowns from 0 to 5–9 (`mkl` and
-`histmatch`). Colour explains why mavic over-fires, but it does not fully
+`histmatch`). Color explains why mavic over-fires, but it does not fully
 explain why phantom stays quiet. The hazier, lower-contrast phantom texture
 likely also suppresses some flowering signal.
 
 ## Production config
 
 [`config/crown_classification_mavic_mkl.yml`](../config/crown_classification_mavic_mkl.yml)
-holds a single fixed `mkl` colour transfer for every mavic date. It is fitted
+holds a single fixed `mkl` color transfer for every mavic date. It is fitted
 on the two shared dates pooled, and written by `fit-renorm`.
 [`scripts/crown_classification.py`](../scripts/crown_classification.py) reads
 it through the existing `--scaling-config` option: a `color_transfer` key
@@ -196,7 +196,7 @@ The per-band results are archived under the same file names:
 
 `config/pipeline_mavic.sh` still writes to the old `results/globus` path, so
 run it only to reproduce the per-band results. The `same-date` figures are in
-`figs/202610_updates/` (per-band) and `figs/20261013_updates/` (colour
+`figs/202610_updates/` (per-band) and `figs/20261013_updates/` (color
 transfer).
 
 **Same-day flights.** These are all 2,279 crowns of the 2022-09-29 crown map,
@@ -204,7 +204,7 @@ by mean P(flowering) on the production rasters read at 1/16 resolution
 (`plot_update_figures.py same-date`). They compare phantom (C3KW2X, local
 alignment) with mavic:
 
-| | Per-band | Colour transfer |
+| | Per-band | Color transfer |
 |---|---|---|
 | mavic-only crowns (mavic > 0.5, phantom < 0.2), both dates | 42 | 3 |
 | crowns > 0.5 on both cameras | 16 | 11 |
@@ -229,10 +229,10 @@ comparison below is by calendar month, all years pooled:
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | phantom (%) | 0.64 | 1.40 | 1.73 | 1.45 | 0.97 | 1.54 | 1.21 | 0.50 | 0.90 | 0.46 | 0.08 | 0.17 |
 | mavic per-band (%) | 2.52 | 3.40 | 3.93 | 5.00 | 3.72 | 4.60 | 4.46 | 3.72 | 4.44 | 4.34 | 3.10 | 2.74 |
-| mavic colour transfer (%) | 0.30 | 1.00 | 1.16 | 1.23 | 0.57 | 1.01 | 1.18 | 0.58 | 1.27 | 0.96 | 0.20 | 0.20 |
+| mavic color transfer (%) | 0.30 | 1.00 | 1.16 | 1.23 | 0.57 | 1.01 | 1.18 | 0.58 | 1.27 | 0.96 | 0.20 | 0.20 |
 
 The per-band mavic was 2.5–5 % in every month, which flattened the seasonal
-cycle. With the colour transfer, mavic is within 0.6 percentage points of
+cycle. With the color transfer, mavic is within 0.6 percentage points of
 phantom in every month and follows its seasonal cycle: low in November to
 January, highest from February to April. The deciduous share hardly moves
 (2.13 % → 2.02 %).
@@ -272,25 +272,25 @@ crown-map hull, about 15–16 M pixels per mosaic, on the two shared flight date
 the same day, as 1 m block means of the uint8 classifier input. Each panel shows
 the log-scaled density of the 532,547 joint 1 m blocks inside the crown-map hull
 for one band (R, G or B), with mavic on the x-axis and phantom on the y-axis.
-The grey line is 1:1 and the coloured line is the ordinary-least-squares fit of
+The gray line is 1:1 and the colored line is the ordinary-least-squares fit of
 phantom on mavic. Block means are area averages of the native-resolution
 mosaics resampled to a common 1 m grid. Data are the shared flight dates
 2024-03-06 (top) and 2024-03-18 (bottom).
 
-**`chromaticity.png`:** Colour balance of the two drone cameras. The left and
-centre panels show density contours (enclosing the densest 50%, 90% and 99% of
+**`chromaticity.png`:** Color balance of the two drone cameras. The left and
+center panels show density contours (enclosing the densest 50%, 90% and 99% of
 the pixel distribution) of chromaticity, r = R/(R+G+B) on the x-axis against
 g = G/(R+G+B) on the y-axis, computed from the uint8 classifier input for
 phantom (green) and mavic (red). Pixels are the same native-resolution samples
-as `rgb_cdfs.png`, for 2024-03-06 (left) and 2024-03-18 (centre). The
+as `rgb_cdfs.png`, for 2024-03-06 (left) and 2024-03-18 (center). The
 right panel shows each crown's mavic-minus-phantom change in mean r (x-axis)
 and mean g (y-axis). Crown means are taken over the 1 m blocks of each crown in
-the 2022-09-29 crown map, pooled over both dates. Points are coloured by the
-archived classifier outcome: grey, neither camera P(flowering) > 0.5; black,
+the 2022-09-29 crown map, pooled over both dates. Points are colored by the
+archived classifier outcome: gray, neither camera P(flowering) > 0.5; black,
 both; red, mavic > 0.5 and phantom < 0.2; green, phantom > 0.5 and mavic < 0.3.
 
 **`reclassify_examples.png`:** Crowns flowering on mavic but not phantom,
-re-classified after colour transfer. Each row is one crown-date, labelled with
+re-classified after color transfer. Each row is one crown-date, labeled with
 its date, crown index in the 2022-09-29 crown map and species; the crowns are
 the 8 with the highest archived mavic P(flowering) among the 42 mavic-only
 crown-dates. From left to right, the six panels are:
@@ -298,12 +298,12 @@ crown-dates. From left to right, the six panels are:
 2. phantom P(flowering);
 3. mavic RGB under the current fixed uint16 → uint8 scaling;
 4. mavic P(flowering) under that scaling;
-5. mavic RGB after linear Monge–Kantorovich colour transfer to the same-day
+5. mavic RGB after linear Monge–Kantorovich color transfer to the same-day
    phantom distribution, fitted on the *other* shared date;
 6. mavic P(flowering) after that transfer.
 
 Each RGB panel is the classifier's own input window: at least 512 × 512 pixels
-centred on the crown, with the crown outline in cyan. Each probability panel
+centered on the crown, with the crown outline in cyan. Each probability panel
 shows the flowering SegFormer output (sigmoid of the class-1 logit; black = 0,
 yellow-white = 1) over that window. The value in its title is the mean over the
 crown polygon, from a local CPU re-run of the production checkpoint.

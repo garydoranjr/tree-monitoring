@@ -19,7 +19,7 @@ elevation and view angle (SR index.csv); clear fraction and saturated clear
 share under the fixed stretch (the calibrated set's chips.csv); the TOA
 model-input red median and crown contrast-to-noise (planet_fixed_stretch_metrics.csv);
 the scene's calibration offset (mean absolute RGB offset,
-planet_scene_offsets.csv); labelled crowns per chip; the drone and its
+planet_scene_offsets.csv); labeled crowns per chip; the drone and its
 coregistration shift (coreg_log.json); and, with --persistence, the
 persistence baseline's area Jaccard for the chip (persistence_baseline.py
 --out-prefix, the _cv.csv).

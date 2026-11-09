@@ -81,8 +81,8 @@ def load_chip(planetfile, grid):
 @torch.no_grad()
 def predict_tiled(model, img, clear, device, tile, stride, mask_thresh=0.5):
     """Instances over the whole chip as (masks (N, H, W) bool, scores (N,)).
-    A detection is kept from the tile whose core holds its box centre, and
-    dropped if that centre is cloudy, as in evaluate()."""
+    A detection is kept from the tile whose core holds its box center, and
+    dropped if that center is cloudy, as in evaluate()."""
     H, W = img.shape[:2]
     masks, scores = [], []
     for r0, rc0, rc1 in tile_starts(H, tile, stride):

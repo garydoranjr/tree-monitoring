@@ -11,7 +11,7 @@ between the two. Two renderings:
                    a per-image, per-band 0-99.9 percentile stretch to [0, 1],
                    for the TOA clip the current models use (planet_clipped),
                    raw SR and calibrated SR.
-  --stretch fixed  true colour (R, G, B) and false colour (NIR, R, G) of raw
+  --stretch fixed  true color (R, G, B) and false color (NIR, R, G) of raw
                    and calibrated SR with one linear stretch per band shared
                    by all panels (1st-99th percentile of all shown pixels), so
                    brightness differences between panels are real.
@@ -44,7 +44,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from evaluate_planet_calibration import CAL, FLOWER, INK, REPO  # noqa: E402
 from train_planet_image_maskrcnn import build_input_channels  # noqa: E402
 
-SCHEMES = {'true colour': (2, 1, 0), 'false colour': (3, 2, 1)}  # band indices B,G,R,N
+SCHEMES = {'true color': (2, 1, 0), 'false color': (3, 2, 1)}  # band indices B,G,R,N
 
 
 def pick_pairs(means: pd.DataFrame, n_pairs: int, max_days: int, min_clear: float):

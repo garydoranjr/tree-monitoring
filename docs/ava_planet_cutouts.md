@@ -1,7 +1,7 @@
 # AVA-plot Planet cutouts
 
 Clipped Planet time-series cutouts around the **AVA plot** on BCI, the
-analogue of the existing 50ha `planet_clipped` product. Produced 2026-07-26.
+analog of the existing 50ha `planet_clipped` product. Produced 2026-07-26.
 
 ## Plot extent
 
@@ -118,7 +118,7 @@ the cropped `ocm/` product is accepted.
 
 ## Training set (drone labels → Planet chips)
 
-AVA analogue of the 50ha drone-label→Planet training chips, built to
+AVA analog of the 50ha drone-label→Planet training chips, built to
 augment the existing 50ha set. Final chips live in
 `/Volumes/Earth03/flower/ava/train/` as **512 × 512** 4-band uint16
 GeoTIFFs at **0.75 m** (`<scene>_4band.tif`) with a paired binary crown

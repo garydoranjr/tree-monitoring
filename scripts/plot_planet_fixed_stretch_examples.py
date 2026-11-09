@@ -5,7 +5,7 @@ the fixed stretch (build_calibrated_chips.py, config/planet_fixed_stretch.yml).
 
 Both renderings go through train_planet_image_maskrcnn.build_input_channels, so
 the RGB shown is exactly the [0, 1] model input (x 255), before the fixed
-ImageNet mean/std normalisation.
+ImageNet mean/std normalization.
 
 Writes to figs/planet_calibration/:
   training_inputs_current_vs_fixed.png  ~8 chips (darkest and brightest current

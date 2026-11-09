@@ -10,7 +10,7 @@ Writes four figures with the given output prefix (PNG + PDF each):
   chip's distance in days to the nearest training chip.
 - <prefix>_chips: per-chip IoU, precision and recall at the selected epoch
   (left and right windows summed), against distance to training data and
-  against acquisition date, coloured by fold.
+  against acquisition date, colored by fold.
 - <prefix>_season: the same per-chip values against day of year, all years
   together, with the values pooled over each calendar month.
 """
@@ -27,7 +27,7 @@ import numpy as np
 import pandas as pd
 
 INK = '#1a1a1a'
-FOLD_GREY = '#b0b0b0'
+FOLD_GRAY = '#b0b0b0'
 GRID = '#e6e6e6'
 # Fixed categorical order, one slot per fold; marker shape is a second cue.
 FOLD_COLORS = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300']
@@ -80,7 +80,7 @@ def plot_metrics(cv, prefix):
         for i, k in enumerate(folds):
             ax.plot(epochs, [per_epoch[str(e)]['by_fold'][k][metric]
                              for e in epochs],
-                    color=FOLD_GREY, lw=1,
+                    color=FOLD_GRAY, lw=1,
                     label='single fold' if i == 0 else None)
         ax.plot(epochs, [per_epoch[str(e)]['pooled'][metric] for e in epochs],
                 color=INK, lw=2, marker='o', ms=5, label='pooled over folds')

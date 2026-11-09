@@ -163,7 +163,7 @@ def cli():
 @click.option('--seed', default=1, show_default=True)
 def sample(outdir, dates, mavic_crowns, phantom_crowns, phantom_ext_crowns,
            threshold, decimate, per_sheet, seed):
-    """Sample flowering-labelled crowns and render contact sheets.
+    """Sample flowering-labeled crowns and render contact sheets.
 
     Phantom crowns come from the locally aligned classifications.
     """

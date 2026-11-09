@@ -4,7 +4,7 @@
 The backbone is a DINOv3 ViT-L/16 from Hugging Face, by default the
 satellite-pretrained one (``facebook/dinov3-vitl16-pretrain-sat493m``, SAT-493M
 Maxar RGB at 0.6 m), and ``--backbone facebook/dinov3-vitl16-pretrain-lvd1689m``
-is the web-image control. Both are gated: accept the licence on the model page
+is the web-image control. Both are gated: accept the license on the model page
 and log in with ``hf auth login`` once, or point HF_HUB_CACHE at a copied hub
 cache and set HF_HUB_OFFLINE=1 (what the gattaca2 configs do).
 
@@ -25,14 +25,14 @@ conv blocks (GroupNorm), and upsampled to a per-pixel event logit. With --finetu
 frozen and only the decoder trains. With N > 0 the last N blocks and the
 final norm are also trained, at --backbone-lr.
 
-Target: the union of the window's labelled instances (crowns larger than
+Target: the union of the window's labeled instances (crowns larger than
 --min-instance-size that do not touch the window border, as the Mask R-CNN
-targets). Labelled crowns that are dropped by that rule, and OCM-cloudy pixels
+targets). Labeled crowns that are dropped by that rule, and OCM-cloudy pixels
 under --ocm-masks, are ignored in the loss (BCE + soft Dice).
 
 Instances for scoring (predict_instances): 8-connected components of
 probability >= the mask threshold, larger than --min-pred-size pixels, scored
-by their mean probability, and dropped when their box centre is cloudy. This
+by their mean probability, and dropped when their box center is cloudy. This
 is the rule filtered_predictions applies to Mask R-CNN output, so
 eval_temporal_cv.py scores both model kinds the same way. It recognizes these
 checkpoints by their 'kind' key.
@@ -184,7 +184,7 @@ def predict_instances(model, imgs, targets, device, score_thresh=0.5,
     """filtered_predictions' output format for a DinoSegmenter: per image a
     dict of boolean instance masks (connected components of probability >=
     score_thresh), mean-probability scores, labels and boxes, with
-    components whose box centre is cloudy dropped."""
+    components whose box center is cloudy dropped."""
     if min_pred_size is None:
         min_pred_size = getattr(model, 'min_pred_size', 4)
     probs = torch.sigmoid(model(torch.stack(imgs).to(device)))
@@ -217,7 +217,7 @@ def predict_instances(model, imgs, targets, device, score_thresh=0.5,
 class SemanticWindows(Dataset):
     """PlanetMaskRCNNDataset windows as (image, target, ignore) for semantic
     training: target is the union of the kept instances; ignore marks
-    labelled pixels the instance rule dropped, and cloudy pixels."""
+    labeled pixels the instance rule dropped, and cloudy pixels."""
 
     def __init__(self, base, use_ocm_masks):
         self.base = base

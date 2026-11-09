@@ -6,7 +6,7 @@ the crown temporal model (train_crown_pse_ltae.py).
 its OmniCloudMask raster under OCMDIR, and writes ``scenes/<scene>.npz`` to
 OUTDIR with, for every crown of --crowns:
 
-* ``n_px``: pixels of the crown polygon, shrunk inwards by --buffer metres
+* ``n_px``: pixels of the crown polygon, shrunk inwards by --buffer meters
   against misregistration and translated by plus the scene's coregistration
   shift onto the Planet grid (as crown_rows in apply_planet_maskrcnn.py);
 * ``n_valid``: of those, pixels with data;
@@ -16,7 +16,7 @@ OUTDIR with, for every crown of --crowns:
 * the B/G/R/N values of the clear pixels only.
 
 A crown pixel that is not clear is never stored, so nothing downstream can
-train or evaluate on it. Crowns are rasterised largest first, so where
+train or evaluate on it. Crowns are rasterized largest first, so where
 buffered polygons still overlap the smaller crown wins.
 
 Shifts come from the --coreg-json files (coreg_planet_to_nearest_drone.py

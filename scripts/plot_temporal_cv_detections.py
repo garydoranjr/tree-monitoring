@@ -45,7 +45,7 @@ def by_epoch(windows, min_epoch):
 @click.option('--windows', 'window_csvs', multiple=True, required=True, metavar='LABEL=CSV',
               help="A run's temporal_cv_windows.csv, as label=path. Repeatable.")
 @click.option('--style', 'styles', multiple=True, metavar='LABEL=COLOR[:LINESTYLE]',
-              help='Colour and line style of a run, as in compare_temporal_cv.py.')
+              help='Color and line style of a run, as in compare_temporal_cv.py.')
 @click.option('--at', 'at', default='20000,15000,12000,10000,8000', show_default=True,
               help='Detection counts to interpolate the printed table at.')
 @click.option('--min-epoch', default=5, show_default=True,
@@ -81,7 +81,7 @@ def main(window_csvs, styles, at, min_epoch, plot):
             style[label] = (color, ls or 'solid')
         missing = [label for label in runs if label not in style]
         if missing:
-            raise click.ClickException(f'no colour for {missing}; pass --style')
+            raise click.ClickException(f'no color for {missing}; pass --style')
         fig, axes = plt.subplots(1, len(NAMES), figsize=(4 * len(NAMES), 3.4))
         for ax, (m, name) in zip(axes, NAMES.items()):
             for label, d in runs.items():

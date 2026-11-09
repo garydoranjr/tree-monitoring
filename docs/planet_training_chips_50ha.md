@@ -4,7 +4,7 @@ The Mask R-CNN / SegFormer training set for the BCI 50ha plot: 4-band
 Planet cutouts at 0.75 m paired with a binary crown mask derived from
 drone-imagery crown classifications. Built by
 [`scripts/apply_drone_labels_coreg.py`](../scripts/apply_drone_labels_coreg.py),
-then reduced by a human vetting pass. The AVA-plot analogue, including the
+then reduced by a human vetting pass. The AVA-plot analog, including the
 reasons that build needs a margin-then-crop workflow, is in
 [ava_planet_cutouts.md](ava_planet_cutouts.md).
 
@@ -48,7 +48,7 @@ All files for a scene share the stem `<planet_scene>_4band`:
 A scene appears only if AROSICS converged; failures are recorded in
 `coreg_log.json` with `coreg_ok: false` and no chip files.
 `crown_filter_by_ocm()` drops any connected crown component that touches a
-non-clear OCM pixel, so partly clouded crowns are not labelled.
+non-clear OCM pixel, so partly clouded crowns are not labeled.
 
 ## Inputs
 
@@ -80,8 +80,8 @@ label list from the release's ortho directory.
 
 **Label coverage differs between the two halves.** The 2020–2023 orthos
 (1056 × 572 m) are *smaller* than the 1101 × 615 m chip, so those chips have
-unlabelled margins that training sees as background. The globus orthos are
-larger than the chip, so those chips are labelled edge to edge.
+unlabeled margins that training sees as background. The globus orthos are
+larger than the chip, so those chips are labeled edge to edge.
 
 Planet side: `planet_clipped/4band/<year>/` cutouts
 (`config/clip_50ha_plot.yml`) and their OmniCloudMask masks in
@@ -264,9 +264,9 @@ under both alignments, and AROSICS gave each almost the same shift either
 way (median difference in magnitude +0.01 m). See `plot_update_figures.py
 coreg-stats-alignment`.
 
-### 2d. Mavic masks after the colour transfer (`20261012` set)
+### 2d. Mavic masks after the color transfer (`20261012` set)
 
-The mavic orthos were re-classified with the 3x3 colour transfer
+The mavic orthos were re-classified with the 3x3 color transfer
 (`config/crown_classification_mavic_mkl.yml`, see
 [drone_radiometry.md](drone_radiometry.md)). AROSICS coregisters the drone
 *ortho*, not the classification, so the shifts, Planet chips, cloud masks,
@@ -293,9 +293,9 @@ dates until the job was killed on the 16 GB laptop.
 `20260915` masks pixel for pixel. Each run takes about 25 min on the
 laptop, against about 10 h with swapping for a full AROSICS rebuild.
 
-**Result.** The colour transfer halves the mavic crown masks:
+**Result.** The color transfer halves the mavic crown masks:
 
-| | old (per-band) masks | new (colour transfer) masks |
+| | old (per-band) masks | new (color transfer) masks |
 |---|---|---|
 | Crown pixels, all 154 chips | 7.59 M | 3.70 M |
 | Median crown fraction, 70 Good chips | 5.59 % | 2.65 % |
@@ -430,7 +430,7 @@ In the all-sources set the five colliding chips are byte-identical to
 their mavic copies. Every chip in both sets crops to 512 × 512 on both
 halves, and none has zero instances.
 
-**All-sources set with colour-transfer mavic masks (`20261012`).** This is the
+**All-sources set with color-transfer mavic masks (`20261012`).** This is the
 same assembly with the `20261012` mavic set (section 2d) in place of
 `20260915`. It still adds the vetted mavic chips before the C3KW2X ones with
 `--no-overwrite`:
@@ -519,7 +519,7 @@ should be checksummed against `/scratch` before use.
 Then train. Per-epoch checkpoints stay on, because the sweep scores
 twelve of them, and `--no-wandb` is needed because wandb is on by
 default. Run on a GPU node inside the `flower` env; the two runs go
-back to back, since a one-core allocation serialises the in-process
+back to back, since a one-core allocation serializes the in-process
 data loading and gains nothing from overlapping them:
 
 ```bash
@@ -579,8 +579,8 @@ Two caveats before concluding that more chips do not pay. First, the
 test halves are the right halves of the 56 base chips, whose left halves
 are in *every* run's training set; `base` draws its entire training
 distribution from those scenes while `ext`/`full` dilute it with mavic
-2024-26 scenes, so the benchmark structurally favours `base` and says
-nothing about generalisation to new dates. Second, all four runs peak
+2024-26 scenes, so the benchmark structurally favors `base` and says
+nothing about generalization to new dates. Second, all four runs peak
 between e005 and e012 on the scored grid and then collapse (`phantom`
 falls from 0.1562 at e005 to 0.0475 at e200), so these are
 early-stopping scores on a heavily
@@ -602,10 +602,10 @@ python scripts/plot_headtohead_epochs.py \
   /Volumes/Earth03/flower/figs/202610_updates/maskrcnn_headtohead.png --label ...
 ```
 
-### Colour-transfer mavic masks (`20261012` set)
+### Color-transfer mavic masks (`20261012` set)
 
 `full_mkl` repeats `full` on the `20261012` set from step 2d: the same
-142 chips, but with the colour-transferred mavic masks. The 56 test chips
+142 chips, but with the color-transferred mavic masks. The 56 test chips
 are all phantom 2020-23, so their masks did not change, and the scores
 compare directly with the table above. Stage the new set and the test
 set to `/local` (both copies were checked against `/scratch` with md5),
@@ -654,14 +654,14 @@ cleaner mavic labels help on mavic-era dates.
 
 The figures in `figs/20261020_updates/` compare `full_mkl` with the
 phantom-only baselines, `base` and `phantom`, and leave out `ext` and
-`full`, whose mavic masks predate the full 3 × 3 colour transfer. Both
+`full`, whose mavic masks predate the full 3 × 3 color transfer. Both
 plotters take a repeatable `--run` to pick the runs:
 
 ```bash
 D=/Volumes/Earth03/flower/figs/20261020_updates
 J=$D/headtohead_sweep_202610_mkl.json
 L=(--label base="phantom 2020-23 only (56)" --label phantom="+ phantom 2023-24 (77)"
-   --label full_mkl="all three, colour-transfer mavic (142)")
+   --label full_mkl="all three, color-transfer mavic (142)")
 R=(--run base --run phantom --run full_mkl)
 python scripts/plot_update_figures.py maskrcnn-summary --outdir $D --sweep $J "${L[@]}" "${R[@]}"
 python scripts/plot_headtohead_epochs.py $J $D/maskrcnn_headtohead.png "${L[@]}" "${R[@]}" \
@@ -670,12 +670,12 @@ python scripts/plot_headtohead_epochs.py $J $D/maskrcnn_headtohead.png "${L[@]}"
 
 The `*_mavic_masks` figures isolate the mask change: `full` against
 `full_mkl`, the same 142 chips and settings with old against
-colour-transfer mavic masks. `--name` keeps the summary from overwriting
+color-transfer mavic masks. `--name` keeps the summary from overwriting
 the one above:
 
 ```bash
 L=(--label full="all three, old mavic masks (142)"
-   --label full_mkl="all three, colour-transfer mavic masks (142)")
+   --label full_mkl="all three, color-transfer mavic masks (142)")
 R=(--run full --run full_mkl)
 python scripts/plot_update_figures.py maskrcnn-summary --outdir $D --sweep $J \
   --name maskrcnn_summary_mavic_masks "${L[@]}" "${R[@]}"
@@ -748,15 +748,15 @@ python scripts/plot_update_figures.py maskrcnn-summary --outdir logs --sweep $J 
 > Held-out performance of the Planet Mask R-CNN against training epoch (log
 > scale, 12 checkpoints from 1 to 200) for four training sets, scored on the
 > right 512 × 512 windows of the 56 phantom 2020-23 benchmark chips (crowns of
-> at least 64 px, cloud-centred predictions removed): phantom 2020-23 only
+> at least 64 px, cloud-centered predictions removed): phantom 2020-23 only
 > (blue, 56 chips), plus phantom 2023-24 (green, 77 chips), all three sources
 > with TOA chips and per-image 0th–99.9th percentile stretch (orange, 142
 > chips) and the same 142 chips as MODIS-calibrated surface reflectance with
 > one fixed per-band stretch (purple). Top left: mask mAP at IoU 0.5; top
-> right: binary IoU of the union of predicted and labelled crown masks over
+> right: binary IoU of the union of predicted and labeled crown masks over
 > clear pixels, with each run's peak starred; bottom left: crown precision
 > (solid circles) and recall (dashed squares), where a predicted crown matching
-> a labelled crown at mask IoU 0.5 or more after greedy matching is a true
+> a labeled crown at mask IoU 0.5 or more after greedy matching is a true
 > positive; bottom right: the same precision against recall, with marker fill
 > giving the epoch. Every run is trained on the left windows of its chips, at
 > flat learning rate 1e-4 and batch 4.
@@ -770,7 +770,7 @@ Both loaders glob `*.mask.png` and pair it with the sibling `.tif`:
   `.ocm.png` sidecar for `--ocm-masks` cloud-aware loss)
 
 `get_split(..., 'left'|'right')` takes a 512 × 512 window abutting the
-horizontal centre of the chip, which is how train and validation are kept
+horizontal center of the chip, which is how train and validation are kept
 geographically disjoint within a scene.
 
 For generalization to new dates rather than new ground,

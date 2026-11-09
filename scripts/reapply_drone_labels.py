@@ -4,7 +4,7 @@
 apply_drone_labels_coreg.py coregisters each drone *ortho* to its Planet
 scene, so the AROSICS shifts, Planet chips, cloud masks and QA PNGs depend
 only on the orthos and the Planet scenes. Re-classifying the same orthos
-(e.g. the mavic 3x3 colour-transfer run) changes only the `*.mask.png`
+(e.g. the mavic 3x3 color-transfer run) changes only the `*.mask.png`
 crown masks. This copies SRC_SET to DST_SET and regenerates each mask from
 the classification of the same name in LABEL_DIR, with the shift recorded
 in SRC_SET/coreg_log.json and the same masking code

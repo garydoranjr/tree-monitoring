@@ -382,7 +382,7 @@ KMP_DUPLICATE_LIB_OK=TRUE python scripts/apply_drone_labels_coreg.py \
 **Failed pairs to redo:** 192 (phantom 2020–23), 45 (C3KW2X) and 216 (mavic).
 
 **Mavic masks.**
-- `results/classifications` now holds the colour-transfer mavic classifications: section 2d of
+- `results/classifications` now holds the color-transfer mavic classifications: section 2d of
   the chips doc reapplied them from there.
 - So the mavic redo build writes the `mkl` masks directly, and no `reapply_drone_labels.py` step
   is needed.
@@ -452,7 +452,7 @@ files (`.tif`, `.png`, `.drone.png`, `.mask.png`, `.ocm.png`).
   (0.14), are mostly cloud. Expect them to be rated down in vetting.
 - **Mavic masks.** Regenerating the 8 masks with `reapply_drone_labels.py` (the 2d path) from
   `results/classifications` reproduces them pixel for pixel. They are therefore the
-  colour-transfer masks.
+  color-transfer masks.
 - **Next.** Viewer review and vetting (4c.1–2). Only these 31 chips need rating.
 
 ## Step 4: rebuild downstream products

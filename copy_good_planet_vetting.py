@@ -12,7 +12,7 @@ Two rating file formats are accepted, chosen by extension:
 Labelbox access is gone, so new sets are rated with `vet_planet_chips.py`;
 the NDJSON path stays for the exports already in `labels/`. Both use the same
 three levels, ranked Poor < Fair < Good. By default only "Good" chips are
-copied (the original 50ha behaviour); pass `--min-quality Fair` to also
+copied (the original 50ha behavior); pass `--min-quality Fair` to also
 include Fair chips, etc.
 
 For each accepted chip (external_id ends in `.png`), all sibling files that

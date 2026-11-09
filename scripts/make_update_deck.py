@@ -126,7 +126,7 @@ SLIDES = [
         ],
         figures=["coverage.png"],
         notes="Temporal coverage of the data feeding the 50ha training set. The top "
-              "panel shows the number of 50ha Planet scenes per month (grey bars, "
+              "panel shows the number of 50ha Planet scenes per month (gray bars, "
               "2,146 scenes, 2020-01 to 2026-08-11) and the number of whole-island "
               "Planet scenes per month that are at least 50% clear according to "
               "OmniCloudMask (black line). The bottom panel marks the acquisition date "
@@ -137,7 +137,7 @@ SLIDES = [
               "orthomosaics (black, 2024-06-11 to 2025-09-15). The training-chip row "
               "marks the Planet acquisition dates of the 56 phantom 2020\u201323 chips "
               "(blue), the 21 Good phantom 2023\u201324 chips (green) and the 70 mavic "
-              "chips (red). The grey bar spans the dates classified with the static "
+              "chips (red). The gray bar spans the dates classified with the static "
               "2022-09-29 crown map, the hatched bar spans the dates for which dated "
               "crown outlines exist (2018-04-04 to 2024-03-18), which no classification "
               "used, and the dashed line marks the boundary between the 24782016 and "
@@ -166,7 +166,7 @@ SLIDES = [
               "right column shows the same scene with thick cloud (white), thin cloud "
               "(orange) and cloud shadow (purple) overlaid. Each title gives the "
               "fraction of valid pixels classified clear. OmniCloudMask runs at 10 m "
-              "and is upsampled nearest-neighbour to the 3 m Planet grid, so mask "
+              "and is upsampled nearest-neighbor to the 3 m Planet grid, so mask "
               "edges are blocky at about 10 m. The scenes are 20240314_150434_31_242b "
               "(2024-03-14, 66% clear) and 20240124_150201_30_2415 (2024-01-24, 50% "
               "clear).",
@@ -215,7 +215,7 @@ SLIDES = [
               "flowering probability and the per-pixel deciduous probability, with the "
               "static 2022-09-29 crown map (2,280 crowns) outlined. The top row shows "
               "the whole plot read at 1/16 resolution (about 0.75 m pixels). The bottom "
-              "row is a 120 m zoom at 1/2 resolution (about 9 cm), centred on the crown "
+              "row is a 120 m zoom at 1/2 resolution (about 9 cm), centered on the crown "
               "with the highest mean flowering probability, and the green box marks the "
               "zoom on the top row.",
     ),
@@ -246,7 +246,7 @@ SLIDES = [
               "the 2022-09-29 crown map. Rows are 2024-03-06 and 2024-03-18; columns "
               "are P(flowering) and P(deciduous). Probabilities are crown means from "
               "classification rasters read at 1/16 resolution (about 0.75 m). The "
-              "dotted lines mark the 0.5 threshold on each axis, and the grey line is "
+              "dotted lines mark the 0.5 threshold on each axis, and the gray line is "
               "y = x. Each inset gives the share of crowns above 0.5 on phantom local, "
               "phantom global and mavic, and the Spearman rank correlation between "
               "phantom local and mavic.",
@@ -264,7 +264,7 @@ SLIDES = [
                 "on 2024-02-28), a species that flowers in the dry season, which fits"),
             (1, "others are cream-flowered, such as Nectandra lineata (2101) and "
                 "Cordia alliodora (113, 1452)"),
-            (1, "about 5 are ambiguous (yellowish crowns, or flowers on a neighbouring "
+            (1, "about 5 are ambiguous (yellowish crowns, or flowers on a neighboring "
                 "crown); two show no flowers, Luehea seemannii 931 and Prioria "
                 "copaifera 66"),
             (0, "Positives per date: about 6 on C3KW2X, about 18 on 24782016 and about "
@@ -273,12 +273,12 @@ SLIDES = [
                 "partly covers, for example 2024-02-28 crown 427 \u2014 real flowers "
                 "with stale outlines"),
         ],
-        notes="This is a visual spot-check, not blind labelling; the proportions are "
+        notes="This is a visual spot-check, not blind labeling; the proportions are "
               "rough.",
     ),
     dict(
         kind="figstack",
-        title="Phantom C3KW2X Crowns Labelled Flowering, With and Without Flowers",
+        title="Phantom C3KW2X Crowns Labeled Flowering, With and Without Flowers",
         figures=[
             "spotcheck_flowering/zoom_phantom_c3kw2x_likely_tp.png",
             "spotcheck_flowering/zoom_phantom_c3kw2x_suspect_fp.png",
@@ -288,7 +288,7 @@ SLIDES = [
             "\u2014 likely true positives",
             "No visible flowers \u2014 suspected false positives",
         ],
-        notes="Phantom C3KW2X drone crowns labelled flowering by the HPC SegFormer "
+        notes="Phantom C3KW2X drone crowns labeled flowering by the HPC SegFormer "
               "classifier. Each was selected because its mean P(flowering) over the "
               "2022-09-29 crown polygon exceeds 0.5, and the title gives the flight "
               "date, crown ID, mean probability and the polygon's species from the "
@@ -296,11 +296,11 @@ SLIDES = [
               "native mosaic resolution (about 4.5 cm) from the locally aligned uint8 "
               "mosaic, with the crown polygon outlined in cyan. The top figure shows "
               "crowns with visible flowers; the bottom figure shows crowns with no "
-              "visible flowers that were nonetheless labelled flowering.",
+              "visible flowers that were nonetheless labeled flowering.",
     ),
     dict(
         kind="figstack",
-        title="For Comparison: Mavic Crowns Labelled Flowering (September's Picks)",
+        title="For Comparison: Mavic Crowns Labeled Flowering (September's Picks)",
         figures=[
             "spotcheck_flowering/zoom_mavic_likely_tp.png",
             "spotcheck_flowering/zoom_mavic_suspect_fp.png",
@@ -332,17 +332,17 @@ SLIDES = [
                 "copaia, the species of crown 646, which both sensors call flowering a "
                 "few days later. Crown 1836 is red-flowered Symphonia globulifera"),
             (0, "**Some are clear false positives.** Crown 823 is Cecropia insignis, "
-                "whose silvery leaves give the grey look the model seems to mistake for "
+                "whose silvery leaves give the gray look the model seems to mistake for "
                 "flowers; crown 1150 (Trichilia tuberculata) is reddish-brown, more "
                 "likely new leaves or fruit"),
             (0, "**On two the blob sits beside the polygon** \u2014 crowns 86 and 87 are "
                 "Astrocaryum standleyanum palms, and the high probability lies on a "
-                "neighbouring crown"),
+                "neighboring crown"),
             (0, "**Deciduous:** the only disagreements are two bare-branched crowns "
                 "that phantom calls deciduous and mavic does not"),
             (0, "**Caveat on species:** each label belongs to the tree tagged for that "
                 "polygon in the 2022-09-29 map. Where the polygon misfits, the visible "
-                "crown can be a neighbour"),
+                "crown can be a neighbor"),
         ],
         notes="Agreement: the crowns both sensors call flowering include a flowering "
               "Jacaranda copaia (646, 2024-03-18) and a red-leaved crown next to the "
@@ -351,7 +351,7 @@ SLIDES = [
               "On the deciduous disagreements: one is Astronium graveolens (2270), "
               "which is dry-season deciduous. The other, crown 908, carries lilac "
               "flowers on bare branches, which mavic shows more clearly; its polygon is "
-              "tagged Tabernaemontana arborea, so the visible crown may be a neighbour.",
+              "tagged Tabernaemontana arborea, so the visible crown may be a neighbor.",
     ),
     dict(
         kind="figrow",
@@ -363,7 +363,7 @@ SLIDES = [
               "are the phantom C3KW2X locally aligned RGB mosaic, its P(flowering), the "
               "mavic RGB mosaic (uint16 converted to uint8 with the fixed per-band "
               "gain/offset used for classification), and its P(flowering). All panels "
-              "were read at 1/16 resolution (about 0.75 m pixels). Grey marks pixels "
+              "were read at 1/16 resolution (about 0.75 m pixels). Gray marks pixels "
               "outside the classification windows, which the static 2022-09-29 crown "
               "map places.",
     ),
@@ -470,7 +470,7 @@ SLIDES = [
               "sources (purple, 142 chips: 126 plus the 16 C3KW2X chips whose scenes "
               "are not already mavic chips). Twelve epochs between 1 and 200 were "
               "scored per run with OCM cloud masks and a 64-pixel minimum instance "
-              "size, and stars mark each run's peak, labelled with its value and "
+              "size, and stars mark each run's peak, labeled with its value and "
               "epoch.\n\n"
               "Last month's prediction was that clean, same-sensor extra chips would "
               "help where mavic chips hurt. On mAP they do not: every extension helps "
@@ -509,7 +509,7 @@ SLIDES = [
               "drone footprint, had a post-shift normalized cross-correlation of at "
               "least 0.3, and needed a shift under 20 m. The left panel shows the "
               "distribution of window offset magnitudes, with medians and window counts "
-              "in the legend; the centre panel the per-chip non-rigid spread, the "
+              "in the legend; the center panel the per-chip non-rigid spread, the "
               "median distance of the window offset vectors from the chip's median "
               "vector (boxes are interquartile ranges, dots are chips); the right panel "
               "the window offset vectors, magnified 8\u00d7, on the chip with the "
@@ -548,7 +548,7 @@ SLIDES = [
               "stage; phantom global Good counts use the local-build ratings of the "
               "same Planet scenes, and twenty global chips whose scene failed "
               "coregistration in the local build are unrated and not counted. The "
-              "centre panel shows the distribution of the single rigid AROSICS shift "
+              "center panel shows the distribution of the single rigid AROSICS shift "
               "applied per coregistered scene (density, 1.5 m bins), with the dotted "
               "line at one 3 m Planet pixel. The right panel shows the shift magnitude "
               "applied to each of the 151 scenes coregistered under both phantom "
@@ -581,7 +581,7 @@ SLIDES = [
               "were at least 90% clear and inside the drone footprint, had a post-shift "
               "normalized cross-correlation of at least 0.3, and needed a shift under "
               "20 m. The left panel shows the distribution of window offset magnitudes, "
-              "with medians and window counts in the legend; the centre panel the "
+              "with medians and window counts in the legend; the center panel the "
               "per-chip non-rigid spread, the median distance of the window offset "
               "vectors from the chip's median vector (boxes are interquartile ranges, "
               "dots are chips); the right panel the window offset vectors, magnified "
@@ -608,7 +608,7 @@ SLIDES = [
               "window with the largest measured residual offset in that chip, and the "
               "scale bar is 50 m.\n\n"
               "These are the worst chips of the phantom 2020\u201323 set, the worst of "
-              "the three. Bright (flowering or leafless) crowns appear several metres "
+              "the three. Bright (flowering or leafless) crowns appear several meters "
               "away from their outlines in the Planet frame.",
     ),
     dict(
@@ -903,7 +903,7 @@ def place(shape, rect):
 
 
 def add_picture_fit(slide, path, rect):
-    """Place `path` scaled to fit `rect`, centred. Returns the placed rect."""
+    """Place `path` scaled to fit `rect`, centered. Returns the placed rect."""
     left, top, width, height = rect
     pic = slide.shapes.add_picture(path, Inches(left), Inches(top))
     scale = min(Inches(width) / pic.width, Inches(height) / pic.height)

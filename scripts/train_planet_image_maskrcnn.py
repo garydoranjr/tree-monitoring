@@ -344,7 +344,7 @@ def build_instance_bank(dir_splits, size, channel_kinds, min_instance_size,
             inst_masks = binary_mask_to_instances(
                 mask_crop, min_instance_size=min_instance_size,
             )
-            # All crowns are kept out of the background ring, so a neighbour
+            # All crowns are kept out of the background ring, so a neighbor
             # cannot inflate a donor's measured background level.
             union = inst_masks.sum(axis=0) if inst_masks.shape[0] else None
             for inst in inst_masks:
@@ -409,7 +409,7 @@ def _paste_instances(overlay, img, inst_masks, bank, n_paste, rng,
     counts = {i + 1: int((ids == i + 1).sum()) for i in range(len(inst_masks))}
     next_id = len(inst_masks) + 1
     # Keep adjusted pixels inside the range the model already sees for this
-    # chip, without needing to know which channel is NDVI and which is colour.
+    # chip, without needing to know which channel is NDVI and which is color.
     ch_lo = img.reshape(-1, img.shape[2]).min(axis=0)
     ch_hi = img.reshape(-1, img.shape[2]).max(axis=0)
 
@@ -1186,7 +1186,7 @@ def evaluate(model, dataloader, device, iou_metric, map_metric,
                    'the per-chip count is drawn uniformly from 1..N, so the '
                    'mean added is about N/2 (halved again by '
                    '--copy-paste-prob). The default is deliberately large: '
-                   'chips already carry tens of labelled crowns (35/chip in '
+                   'chips already carry tens of labeled crowns (35/chip in '
                    'the 20260330 flower set, 64/chip in the 20260706 curated '
                    'set), so a single-digit N moves crown density by only a '
                    'few percent. At N=40 with the default probability, '
@@ -1235,12 +1235,12 @@ def evaluate(model, dataloader, device, iou_metric, map_metric,
 @click.option('--fixed-stretch', type=click.Path(exists=True, dir_okay=False),
               default=None,
               help='YAML from derive_planet_fixed_stretch.py: stretch every '
-                   'colour/IR channel with one fixed per-band lo/hi instead of '
+                   'color/IR channel with one fixed per-band lo/hi instead of '
                    'the per-image percentile stretch. For calibrated '
                    'reflectance chips (build_calibrated_chips.py).')
 @click.option('--color-jitter/--no-color-jitter', 'color_jitter', default=True,
               help='ColorJitter(brightness=0.2, contrast=0.2) on the stretched '
-                   'colour/IR channels of training chips (default on, as in '
+                   'color/IR channels of training chips (default on, as in '
                    'every run before this flag existed).')
 @click.option('--offset-jitter', default=0.0, show_default=True, type=float,
               help='With --fixed-stretch: add k times the across-scene SD of '
@@ -1249,7 +1249,7 @@ def evaluate(model, dataloader, device, iou_metric, map_metric,
                    'drawn per sample. Teaches the model offset errors of the '
                    'size calibration leaves (e.g. borrowed offsets). 0 is off.')
 @click.option('--seed', default=None, type=int,
-              help='Seed Python, NumPy and torch (initialisation, shuffling, '
+              help='Seed Python, NumPy and torch (initialization, shuffling, '
                    'jitter, copy-paste). Unset by default, as in earlier runs. '
                    'cuDNN kernels stay non-deterministic, so seeded runs are '
                    'repeatable only approximately.')

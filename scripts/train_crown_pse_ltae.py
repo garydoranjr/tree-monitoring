@@ -12,19 +12,19 @@ tests are left out here, so they are neither inputs nor targets.
 
 Model, per observation:
 1. Pixel-set encoder: up to --pixels clear pixels (B, G, R, N, NDVI,
-   green-red index; standardised) go through a shared MLP. They are pooled
+   green-red index; standardized) go through a shared MLP. They are pooled
    by masked mean and standard deviation, padding excluded, and joined with
    log crown area, clear fraction, pixel count, coreg_ok and a SuperDove
    flag.
 2. Temporal transformer over the observations of a --window-day window,
-   positioned by days from the window centre (sinusoidal) and day of year,
+   positioned by days from the window center (sinusoidal) and day of year,
    with padding masked out of the attention.
 3. One event logit per observation.
 
 Labels are the drone crown events (load_drone in
 plot_crown_species_comparison.py: 1-(1-p_flower)(1-p_decid) > 0.5), put on
 every valid observation of the crown within --label-days of the flight. The
-loss is a masked BCE over labelled observations only.
+loss is a masked BCE over labeled observations only.
 
 Folds: with --folds and --fold K, the labels of the flights of fold K's
 chips are withheld (imagery on every date is still input, as it would be
@@ -225,7 +225,7 @@ class Batcher:
         b = lo + np.searchsorted(d, center + self.window / 2, side='right')
         rows = np.arange(a, b)
         if len(rows) > self.max_obs:
-            # the rows in keep first, then the ones nearest the centre
+            # the rows in keep first, then the ones nearest the center
             dist = np.abs(self.s.obs['day'].values[rows] - center).astype(float)
             if keep is not None:
                 dist[np.isin(rows, keep)] = -1
@@ -273,8 +273,8 @@ def pixel_norm(series, rng, n=200000):
 
 def predict(model, batcher, crowns, device, rng, batch=64):
     """p_event for every valid observation of the given crowns. Windows are
-    centred every window/4 days; each observation takes its prediction from
-    the window whose centre is nearest."""
+    centered every window/4 days; each observation takes its prediction from
+    the window whose center is nearest."""
     s = batcher.s
     out = np.full(len(s.obs), np.nan, np.float32)
     step = batcher.window / 4
@@ -344,7 +344,7 @@ def predict(model, batcher, crowns, device, rng, batch=64):
               help='Share of observations dropped from each training window, '
                    'as extra simulated cloud.')
 @click.option('--max-crowns', default=0, show_default=True,
-              help='Use only this many labelled crowns (smoke tests).')
+              help='Use only this many labeled crowns (smoke tests).')
 @click.option('--seed', default=0, show_default=True)
 def main(series_path, outdir, folds_csv, fold, all_flights, exclude_days,
          crown_folds, crown_fold, split_x, test_side, nc4s, min_pixels,
@@ -400,7 +400,7 @@ def main(series_path, outdir, folds_csv, fold, all_flights, exclude_days,
         click.echo(f'crown hold-out: {(~test_crowns).sum()} training crowns, '
                    f'{test_crowns.sum()} withheld')
 
-    # one training sample per labelled (crown, flight), centred on the flight
+    # one training sample per labeled (crown, flight), centered on the flight
     samples = (train_lab.assign(crown=obs_crown[train_lab.index])
                .groupby(['crown', 'flight']).size().reset_index()[['crown', 'flight']])
     if max_crowns:
@@ -412,7 +412,7 @@ def main(series_path, outdir, folds_csv, fold, all_flights, exclude_days,
     click.echo(f'{len(series.obs)} valid crown observations of '
                f'{(np.diff(series.start) > 0).sum()} crowns; '
                f'{len(train_flights)} training flights '
-               f'({len(test_flights)} withheld), {len(train_lab)} labelled '
+               f'({len(test_flights)} withheld), {len(train_lab)} labeled '
                f'observations ({train_lab["event"].mean():.3f} events), '
                f'{len(samples)} crown-flight samples; device {device}')
 

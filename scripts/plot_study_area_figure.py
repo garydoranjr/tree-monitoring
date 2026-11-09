@@ -468,7 +468,7 @@ def dated_crown(tag, date):
     """The crown outline of `tag` drawn for drone `date` (crowns_20240803)."""
     import geopandas as gpd
     static = crownmap().geometry[tag]
-    # dated outlines can sit several metres from the static one, so search a margin
+    # dated outlines can sit several meters from the static one, so search a margin
     g = gpd.read_file(DATED_CROWNS, bbox=static.buffer(25).bounds)
     g = g[(pd.to_numeric(g.tag, errors='coerce') == tag)
           & (g.date == pd.Timestamp(date).strftime('%Y_%m_%d'))]
@@ -645,7 +645,7 @@ def figure(outdir, name, dpi):
     def axes(x, y, w, h):
         return fig.add_axes([x / FIG_W, y / FIG_H, w / FIG_W, h / FIG_H])
 
-    # column 1: Panama, centred vertically
+    # column 1: Panama, centered vertically
     pan_w = 2.8
     pv = panama_view()
     pan_h = pan_w * (pv[3] - pv[1]) / (pv[2] - pv[0])
@@ -661,7 +661,7 @@ def figure(outdir, name, dpi):
     ch = cw * (PLOT_VIEW[3] - PLOT_VIEW[1]) / (PLOT_VIEW[2] - PLOT_VIEW[0])
     tgap = 0.1
     tile = (cw - tgap) / 2
-    # centre the block (titles above c/d; date labels and the crown caption
+    # center the block (titles above c/d; date labels and the crown caption
     # below the tiles)
     block = 0.3 + ch + 0.9 + tile + 0.55
     ytop = FIG_H - (FIG_H - block) / 2 - 0.3 - ch
@@ -699,7 +699,7 @@ def figure(outdir, name, dpi):
         draw_tile(tiles[('planet', key)], planet_rgb(arr, lo, hi), unshift_extent(ext, shift),
                   outlines[key], crown_box, f'{d:%Y-%m-%d} ({word})', True, key == 'base')
     species = sel['species']
-    # (e)/(f) centred over each tile pair, between the zoom connectors that
+    # (e)/(f) centered over each tile pair, between the zoom connectors that
     # meet the pair's outer corners
     for xpair, letter, sensor_name in ((x0, 'e', 'drone'), (x0 + cw + gap, 'f', 'PlanetScope')):
         fig.text((xpair + cw / 2) / FIG_W, (ytile + tile + 0.05) / FIG_H,
@@ -732,7 +732,7 @@ def figure(outdir, name, dpi):
 # drone-cards
 # --------------------------------------------------------------------------
 # Wikimedia Commons photos (CC BY-SA 4.0), downloaded to materials/drone_photos.
-# crop = (x0, x1, y_centre) as fractions of the photo; the height follows from
+# crop = (x0, x1, y_center) as fractions of the photo; the height follows from
 # the 3:2 card aspect.
 DRONE_CARDS = {
     'phantom': dict(
@@ -986,7 +986,7 @@ PLANET_CALFILL = FLOWER / 'planet_clipped_calfill/4band'
                    'covering the plot in every month).')
 @click.option('--per-month', default=15, show_default=True, help='Tiles per montage row.')
 @click.option('--chunk-m', default=240.0, show_default=True,
-              help='Side of each montage tile, metres, centred on the plot.')
+              help='Side of each montage tile, meters, centered on the plot.')
 @click.option('--min-valid', default=0.9, show_default=True,
               help='Skip scenes covering less than this share of the plot.')
 @click.option('--seed', default=0, show_default=True)
@@ -1099,7 +1099,7 @@ CAL_EXAMPLE = ('20210130_132220_104a', '20210130_152842_1038',
 @cli.command('planet-calibration')
 @out_option
 @click.option('--chunk-m', default=360.0, show_default=True,
-              help='Side of each image tile, metres, centred on the plot.')
+              help='Side of each image tile, meters, centered on the plot.')
 @click.option('--min-clear', default=0.8, show_default=True,
               help='Plot clear fraction for a clip to enter the time series.')
 @click.option('--dpi', default=300, show_default=True)
@@ -1209,7 +1209,7 @@ RES_MAP_DATE = '2022-09-29'
 @cli.command('crown-resolution')
 @out_option
 @click.option('--tile-m', default=46.0, show_default=True,
-              help='Ground width of every example tile, metres.')
+              help='Ground width of every example tile, meters.')
 @click.option('--dpi', default=300, show_default=True)
 def crown_resolution(outdir, tile_m, dpi):
     """Crown-size histogram and example crown events in drone vs Planet."""
@@ -1263,7 +1263,7 @@ def crown_resolution(outdir, tile_m, dpi):
         cx, cy = e['geom'].centroid.coords[0]
         e['box'] = (cx - tile_m / 2, cy - tile_m / 2, cx + tile_m / 2, cy + tile_m / 2)
         # only scenes with a successful AROSICS match: scene_info falls back to a
-        # zero shift otherwise, which can leave a scene tens of metres off
+        # zero shift otherwise, which can leave a scene tens of meters off
         if e['scene'] not in coreg_shifts() or not any(coreg_shifts()[e['scene']]):
             raise click.ClickException(f"{e['scene']} has no successful co-registration")
         e['shift'] = coreg_shifts()[e['scene']]
@@ -1337,7 +1337,7 @@ def italic_name(latin):
 # --------------------------------------------------------------------------
 VICENTE_LABELS = FLOWER / 'vicente_202509/flowering_dataset.gpkg'
 LABEL_DATE = '2023-03-07'  # the training date with the most labels (91)
-# 400 m square with the most labelled crowns that date, including deciduous and no-event ones
+# 400 m square with the most labeled crowns that date, including deciduous and no-event ones
 LABEL_VIEW = (625880, 1011840, 626280, 1012240)
 LABEL_COLORS = {'flowering': '#ff3db8', 'deciduous': '#ffa600', 'none': '#00e5ff'}
 LABEL_NAMES = {'flowering': 'flowering', 'deciduous': 'deciduous', 'none': 'no event'}
@@ -1351,10 +1351,10 @@ def vicente_classes(g):
 
 
 def label_tables(bounds, threshold=0.5, day=LABEL_DATE):
-    """(hand labels, unlabelled crowns with classifier class) inside `bounds`.
+    """(hand labels, unlabeled crowns with classifier class) inside `bounds`.
 
     Hand labels are Vicente's training polygons with vicente_classes(); the
-    unlabelled crowns are that date's dated crown-map polygons that hand labels
+    unlabeled crowns are that date's dated crown-map polygons that hand labels
     cover less than half of, classed from crown_classifications.nc4: flowering
     if P(flowering) >= threshold, else deciduous if P(deciduous) >= threshold,
     else none.
@@ -1374,14 +1374,14 @@ def label_tables(bounds, threshold=0.5, day=LABEL_DATE):
     crowns['tag'] = pd.to_numeric(crowns.tag, errors='coerce')
     crowns = crowns.dropna(subset=['tag'])
     crowns = crowns[crowns.intersects(view)]
-    # a crown counts as hand-labelled if a label polygon covers most of it
+    # a crown counts as hand-labeled if a label polygon covers most of it
     # (rows, not tags: a few tags repeat in the dated map)
     crowns = crowns.reset_index(drop=True)
     crowns['row'] = crowns.index
     covered = gpd.overlay(crowns[['row', 'geometry']], lab[['geometry']], how='intersection')
     covered['a'] = covered.area
     frac = covered.groupby('row').a.sum() / crowns.area
-    crowns['labelled'] = frac.reindex(crowns.index).fillna(0) >= 0.5
+    crowns['labeled'] = frac.reindex(crowns.index).fillna(0) >= 0.5
 
     with xr.open_dataset(NC4['phantom']) as ds:
         sel = ds.sel(date=day)
@@ -1392,7 +1392,7 @@ def label_tables(bounds, threshold=0.5, day=LABEL_DATE):
     crowns = crowns.dropna(subset=['fp'])
     crowns['cls'] = np.where(crowns.fp >= threshold, 'flowering',
                              np.where(crowns.dp >= threshold, 'deciduous', 'none'))
-    return lab, crowns[~crowns.labelled]
+    return lab, crowns[~crowns.labeled]
 
 
 @cli.command('label-expansion')
@@ -1422,7 +1422,7 @@ def label_expansion(outdir, threshold, dpi):
         axes.append(ax)
         ax.imshow(img, extent=ext)
         if k == 0:
-            # crowns nobody labelled
+            # crowns nobody labeled
             new.boundary.plot(ax=ax, color='white', lw=0.5, alpha=0.7)
         else:
             for c, col in LABEL_COLORS.items():
@@ -1443,7 +1443,7 @@ def label_expansion(outdir, threshold, dpi):
     axes[1].set_title(f'+ classifier labels: {len(new)} more crowns', fontsize=11, pad=5)
     h0 = [Line2D([], [], color=col, lw=2.0,
                  label=f'{LABEL_NAMES[c]} ({n_lab.get(c, 0)})') for c, col in LABEL_COLORS.items()]
-    h0.append(Line2D([], [], color='0.55', lw=0.8, label=f'unlabelled ({len(new)})'))
+    h0.append(Line2D([], [], color='0.55', lw=0.8, label=f'unlabeled ({len(new)})'))
     axes[0].legend(handles=h0, loc='upper center', bbox_to_anchor=(0.5, -0.01), ncol=4,
                    fontsize=9, frameon=False, handlelength=1.6)
     h1 = [Line2D([], [], color=col, lw=0.9,
@@ -1465,7 +1465,7 @@ def label_expansion(outdir, threshold, dpi):
 # Same-day examples (2024-03-06, both drones flew), by tag in the dated crown
 # map (crowns_20240803), whose 2024-03-06 outlines fit that day's mosaics.
 # The examples were first found as rows 823 and 471 of the 2022-09-29 map;
-# row 471 (labelled Astrocaryum standleyanum, 9 m2) lies inside the dated
+# row 471 (labeled Astrocaryum standleyanum, 9 m2) lies inside the dated
 # Triplaris cumingiana crown, the pink-flowering tree in the tiles.
 TRANSFER_DAY = '2024_03_06'
 TRANSFER_EXAMPLES = (
@@ -1495,7 +1495,7 @@ def drone_color_transfer(outdir, pad_m, dpi):
     perband = cc.load_scaling(pu.MAVIC_SCALING)
     mkl = cc.load_scaling(cdr.MKL_CONFIG)
     styles = (('Phantom (target)', pu.C_PHANTOM_EXT, '-'),
-              ('Mavic, before\n(per-band scaling)', pu.C_GREY, '--'),
+              ('Mavic, before\n(per-band scaling)', pu.C_GRAY, '--'),
               ('Mavic, after\n(3×3 color transfer)', pu.C_MAVIC, '-'))
     fig = plt.figure(figsize=(FIG_W, FIG_H))
 

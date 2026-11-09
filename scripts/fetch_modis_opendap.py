@@ -13,7 +13,7 @@ and BRDF_Albedo_Band_Mandatory_Quality_Band{1-4}.
 
 Each day is written as `<out>/daily/<YYYY>/MCD43A1.A<YYYYDDD>.nc` with raw int16
 parameters (scale_factor/_FillValue kept), dims (time, y, x, param) and
-sinusoidal pixel-centre coordinates. `--combine` concatenates the days into
+sinusoidal pixel-center coordinates. `--combine` concatenates the days into
 `<out>/yearly/mcd43a1_h10v08_<YYYY>.nc`, the input of
 scripts/build_modis_reference.py.
 
@@ -56,7 +56,7 @@ DEFAULT_OUT = Path('/Volumes/Earth03/flower/modis/mcd43a1_bcnm/opendap')
 
 _local = threading.local()
 # netCDF-C/HDF4/HDF5 are not thread-safe: downloads run in parallel, file I/O
-# is serialised.
+# is serialized.
 NC_LOCK = threading.Lock()
 
 
@@ -68,7 +68,7 @@ def session() -> requests.Session:
 
 def tile_window(aoi=AOI, tile=TILE) -> tuple[int, int, int, int, float, float]:
     """(row0, row1, col0, col1) inclusive pixel window of `aoi` in `tile`, plus
-    the tile's upper-left corner (x, y) in sinusoidal metres."""
+    the tile's upper-left corner (x, y) in sinusoidal meters."""
     h, v = int(tile[1:3]), int(tile[4:6])
     x0t = X_ORIGIN + h * TILE_SIZE
     y0t = Y_ORIGIN - v * TILE_SIZE

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Is the phantom -> mavic jump in flowering calls a colour-calibration problem?
+"""Is the phantom -> mavic jump in flowering calls a color-calibration problem?
 
 On the two days both drones flew (2024-03-06, 2024-03-18) the drone SegFormer
 flowering model calls ~5x more crowns flowering on mavic than on phantom. The
@@ -15,15 +15,15 @@ Subcommands write into OUTDIR (default
   distributions  same-day RGB distributions of phantom and mavic in the uint8
                  space the model sees: per-band quantiles and CDF distances
                  (against the phantom/mavic day-to-day spread), paired 1 m
-                 block regressions, chromaticity, and per-crown colour shifts
+                 block regressions, chromaticity, and per-crown color shifts
   fit-renorm     candidate mavic uint16 -> uint8 transforms fitted to the
                  same-day phantom (per-band linear, histogram match, 3x3
-                 colour matrix), fitted cross-date and in-sample
+                 color matrix), fitted cross-date and in-sample
   reclassify     re-runs the flowering/deciduous models on the crowns where
                  the cameras disagree (plus controls) under each transform,
                  and phantom made to look like mavic (the reverse test)
   transfer-figures
-                 illustrations of the production 3x3 colour transfer:
+                 illustrations of the production 3x3 color transfer:
                  same-day RGB before/after, distributions, covariance
 
 Typical usage:
@@ -69,14 +69,14 @@ def mavic_path(d):
 
 
 def grid_bounds(crowns, pad=5.0):
-    """Crown-map extent snapped outward to whole metres."""
+    """Crown-map extent snapped outward to whole meters."""
     b = crowns.total_bounds
     return (np.floor(b[0] - pad), np.floor(b[1] - pad),
             np.ceil(b[2] + pad), np.ceil(b[3] + pad))
 
 
 def read_on_grid(path, bounds, res, nodata=0):
-    """Area-averaged RGB on a res-metre grid over `bounds`.
+    """Area-averaged RGB on a res-meter grid over `bounds`.
 
     Returns (float32 array (3, H, W) in source DN, valid mask, transform).
     Pixels where every RGB band equals `nodata` are excluded from the average
@@ -124,7 +124,7 @@ def read_native_sample(path, bounds, step):
 
 
 def sample_on_mask(arr, t, mask, mask_t):
-    """Pixels of arr (3, h, w) whose centres fall on True cells of mask."""
+    """Pixels of arr (3, h, w) whose centers fall on True cells of mask."""
     h, w = arr.shape[1:]
     cols, rows = np.meshgrid(np.arange(w) + 0.5, np.arange(h) + 0.5)
     x, y = t * (cols, rows)
@@ -177,7 +177,7 @@ def r2(y, yhat):
 def fit_paired(mav, pha, rng, n_theilsen=20000):
     """Fits of phantom uint8 on mavic uint8, per 1 m block.
 
-    Returns per-band OLS and Theil-Sen (gain, offset, R^2) and a 3x3 colour
+    Returns per-band OLS and Theil-Sen (gain, offset, R^2) and a 3x3 color
     matrix + offset with its per-band R^2.
     """
     from scipy.stats import theilslopes
@@ -299,7 +299,7 @@ def distributions(outdir, res, step, seed):
         mav, pha = s.blocks()
         fits[d] = fit_paired(mav, pha, rng)
 
-        # Per-crown colour shift, split by how the classifiers disagree.
+        # Per-crown color shift, split by how the classifiers disagree.
         n = len(crowns)
         cm, cp = s.crown_means(n)
         cls = pd.read_csv(pu.DEFAULT_OUT / 'same_date_crowns.csv')
@@ -371,7 +371,7 @@ def distributions(outdir, res, step, seed):
                        f'offset {f[f"{b}_ts_offset"]:6.1f} | 3x3 R2 {f[f"{b}_matrix_r2"]:.3f} | '
                        f'RMSE identity {f[f"{b}_identity_rmse"]:5.1f} OLS {f[f"{b}_ols_rmse"]:5.1f} '
                        f'3x3 {f[f"{b}_matrix_rmse"]:5.1f}')
-    click.echo('\nPer-crown mavic - phantom colour shift by classifier case (median):')
+    click.echo('\nPer-crown mavic - phantom color shift by classifier case (median):')
     g = crown_df.groupby(['date', 'case'])
     summ = g[['dR', 'dG', 'dB', 'dr_chroma', 'dg_chroma', 'db_chroma']].median()
     summ['n'] = g.size()
@@ -419,7 +419,7 @@ def plot_hexbin(days, fits, outdir):
             ax.hexbin(mav[:, k], pha[:, k], gridsize=80, bins='log', cmap='Greys',
                       extent=(0, 255, 0, 255), mincnt=1)
             x = np.array([0, 255])
-            ax.plot(x, x, color=pu.C_GREY, lw=0.8, label='1:1')
+            ax.plot(x, x, color=pu.C_GRAY, lw=0.8, label='1:1')
             ax.plot(x, f[f'{b}_ols_gain'] * x + f[f'{b}_ols_offset'], color=BAND_COLORS[k],
                     label=f'OLS: {f[f"{b}_ols_gain"]:.2f}x {f[f"{b}_ols_offset"]:+.1f}, '
                           f'R$^2$={f[f"{b}_ols_r2"]:.2f}')
@@ -457,8 +457,8 @@ def plot_chroma(days, crown_df, outdir):
         ax.scatter(sub.dr_chroma, sub.dg_chroma, s=6 if case == 'neither' else 18,
                    color=color, alpha=0.5 if case == 'neither' else 0.9, lw=0,
                    label=f'{case} (n={len(sub)})')
-    ax.axhline(0, color=pu.C_GREY, lw=0.6)
-    ax.axvline(0, color=pu.C_GREY, lw=0.6)
+    ax.axhline(0, color=pu.C_GRAY, lw=0.6)
+    ax.axvline(0, color=pu.C_GRAY, lw=0.6)
     ax.set_xlabel('crown mean r, mavic - phantom')
     ax.set_ylabel('crown mean g, mavic - phantom')
     ax.set_title('Per-crown chromaticity shift by classifier case', fontsize=10)
@@ -489,7 +489,7 @@ def fit_transform(kind, src, dst):
 
     linear     per-band gain/offset matching mean and std
     histmatch  per-band quantile mapping (1001 quantiles)
-    mkl        linear Monge-Kantorovich colour transfer (Pitie & Kokaram 2007):
+    mkl        linear Monge-Kantorovich color transfer (Pitie & Kokaram 2007):
                matches the mean and full 3x3 covariance, so it can rotate hue,
                which no per-band map can
     These are distribution matches on the same footprint, not paired
@@ -548,13 +548,13 @@ def load_samples(outdir, d):
 @cli.command('fit-renorm')
 @out_option
 def fit_renorm(outdir):
-    """Fit mavic -> phantom (and reverse) colour transforms on the same-day samples.
+    """Fit mavic -> phantom (and reverse) color transforms on the same-day samples.
 
     Reads OUTDIR/samples_<date>.npz (from `distributions`). Writes
     transforms.json, mavic_linear_<date>.yml (a drop-in --scaling-config for
     crown_classification.py), renorm_cdf_distances.csv, which scores each
     transform in-sample and on the other date, and
-    crown_classification_mavic_mkl.yml, the production colour transfer fitted
+    crown_classification_mavic_mkl.yml, the production color transfer fitted
     on both dates pooled (copied to config/).
     """
     import yaml
@@ -572,7 +572,7 @@ def fit_renorm(outdir):
             f'# (C3KW2X global) uint8 mosaic on {d}, from compare_drone_radiometry.py.\n'
             + yaml.safe_dump({'uint16_to_uint8': [dict(gain=float(g), offset=float(o))
                                                   for g, o in zip(lin['gain'], lin['offset'])]}))
-    # Production transform: one fixed colour transfer fitted on both dates.
+    # Production transform: one fixed color transfer fitted on both dates.
     pooled = fit_transform('mkl', np.concatenate([m for _, m in samples.values()]),
                            np.concatenate([p for p, _ in samples.values()]))
     tfs['forward:mkl:pooled'] = pooled
@@ -620,7 +620,7 @@ def mkl_config_yaml(tf):
     }}, default_flow_style=None, sort_keys=False)
     dates = ' and '.join(d.replace('_', '-') for d in pu.SAME_DATES)
     return f"""\
-# Colour transfer for the mavic 50ha RGB mosaics
+# Color transfer for the mavic 50ha RGB mosaics
 # (/scratch/tree-monitoring/stri/globus/RGB): uint16 DN -> uint8 model input.
 #
 # Written by `python scripts/compare_drone_radiometry.py fit-renorm`; see
@@ -629,10 +629,10 @@ def mkl_config_yaml(tf):
 # The per-band gains/offsets in crown_classification_mavic.yml match each
 # band's p2/p98 to the phantom training mosaics, but on the days both drones
 # flew ({dates}) mavic still reaches the model greener, with a darker
-# blue band, more contrast and more saturated colour than phantom. That made
+# blue band, more contrast and more saturated color than phantom. That made
 # the flowering model call ~5x more crowns flowering on mavic.
 #
-# This file replaces the per-band map with a linear Monge-Kantorovich colour
+# This file replaces the per-band map with a linear Monge-Kantorovich color
 # transfer (Pitie & Kokaram 2007). The transfer maps the mean and full 3x3
 # covariance of mavic RGB onto those of the same-day phantom (C3KW2X global)
 # mosaics. It is fitted on native-resolution pixels sampled over the two
@@ -654,11 +654,11 @@ def mkl_config_yaml(tf):
 # transfer-figures
 # --------------------------------------------------------------------------
 MKL_CONFIG = Path(__file__).resolve().parent.parent / 'config/crown_classification_mavic_mkl.yml'
-# Encodings shared by the transfer figures: phantom is the target, grey the
-# old per-band mavic input, red the colour-transferred mavic input.
+# Encodings shared by the transfer figures: phantom is the target, gray the
+# old per-band mavic input, red the color-transferred mavic input.
 TRANSFER_STYLES = (('phantom (C3KW2X global, target)', pu.C_PHANTOM_EXT, '-'),
-                   ('mavic, per-band scaling (before)', pu.C_GREY, '--'),
-                   ('mavic, 3x3 colour transfer (after)', pu.C_MAVIC, '-'))
+                   ('mavic, per-band scaling (before)', pu.C_GRAY, '--'),
+                   ('mavic, 3x3 color transfer (after)', pu.C_MAVIC, '-'))
 
 
 @cli.command('transfer-figures')
@@ -669,11 +669,11 @@ TRANSFER_STYLES = (('phantom (C3KW2X global, target)', pu.C_PHANTOM_EXT, '-'),
 @click.option('--pad-m', default=6.0, show_default=True,
               help='Margin around each zoomed crown (m).')
 def transfer_figures(outdir, samples_dir, pad_m):
-    """Illustrate the production mavic colour transfer on the same-day flights.
+    """Illustrate the production mavic color transfer on the same-day flights.
 
-    Writes colour_transfer_rgb.png (phantom vs mavic before/after, whole plot
-    and three crowns), colour_transfer_distributions.png (per-band histograms
-    and chromaticity) and colour_transfer_covariance.png (2-sigma RGB
+    Writes color_transfer_rgb.png (phantom vs mavic before/after, whole plot
+    and three crowns), color_transfer_distributions.png (per-band histograms
+    and chromaticity) and color_transfer_covariance.png (2-sigma RGB
     ellipses and the per-band vs 3x3 coefficients). Crowns for the RGB figure
     come from OUTDIR/same_date_crowns.csv (run `plot_update_figures.py
     same-date` there first). Distribution figures use
@@ -720,7 +720,7 @@ def pick_transfer_crowns(outdir, crowns, min_sep_m=40.0):
 
 
 def transfer_panels(d, bounds, factor, perband, mkl):
-    """(RGB 0-1 float image, extent) for phantom, mavic per-band and mavic colour transfer.
+    """(RGB 0-1 float image, extent) for phantom, mavic per-band and mavic color transfer.
 
     The cameras have different pixel sizes, so each image keeps its own extent.
     """
@@ -768,10 +768,10 @@ def plot_transfer_rgb(perband, mkl, pad_m, outdir):
                 s.set_linewidth(2.5)
             ax.set_title(f'{d} {name}', fontsize=9)
         axes[r, 0].set_ylabel(label, fontsize=8.5)
-    fig.suptitle('Mavic RGB as the flowering model sees it, before and after the 3x3 colour '
+    fig.suptitle('Mavic RGB as the flowering model sees it, before and after the 3x3 color '
                  'transfer, next to the same-day phantom flight', fontsize=11)
     fig.tight_layout()
-    pu.save(fig, outdir, 'colour_transfer_rgb')
+    pu.save(fig, outdir, 'color_transfer_rgb')
 
 
 def plot_transfer_distributions(pixels, outdir):
@@ -809,7 +809,7 @@ def plot_transfer_distributions(pixels, outdir):
     fig.suptitle('Same-day pixel distributions, 2024-03-06 and 2024-03-18 pooled '
                  '(native-resolution samples over the joint 50ha footprint)', fontsize=11)
     fig.tight_layout()
-    pu.save(fig, outdir, 'colour_transfer_distributions')
+    pu.save(fig, outdir, 'color_transfer_distributions')
 
 
 def plot_transfer_covariance(pixels, perband, mkl, outdir):
@@ -842,7 +842,7 @@ def plot_transfer_covariance(pixels, perband, mkl, outdir):
         ax.legend(fontsize=7, loc='upper left')
     g, _ = perband
     for ax, M, title in ((axes[3], np.diag(g), 'per-band map (before)'),
-                         (axes[4], mkl['matrix'], '3x3 colour transfer (after)')):
+                         (axes[4], mkl['matrix'], '3x3 color transfer (after)')):
         M = 1000 * np.asarray(M)
         ax.imshow(M, cmap='Greys', vmin=0, vmax=4)
         for (r, c), v in np.ndenumerate(M):
@@ -854,14 +854,14 @@ def plot_transfer_covariance(pixels, perband, mkl, outdir):
     fig.suptitle('Same-day RGB covariance in the model\'s uint8 space (both dates pooled) '
                  'and the coefficients mapping mavic uint16 DN to it', fontsize=11)
     fig.tight_layout()
-    pu.save(fig, outdir, 'colour_transfer_covariance')
+    pu.save(fig, outdir, 'color_transfer_covariance')
 
 
 # --------------------------------------------------------------------------
 # reclassify
 # --------------------------------------------------------------------------
 def select_crowns(n_controls, seed):
-    """Crown-dates to re-run, labelled by how the archived classifiers disagree.
+    """Crown-dates to re-run, labeled by how the archived classifiers disagree.
 
     Cases are defined against phantom local, as in plot_update_figures.py
     `same-date-examples`.
@@ -929,7 +929,7 @@ def run_models(models, imgs, device):
 @click.option('--seed', default=0, show_default=True)
 def reclassify(outdir, flower_model, decid_model, n_controls, device, example_kind,
                n_examples, seed):
-    """Re-run the drone models on disagreeing crowns under each colour transform.
+    """Re-run the drone models on disagreeing crowns under each color transform.
 
     Reads OUTDIR/transforms.json (from `fit-renorm`). For every selected
     crown-date the production window (crown_classification.centered_window) is
@@ -1072,7 +1072,7 @@ def plot_reclassify_examples(ex_data, crowns, species, example_kind, outdir):
                 a.set_xticks([])
                 a.set_yticks([])
         row[0].set_ylabel(f'{d} crown {c}\n{species[c]}', fontsize=8)
-    fig.suptitle(f'Mavic-only flowering crowns re-classified after colour transfer to the '
+    fig.suptitle(f'Mavic-only flowering crowns re-classified after color transfer to the '
                  f'same-day phantom ({example_kind}, fitted on the other date)', fontsize=11)
     pu.save(fig, outdir, 'reclassify_examples')
 

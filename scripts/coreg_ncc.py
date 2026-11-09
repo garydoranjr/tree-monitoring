@@ -11,7 +11,7 @@ search range is wide. This is an independent estimate of the same shift:
    ortho's red band, block-averaged to 1 m, over every shift in that range.
 
 The shift is returned in AROSICS's `corrected_shifts_map` convention (the
-shift to apply to the Planet scene, metres east and north), so the two can be
+shift to apply to the Planet scene, meters east and north), so the two can be
 compared directly. On 149 scenes AROSICS registers, NCC agrees within 3 m on
 134. On the 95 where NCC is confident (`ncc_confident`) it agrees on 93. See
 docs/handoff_rerun_coregistration.md.
