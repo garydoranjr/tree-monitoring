@@ -103,6 +103,46 @@ tile vectors, a median of 1,718 tiles per scene.
   45 %. The re-measured residual is what a viewer of the aligned sequence sees,
   and it is also what the frame labels of `island_coreg_sequence.mp4` show.
 
+**Where the distortion comes from** (2026-11-14, from the affine terms in
+`scene_models.csv`; the affine part of each scene's field decomposed into
+cross-track scale `jac_xx_m`, along-track scale `jac_yy_m`, rotation
+(`jac_xy − jac_yx`)/2 and shear (`jac_xy + jac_yx`)/2, all in meters across the
+island):
+
+- It is **per frame, not per satellite.** The archive spreads over ~180 Doves, so
+  only 3 satellites have 8 or more passes; within them 68–91 % of the variance
+  of each term is pass-to-pass, not a fixed camera signature. Stronger: in the
+  108 cases where the same satellite imaged the island twice on the same day
+  (consecutive frames seconds apart), the range of each term across those frames
+  (1.8 / 5.3 / 2.3 / 2.2 m for cross-track scale / along-track scale / rotation /
+  shear) is as large as the terms themselves (2.0 / 4.1 / 1.6 / 1.8 m). Consecutive
+  frames from one camera carry different distortions, which rules out lens or
+  focal-plane calibration and anything that varies slowly, and leaves the
+  geometric solution of each individual frame: the satellite's attitude and
+  position estimate for that frame and its refinement against ground control.
+- The largest term is the **along-track scale** (median |3.2| m, mean −1.7 m,
+  against 1.9 m cross-track, 1.3 m rotation, 1.4 m shear). Doves fly near-polar
+  orbits, so along-track is roughly north–south; a scale error along the
+  direction of flight is what an error in the velocity or pitch-rate part of the
+  frame's attitude model produces.
+- **Cloudier scenes are more distorted** (Spearman ρ = −0.27 between affine
+  amplitude and island-clear fraction; no dependence on date, 0.02, or sun
+  elevation, 0.14). Planet refines each frame's geometry by matching tie points
+  to its reference basemap; clouds remove tie points, and around BCI most of the
+  footprint is lake anyway, so the refinement over the island rests on few,
+  distant points and the attitude-model residual shows through.
+- **More than half of what the local warp removes is beyond affine** (median
+  gain over translation 0.22 m from the affine part, 0.38 m from the local part),
+  so the per-frame error bends within the frame rather than being a pure
+  rotation or scale, as a tie-point-driven mesh correction with sparse control
+  would.
+
+This is the island-scale face of what the 50ha work already saw: adjacent frames
+of one strip registered to the drone with shifts more than 10 m apart
+([planet_training_chips_50ha.md](planet_training_chips_50ha.md)). The error is
+assigned frame by frame, and within a frame it is a smooth field of a few meters
+to a few tens of meters across 6 km.
+
 **Answer.** Over the whole island a translation is not enough: it leaves 2 m
 (0.65 px) of median residual with 85 % of scenes above one pixel at the 90th
 percentile, and about half of that residual is coherent geometry. The coherent
