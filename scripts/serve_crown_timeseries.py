@@ -28,7 +28,9 @@ from flask import Flask, Response, abort, request
 from plotly.offline import get_plotlyjs
 
 import crown_viewer_imagery as cv
-from make_crown_timeseries_html import APPLY, CROWNMAP, NC4S, build_data, render_page
+from make_crown_timeseries_html import (
+    APPLY, CROWNMAP, LABELS, NC4S, PAULINO, build_data, load_manual_labels,
+    render_page)
 
 MAX_CROP_M = 400
 MAX_CROP_PX = 2400
@@ -175,9 +177,15 @@ def make_app(data, apply_dir, planet_dir, cache_dir, alignment):
 @click.option('--simplify-m', default=0.3, show_default=True)
 @click.option('--host', default='127.0.0.1', show_default=True)
 @click.option('--port', default=8050, show_default=True)
+@click.option('--labels', default=LABELS, show_default=True,
+              help="Vicente's manual labels CSV ('' to leave out).")
+@click.option('--paulino-labels', default=PAULINO, show_default=True,
+              help="Paulino's unverified labels gpkg ('' to leave out).")
 def main(apply_dir, planet_dir, cache_dir, alignment, nc4s, store_min_clear,
-         simplify_m, host, port):
-    data = build_data(apply_dir, CROWNMAP, nc4s, store_min_clear, simplify_m)
+         simplify_m, host, port, labels, paulino_labels):
+    manual = load_manual_labels(labels, paulino_labels)
+    data = build_data(apply_dir, CROWNMAP, nc4s, store_min_clear, simplify_m,
+                      manual)
     app = make_app(data, apply_dir, planet_dir, cache_dir, alignment)
     click.echo(f'Serving on http://{host}:{port}/')
     app.run(host=host, port=port, threaded=True)

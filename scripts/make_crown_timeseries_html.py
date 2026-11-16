@@ -8,6 +8,9 @@ Planet confidence on a chosen date) above two linked time series:
 - the selected crown: drone p_flowering, p_deciduous and the training-mask
   event probability 1 - (1 - p_flowering)(1 - p_deciduous) at each flight,
   and the temporal Planet Mask R-CNN's max_score and pos_frac at each scene;
+- the manual labels of the same crown (Vicente's, and Paulino's unverified
+  ones) at the flights they were made on: flowering yes / maybe / no and
+  leafless (leafing < 50%);
 - its species: the share of crowns that are events per flight and per
   scene, with the rules of plot_crown_species_comparison.py.
 
@@ -30,6 +33,12 @@ from plot_crown_species_comparison import APPLY, NC4S, PHANTOM_END
 CROWNMAP = ('/Volumes/Earth03/flower/stri/24784053/'
             'BCI_50ha_2022_09_29_crownmap_improved/'
             'BCI_50ha_2022_09_29_crownmap_improved.shp')
+DATED_CROWNS = ('/Volumes/Earth03/flower/crowns_20240803/'
+                'BCI_50ha_crownmap_timeseries.shp')
+LABELS = '/Volumes/Earth03/flower/vicente_20260618/vicente_20260618_labels.csv'
+PAULINO = '/Volumes/Earth03/flower/vicente_202610/latest_paulino_label.gpkg'
+TRAIN_GPKG = '/Volumes/Earth03/flower/vicente_202509/flowering_dataset.gpkg'
+FLOWER_CODE = {'no': 0, 'maybe': 1, 'yes': 2}
 TEMPLATE = os.path.join(os.path.dirname(__file__),
                         'crown_timeseries_template.html')
 
@@ -59,8 +68,57 @@ def load_drone(nc4s):
     return dates, f, d, species
 
 
+def load_manual_labels(labels=LABELS, paulino=PAULINO, dated=DATED_CROWNS,
+                       train_gpkg=TRAIN_GPKG):
+    """Manual crown-date labels keyed by crown tag.
+
+    Vicente's labels (one row per annotator, keyed by crown uuid) are reduced
+    to one per crown-date with aggregate_gt_labels and bridged to tag through
+    the dated crown map, dropping crowns that share a tag. Paulino's
+    unverified labels (already keyed by tag) fill crown-dates Vicente did not
+    label. Returns a frame with tag, date (YYYY-MM-DD), fl (0 no, 1 maybe,
+    2 yes), leaf (leafing %, 0-100), src (0 Vicente, 1 Paulino) and train
+    (1 when that crown-date is one of the drone classifier's training labels).
+    """
+    from compare_classifications_to_gt import (
+        aggregate_gt_labels, load_gt, load_labels_gpkg)
+    parts = []
+    if labels:
+        gt, _ = aggregate_gt_labels(load_gt(labels))
+        pairs = gpd.read_file(dated, ignore_geometry=True,
+                              columns=['GlobalID', 'tag'])
+        pairs = pairs.rename(columns={'GlobalID': 'uuid'}).drop_duplicates()
+        pairs['tag'] = pairs['tag'].astype(int)
+        pairs = pairs[~pairs['tag'].duplicated(keep=False)
+                      & ~pairs['uuid'].duplicated(keep=False)]
+        gt = gt.merge(pairs, on='uuid')
+        gt['src'] = 0
+        parts.append(gt)
+    if paulino:
+        gt, _, _, _ = load_labels_gpkg(paulino)
+        gt, _ = aggregate_gt_labels(gt)
+        gt['tag'] = gt['uuid'].astype(int)
+        gt['src'] = 1
+        parts.append(gt)
+    if not parts:
+        return None
+    lab = pd.concat(parts, ignore_index=True)
+    lab['date'] = lab['dt'].dt.strftime('%Y-%m-%d')
+    lab = lab.sort_values('src').drop_duplicates(['tag', 'date'])
+    lab['fl'] = lab['isFlowering'].map(FLOWER_CODE)
+    lab['leaf'] = lab['leafing'].round()
+    lab['train'] = 0
+    if train_gpkg and os.path.exists(train_gpkg):
+        tr = gpd.read_file(train_gpkg, layer='flowering_dataset',
+                           ignore_geometry=True, columns=['polygon_id'])
+        lab['train'] = (lab['polygon_id'].str.replace('_', '-').isin(
+            set(tr['polygon_id'].str.replace('_', '-')))
+            & (lab['src'] == 0)).astype(int)
+    return lab[['tag', 'date', 'fl', 'leaf', 'src', 'train']]
+
+
 def build_data(apply_dir=APPLY, crownmap=CROWNMAP, nc4s=NC4S,
-               store_min_clear=0.1, simplify_m=0.3):
+               store_min_clear=0.1, simplify_m=0.3, manual=None):
     """The page's data: drone and Planet per-crown series, scenes and crown
     outlines in map coordinates (x - x0, y1 - y)."""
     dates, pf, pd_, species = load_drone(nc4s)
@@ -96,6 +154,20 @@ def build_data(apply_dir=APPLY, crownmap=CROWNMAP, nc4s=NC4S,
         return ''.join(out)
 
     tags = sorted(info.index)
+    date_idx = {str(d)[:10]: i for i, d in enumerate(dates)}
+    by_tag_labels = {}
+    if manual is not None:
+        manual = manual.assign(li=manual['date'].map(date_idx))
+        off = manual['li'].isna()
+        manual = manual[~off].astype({'li': int}).sort_values(['tag', 'li'])
+        by_tag_labels = {t: g for t, g in manual.groupby('tag')}
+        shown = manual[manual['tag'].isin(info.index)]
+        print(f'manual labels: {len(shown):,} crown-dates on '
+              f'{shown["tag"].nunique()} viewer crowns '
+              f'({int((shown["src"] == 1).sum()):,} from Paulino); '
+              f'{int(off.sum())} not on a plotted flight, '
+              f'{manual["tag"].nunique() - shown["tag"].nunique()} labeled '
+              f'crowns not in the viewer')
     planet = {t: g for t, g in obs.groupby('tag')}
     crown_rows = []
     for t in tags:
@@ -116,6 +188,13 @@ def build_data(apply_dir=APPLY, crownmap=CROWNMAP, nc4s=NC4S,
             row['pc'] = q(g['crown_clear_frac'])
             row['pm'] = q(g['max_score'])
             row['pp'] = q(g['pos_frac'])
+        m = by_tag_labels.get(t)
+        if m is not None:
+            row['li'] = m['li'].tolist()
+            row['lf'] = m['fl'].fillna(-1).astype(int).tolist()
+            row['ll'] = m['leaf'].fillna(-1).astype(int).tolist()
+            row['lsrc'] = m['src'].tolist()
+            row['ltr'] = m['train'].tolist()
         crown_rows.append(row)
 
     print(f'{len(crown_rows)} crowns, {len(dates)} flights, '
@@ -164,8 +243,15 @@ def render_page(data, plotlyjs=None):
                    'embedded; the page filters further.')
 @click.option('--simplify-m', default=0.3, show_default=True,
               help='Crown outline simplification tolerance (m).')
-def main(output, apply_dir, crownmap, nc4s, store_min_clear, simplify_m):
-    data = build_data(apply_dir, crownmap, nc4s, store_min_clear, simplify_m)
+@click.option('--labels', default=LABELS, show_default=True,
+              help="Vicente's manual labels CSV ('' to leave out).")
+@click.option('--paulino-labels', default=PAULINO, show_default=True,
+              help="Paulino's unverified labels gpkg ('' to leave out).")
+def main(output, apply_dir, crownmap, nc4s, store_min_clear, simplify_m,
+         labels, paulino_labels):
+    manual = load_manual_labels(labels, paulino_labels)
+    data = build_data(apply_dir, crownmap, nc4s, store_min_clear, simplify_m,
+                      manual)
     with open(output, 'w') as fh:
         fh.write(render_page(data))
     print(f'Wrote {output} ({os.path.getsize(output) / 1e6:.1f} MB)')

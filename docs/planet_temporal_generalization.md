@@ -556,7 +556,7 @@ scenes, matched to 74 flights.
 | all species | 14,489 | 0.56 | 0.39 | 0.048 | 0.033 |
 
 **Interactive per-crown viewer.** `make_crown_timeseries_html.py` writes one
-self-contained page (about 21 MB, with plotly.js inlined so it opens offline):
+self-contained page (about 22 MB, with plotly.js inlined so it opens offline):
 
 ```bash
 python scripts/make_crown_timeseries_html.py \
@@ -580,6 +580,28 @@ python scripts/make_crown_timeseries_html.py \
   that were not coregistered. Hovering over a point gives its clear fraction
   and its distances to the nearest drone flight and training chip. Clicking a
   point moves the map to that date.
+- **The manual-label strip** (between the two panels) shows the labels made
+  by eye on the drone images at the flights they were made on: flowering
+  yes (filled orange), maybe (open orange) or no (small gray), and leafless
+  (green, leafing below 50 %) or in leaf (small gray). Hovering gives the
+  label, its source and the drone probability on that flight.
+  - Vicente's labels (`vicente_20260618_labels.csv`, `--labels`) are reduced
+    to one per crown-date by majority vote and joined to the crown tag through
+    the dated crown map; crowns that share a tag are left out. They cover the
+    phantom flights (2018 to 2024-03-18).
+  - Paulino's unverified labels (`latest_paulino_label.gpkg`,
+    `--paulino-labels`) fill crown-dates Vicente did not label, including
+    mavic flights, and are drawn as diamonds.
+  - In all, 80,012 labeled crown-dates on 2,188 of the 2,227 crowns (1,832
+    from Paulino).
+  - The info line counts how many manual flowering and leafless dates the
+    drone classifier found, its false alarms, and how many manual events had
+    a Planet event in a clear scene within 10 days. It also says how many of
+    the crown's labels were used to train the drone classifier, where
+    agreement is expected.
+  - Two map colorings use the labels: *Manual label on date*, and *Drone vs
+    manual label on date* (agree, drone only, manual only). *Only crowns with
+    manual labels* restricts the crown list.
 - **The species panel** repeats the species shares of
   `crown_species_timeseries.png` for the selected crown's species.
 - **Filtering.** A minimum Planet clear fraction (default 0.5) filters both

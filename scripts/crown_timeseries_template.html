@@ -44,7 +44,7 @@
   #ramp { width: 160px; height: 10px; border-radius: 2px; }
   #info { margin: 8px 0 0; color: var(--ink2); }
   #info b { color: var(--ink); }
-  #ts { width: 100%; height: 560px; }
+  #ts { width: 100%; height: 640px; }
   .muted { color: var(--muted); }
 </style>
 </head>
@@ -57,7 +57,10 @@ Drone: per-crown mean probabilities from the crown classifications (phantom to
 Planet: the epoch-12 temporal Mask R-CNN on scenes between flights;
 <i>max score</i> is the highest detection score on a clear crown pixel, and
 <i>covered fraction</i> the share of clear crown pixels under a detection scoring ≥ 0.5
-(a Planet event is ≥ 0.25). Click a crown on the map, or a point in the plot to
+(a Planet event is ≥ 0.25).
+Manual: the labels made by eye on the drone images (Vicente's, and Paulino's unverified
+ones where Vicente made none), shown in the strip under the crown's series: flowering
+yes / maybe / no, and leafless when leafing is below 50%. Click a crown on the map, or a point in the plot to
 set the map date. Scroll to zoom the map and drag to pan.
 </p>
 
@@ -73,12 +76,16 @@ set the map date. Scroll to zoom the map and drag to pan.
     </select></label>
   <label class="inline" title="Planet scenes in which the model made no detection at any score plot as 0 for every crown"><input id="showempty" type="checkbox">
     Show Planet scenes with no detections</label>
+  <label class="inline" title="List only crowns that have manual labels"><input id="onlylab" type="checkbox">
+    Only crowns with manual labels</label>
   <label>Map color
     <select id="mode">
       <option value="species">Highlight species</option>
       <option value="drone">Drone event probability on date</option>
       <option value="planet">Planet max score on date</option>
       <option value="planetcov">Planet covered fraction on date</option>
+      <option value="manual">Manual label on date</option>
+      <option value="disagree">Drone vs manual label on date</option>
     </select></label>
   <div>
     <button id="prev" title="Previous flight or scene">◀</button>
@@ -123,7 +130,33 @@ for (const c of C) {
   if (c.f) c.e = c.f.map((f, i) => (f < 0 || c.d[i] < 0) ? -1
     : Math.round(100 * (1 - (1 - f / 100) * (1 - c.d[i] / 100))));
   c.nEvents = c.e ? c.e.filter(v => v > 50).length : 0;
+  c.lmap = new Map((c.li || []).map((d, k) => [d, k]));
+  c.nLab = c.li ? c.li.length : 0;
 }
+const HAS_LABELS = C.some(c => c.nLab);
+// Manual label of a crown on a flight: null when not labeled.
+function manualAt(c, di) {
+  const k = c.lmap.get(di); if (k == null) return null;
+  const fl = c.lf[k], leaf = c.ll[k];
+  return {fl, leaf, flower: fl === 2, leafless: leaf >= 0 && leaf < 50,
+          event: fl === 2 || (leaf >= 0 && leaf < 50), src: c.lsrc[k], train: c.ltr[k]};
+}
+const MAN_COL = {both: '#7a4fd0', flower: '#eb6834', leafless: '#1baf7a', maybe: '#f6c7a8', none: '#d5dde8'};
+const DIS_COL = {both: '#184f95', neither: '#d5dde8', drone: '#e8a13a', manual: '#d43d8a'};
+function manualClass(c, di) {
+  const m = manualAt(c, di); if (!m) return null;
+  return m.flower && m.leafless ? 'both' : m.flower ? 'flower' : m.leafless ? 'leafless'
+    : m.fl === 1 ? 'maybe' : 'none';
+}
+function disagreeClass(c, di) {
+  const m = manualAt(c, di); if (!m || !c.e || c.e[di] < 0) return null;
+  const dr = c.e[di] > 50;
+  return dr && m.event ? 'both' : dr ? 'drone' : m.event ? 'manual' : 'neither';
+}
+const CLASS_TEXT = {manual: {both: 'flowering and leafless', flower: 'flowering', leafless: 'leafless',
+                             maybe: 'maybe flowering', none: 'no event'},
+                    disagree: {both: 'drone and manual: event', neither: 'drone and manual: no event',
+                               drone: 'drone event, manual none', manual: 'manual event, drone none'}};
 const byTag = new Map(C.map(c => [c.tag, c]));
 
 // Scene-major Planet lookup for map coloring.
@@ -166,8 +199,10 @@ svg.addEventListener('mousemove', ev => {
   if (!t) { tip.style.display = 'none'; return; }
   const c = byTag.get(+t), r = svg.parentNode.getBoundingClientRect();
   const v = mapValue(c);
+  const k = isManual() && cur.droneI != null ? mapClass(c) : null;
   tip.innerHTML = `<b>${c.tag}</b> ${c.sp} <span class="muted">(${c.mn}, ${c.px} px)</span>` +
-    (cur.mode !== 'species' ? `<br>${v == null ? 'no data' : (v / 100).toFixed(2)}` : '');
+    (isManual() ? `<br>${k ? CLASS_TEXT[cur.mode][k] : 'no manual label'}`
+     : cur.mode !== 'species' ? `<br>${v == null ? 'no data' : (v / 100).toFixed(2)}` : '');
   tip.style.display = 'block';
   tip.style.left = Math.min(ev.clientX - r.left + 12, r.width - 260) + 'px';
   tip.style.top = (ev.clientY - r.top + 12) + 'px';
@@ -190,6 +225,8 @@ function rampColor(v) {
 function hex(h) { return [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16)); }
 
 const isPlanet = () => cur.mode === 'planet' || cur.mode === 'planetcov';
+const isManual = () => cur.mode === 'manual' || cur.mode === 'disagree';
+const mapClass = c => cur.mode === 'manual' ? manualClass(c, cur.droneI) : disagreeClass(c, cur.droneI);
 function mapValue(c) {
   if (cur.mode === 'drone' && cur.droneI != null) {
     const v = c.e ? c.e[cur.droneI] : -1; return v < 0 ? null : v;
@@ -212,6 +249,9 @@ function drawMap() {
       // Over an image, other species stay unfilled (but clickable).
       fill = (cur.sp === '__all' || c.sp === cur.sp) ? '#3987e5'
         : (L && imgLayer() !== 'none') ? 'rgba(0,0,0,0)' : '#e3e3e3';
+    } else if (isManual()) {
+      const k = cur.droneI != null ? mapClass(c) : null;
+      fill = k == null ? '#f2f2f2' : (cur.mode === 'manual' ? MAN_COL : DIS_COL)[k];
     } else {
       const v = mapValue(c);
       fill = v == null ? '#f2f2f2' : rampColor(v);
@@ -223,6 +263,13 @@ function drawMap() {
   if (cur.mode === 'species') {
     legend.innerHTML = `<svg width="12" height="12"><rect width="12" height="12" fill="#3987e5"/></svg>
       ${cur.sp === '__all' ? 'all species' : cur.sp}`;
+  } else if (isManual()) {
+    const cols = cur.mode === 'manual' ? MAN_COL : DIS_COL, n = {};
+    if (cur.droneI != null) for (const c of C) { const k = mapClass(c); if (k) n[k] = (n[k] || 0) + 1; }
+    legend.innerHTML = Object.entries(cols).map(([k, col]) =>
+      `<svg width="12" height="12"><rect width="12" height="12" fill="${col}"/></svg>
+       ${CLASS_TEXT[cur.mode][k]} (${n[k] || 0})`).join(' &nbsp;') +
+      ` &nbsp;<svg width="12" height="12"><rect width="12" height="12" fill="#f2f2f2" stroke="#ccc"/></svg> no manual label`;
   } else {
     const grad = `linear-gradient(90deg, ${RAMP.join(',')})`;
     legend.innerHTML = `0 <div id="ramp" style="background:${grad}"></div> 1
@@ -386,10 +433,14 @@ document.getElementById('fillop').addEventListener('input', applyFill);
 // ---------- crown selection ----------
 const crownSel = document.getElementById('crown');
 function fillCrowns() {
-  const list = cur.sp === '__all' ? C : spMap.get(cur.sp).crowns;
+  let list = cur.sp === '__all' ? C : spMap.get(cur.sp).crowns;
+  if (document.getElementById('onlylab').checked) {
+    const lab = list.filter(c => c.nLab); if (lab.length) list = lab;
+  }
   const sorted = [...list].sort((a, b) => b.nEvents - a.nEvents || b.px - a.px);
   crownSel.innerHTML = sorted.map(c =>
-    `<option value="${c.tag}">${c.tag} · ${c.mn} · ${c.px} px · ${c.nEvents} drone events</option>`).join('');
+    `<option value="${c.tag}">${c.tag} · ${c.mn} · ${c.px} px · ${c.nEvents} drone events` +
+    `${c.nLab ? ` · ${c.nLab} manual labels` : ''}</option>`).join('');
   return sorted;
 }
 function selectCrown(tag, fromMap) {
@@ -404,10 +455,42 @@ function selectCrown(tag, fromMap) {
   document.getElementById('info').innerHTML =
     `<b>${c.tag}</b> · <i>${c.sp}</i> (${c.mn}) · ${c.px} Planet px (${(c.px * 0.5625).toFixed(0)} m²) · ` +
     `drone events ${c.nEvents} of ${c.e ? c.e.filter(v => v >= 0).length : 0} flights · ` +
-    `Planet events ${nP} of ${nObs} clear scenes` +
+    `Planet events ${nP} of ${nObs} clear scenes` + manualSummary(c) +
     (c.px < MIN_PX ? ' · <span style="color:var(--orange)">below the 64 px training minimum</span>' : '');
   drawMap(); drawPlot();
 }
+// Agreement of the drone calls, and of the Planet calls within 10 days, with
+// the crown's manual labels.
+const NEAR_MS = 10 * 864e5;
+function manualSummary(c) {
+  if (!c.nLab) return HAS_LABELS ? ' · no manual labels' : '';
+  let nF = 0, nL = 0, hitF = 0, hitL = 0, faF = 0, faL = 0, nNoF = 0, nNoL = 0, nEv = 0, pSeen = 0, pHit = 0;
+  let nPaul = 0, nTrain = 0;
+  c.li.forEach((di, k) => {
+    const m = manualAt(c, di); nPaul += m.src; nTrain += m.train;
+    const f = c.f ? c.f[di] : -1, d = c.d ? c.d[di] : -1;
+    if (f >= 0 && m.fl !== 1) { if (m.flower) { nF++; if (f > 50) hitF++; } else { nNoF++; if (f > 50) faF++; } }
+    if (d >= 0 && m.leaf >= 0) { if (m.leafless) { nL++; if (d > 50) hitL++; } else { nNoL++; if (d > 50) faL++; } }
+    if (m.event && c.ps) {
+      nEv++;
+      let seen = false, hit = false;
+      c.ps.forEach((s, i) => {
+        if (c.pc[i] >= minClear() && Math.abs(sceneT[s] - droneT[di]) <= NEAR_MS) {
+          seen = true; if (c.pp[i] >= POS_EVENT) hit = true; }
+      });
+      if (seen) { pSeen++; if (hit) pHit++; }
+    }
+  });
+  return `<br>manual labels on ${c.nLab} flights` +
+    (nPaul ? ` (${nPaul} from Paulino, unverified)` : '') +
+    (nTrain ? ` (${nTrain} used to train the drone classifier)` : '') +
+    ` · flowering: drone found ${hitF} of ${nF}, ${faF} false alarms in ${nNoF}` +
+    ` · leafless: drone found ${hitL} of ${nL}, ${faL} false alarms in ${nNoL}` +
+    ` · Planet event within 10 d on ${pHit} of ${pSeen} manual events with a clear scene (${nEv} events)`;
+}
+document.getElementById('onlylab').addEventListener('change', () => {
+  const l = fillCrowns(); selectCrown(l.some(c => c.tag === cur.tag) ? cur.tag : l[0].tag);
+});
 spSel.addEventListener('change', () => {
   cur.sp = spSel.value; const l = fillCrowns(); selectCrown(l[0].tag);
 });
@@ -423,6 +506,10 @@ document.getElementById('minclear').addEventListener('change', () => selectCrown
 document.getElementById('mode').addEventListener('change', ev => {
   cur.mode = ev.target.value;
   if (cur.mode === 'drone' && cur.droneI == null) setDate(D.droneDates[D.droneDates.length - 1]);
+  if (isManual() && cur.droneI == null) {
+    const c = byTag.get(cur.tag);  // the crown's last labeled flight, else the last phantom flight
+    setDate(c && c.nLab ? D.droneDates[c.li[c.li.length - 1]] : D.phantomEnd);
+  }
   if (isPlanet() && cur.sceneI == null) setDate(S.date[0]);
   drawMap(); drawPlot();
 });
@@ -443,7 +530,7 @@ function setDate(dateStr, sceneI) {
 }
 // The series the ◀ ▶ buttons step: the map coloring's, else the image layer's.
 function series() {
-  if (cur.mode === 'drone') return 'drone';
+  if (cur.mode === 'drone' || isManual()) return 'drone';
   if (isPlanet()) return 'planet';
   if (L && imgLayer() === 'drone') return 'drone';
   if (L && planetLayersOn()) return 'planet';
@@ -538,6 +625,36 @@ function drawPlot() {
         visible: 'legendonly', marker: {color: key === 'in' ? '#86b6ef' : '#d6d6d6', size: 6, symbol: 'diamond'}});
     }
   }
+  if (c.nLab) {
+    const src = k => c.lsrc[k] ? 'Paulino (unverified)' : 'Vicente';
+    const pv = v => v == null || v < 0 ? 'n/a' : (v / 100).toFixed(2);
+    const row = (name, label, ks, marker, text) => traces.push({
+      x: ks.map(k => dd[c.li[k]]), y: ks.map(() => label), name, yaxis: 'y3', mode: 'markers', marker,
+      text: ks.map(text), hovertemplate: '%{x}<br>%{text}<extra></extra>'});
+    const all = c.li.map((_, k) => k);
+    const fText = k => `manual flowering: ${['no', 'maybe', 'yes'][c.lf[k]] ?? 'n/a'} (${src(k)})` +
+      `<br>drone p flowering ${pv(c.f && c.f[c.li[k]])}` + (c.ltr[k] ? '<br>drone classifier training label' : '');
+    const lText = k => `manual leafing ${c.ll[k]}% (${src(k)})<br>drone p deciduous ${pv(c.d && c.d[c.li[k]])}` +
+      (c.ltr[k] ? '<br>drone classifier training label' : '');
+    const sym = (ks, base) => ks.map(k => c.lsrc[k] ? base.replace('square', 'diamond') : base);
+    row('manual: not flowering', 'flowering', all.filter(k => c.lf[k] === 0),
+        {color: '#c4c4c4', size: 4, symbol: 'square'}, fText);
+    let ks = all.filter(k => c.lf[k] === 1);
+    row('manual: maybe flowering', 'flowering', ks,
+        {color: '#eb6834', size: 9, symbol: sym(ks, 'square-open'), line: {width: 1.5}}, fText);
+    ks = all.filter(k => c.lf[k] === 2);
+    row('manual: flowering', 'flowering', ks, {color: '#eb6834', size: 10, symbol: sym(ks, 'square')}, fText);
+    row('manual: in leaf', 'leafless', all.filter(k => c.ll[k] >= 50),
+        {color: '#c4c4c4', size: 4, symbol: 'square'}, lText);
+    ks = all.filter(k => c.ll[k] >= 0 && c.ll[k] < 50);
+    row('manual: leafless (leafing < 50%)', 'leafless', ks,
+        {color: '#1baf7a', size: 10, symbol: sym(ks, 'square')}, lText);
+    ks = all.filter(k => c.ll[k] >= 0);
+    traces.push({x: ks.map(k => dd[c.li[k]]), y: ks.map(k => 1 - c.ll[k] / 100),
+      name: 'manual leaf loss (1 − leafing)', mode: 'lines+markers', visible: 'legendonly',
+      line: {color: '#1baf7a', width: 1, dash: 'dot'}, marker: {size: 4, symbol: 'square'},
+      hovertemplate: '%{x}<br>manual leaf loss %{y:.2f}<extra></extra>'});
+  }
   const sh = speciesShares(cur.sp);
   const spName = cur.sp === '__all' ? 'all species' : cur.sp;
   traces.push({x: dd, y: sh.dn.map(([e, n]) => n ? e / n : null), name: 'species: drone share',
@@ -555,17 +672,21 @@ function drawPlot() {
   const shapes = [{type: 'line', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: 0.5, y1: 0.5,
                    line: {color: '#1a1a1a', width: 1, dash: 'dot'}}];
   if (series() && cur.date) {
-    for (const yref of ['y', 'y2']) shapes.push({type: 'line', xref: 'x', x0: cur.date, x1: cur.date,
+    for (const yref of (HAS_LABELS ? ['y', 'y3', 'y2'] : ['y', 'y2'])) shapes.push({type: 'line', xref: 'x', x0: cur.date, x1: cur.date,
       yref: yref + ' domain', y0: 0, y1: 1, line: {color: '#eb6834', width: 1.5}});
   }
   const prev = ts.layout && ts.layout.xaxis && ts.layout.xaxis.range;
   const layout = {
-    margin: {l: 60, r: 20, t: 30, b: 40}, hovermode: 'closest', showlegend: true,
+    margin: {l: 70, r: 20, t: 30, b: 40}, hovermode: 'closest', showlegend: true,
     legend: {orientation: 'h', y: 1.08, x: 0, font: {size: 11}},
     xaxis: {type: 'date', anchor: 'y2', gridcolor: '#e6e6e6', range: prev,
             rangeslider: {visible: false}},
-    yaxis: {domain: [0.42, 1], range: [-0.03, 1.03], title: {text: `crown ${c.tag}`},
+    yaxis: {domain: [HAS_LABELS ? 0.53 : 0.42, 1], range: [-0.03, 1.03], title: {text: `crown ${c.tag}`},
             gridcolor: '#e6e6e6', zeroline: false},
+    yaxis3: {domain: [0.40, 0.49], anchor: 'x', type: 'category', categoryorder: 'array',
+             categoryarray: ['leafless', 'flowering'], range: [-0.6, 1.6], visible: HAS_LABELS,
+             gridcolor: '#e6e6e6', zeroline: false, tickfont: {size: 10}, automargin: true,
+             tickvals: ['leafless', 'flowering'], ticktext: ['manual leafless', 'manual flowering']},
     yaxis2: {domain: [0, 0.32], rangemode: 'tozero', gridcolor: '#e6e6e6', zeroline: false,
              title: {text: 'share of crowns with an event<br>(flowering and/or deciduous)'}},
     annotations: [{text: `<i>${spName}</i>: crowns ≥ ${MIN_PX} px; Planet scenes with ≥ ${MIN_OBS} clear crowns`,
