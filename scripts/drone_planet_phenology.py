@@ -1232,9 +1232,12 @@ def plot_size(tabs, outdir):
     save(fig, outdir, 'planet_eval_crown_size')
 
 
-def plot_factors(fs, outdir):
-    fig, axes = plt.subplots(2, 4, figsize=(14, 6.2))
-    for ax, (col, label, _) in zip(axes.ravel(), FACTORS):
+def plot_factors(fs, outdir, factors=FACTORS, figname='planet_eval_factors'):
+    ncol = min(len(factors), 4)
+    nrow = -(-len(factors) // ncol)
+    fig, axes = plt.subplots(nrow, ncol, figsize=(3.5 * ncol, 3.1 * nrow),
+                             squeeze=False)
+    for ax, (col, label, _) in zip(axes.ravel(), factors):
         for kd, color, name in (('deciduous', C_DECID, 'leafless'),
                                 ('flowering', C_FLOWER, 'flowering')):
             t = fs[(fs['factor'] == col) & (fs['kind'] == kd) & (fs['n'] >= 20)]
@@ -1248,9 +1251,9 @@ def plot_factors(fs, outdir):
     for ax in axes[:, 0]:
         ax.set_ylabel('share of event crowns detected')
     axes[0, 0].legend(fontsize=8, frameon=False)
-    for ax in axes.ravel()[len(FACTORS):]:
+    for ax in axes.ravel()[len(factors):]:
         ax.axis('off')
-    save(fig, outdir, 'planet_eval_factors')
+    save(fig, outdir, figname)
 
 
 def plot_manual(mt, outdir):
@@ -1328,6 +1331,8 @@ def evaluate(outdir, n_boot):
     fs = factor_stats(ev)
     fs.to_csv(mat / 'planet_eval_factors.csv', index=False)
     plot_factors(fs, outdir)
+    plot_factors(fs, outdir, [f for f in FACTORS if f[0] in ('p_event', 'gt_frac')],
+                 'planet_eval_factors_label')
     lg = detection_logit(ev, min(n_boot, 100), rng)
     lg.to_csv(mat / 'planet_eval_detection_logit.csv', index=False)
     click.echo('\nlogistic model of detection (temporal CV event crown-dates)')
