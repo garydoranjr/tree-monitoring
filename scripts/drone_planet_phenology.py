@@ -1303,7 +1303,7 @@ def evaluate(outdir, n_boot):
         tabs[name] = size_stats_ci(df, n_boot, rng).assign(source=name)
     size = pd.concat(tabs.values(), ignore_index=True)
     size.to_csv(mat / 'planet_eval_crown_size.csv', index=False)
-    plot_size(tabs, outdir)
+    plot_size({'temporal': tabs['temporal']}, outdir)
     click.echo(size[['source', 'bin', 'n', 'n_flowering', 'n_deciduous',
                      'recall_flowering', 'recall_deciduous', 'false_alarm',
                      'precision', 'auroc', 'auroc_flowering', 'auroc_deciduous',
