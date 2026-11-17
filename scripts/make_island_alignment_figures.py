@@ -52,7 +52,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import island_coreg as ic  # noqa: E402
 import island_coreg_diagnose as dg  # noqa: E402
 
-DEFAULT_OUT = ic.FLOWER / 'figs' / '20261117_updates'
+DEFAULT_OUT = ic.FLOWER / 'figs' / '20261118_updates'
+FINAL = 'Ra'  # the correction that is applied: model R (affine or shift + RPC tilt) anchored to the drone mosaic
+CP = 'r'      # prefix of its coefficient columns in scene_models.csv
 W = 12.5  # slide width, inches
 RES = ic.RES
 CROWNS = ic.FLOWER / 'crowns_20240803' / 'BCI_50ha_crownmap_timeseries.shp'
@@ -83,7 +85,7 @@ def save(fig, outdir, name, caption):
 
 def models_table():
     sm = pd.read_csv(ic.RESULTS / 'scene_models.csv', parse_dates=['acquired'])
-    return sm[(sm.band == 'both') & sm.med_H.notna()].set_index('scene_id')
+    return sm[(sm.band == 'both') & sm.med_H.notna() & sm.med_R.notna()].set_index('scene_id')
 
 
 def master_k():
@@ -103,7 +105,7 @@ def example_scene():
 
 
 def scene_field(scene_id):
-    """Tile lattice table of one scene (red band) with the parts of its H model, all
+    """Tile lattice table of one scene (red band) with the parts of its R model, all
     in meters east/north and with the scene's median displacement removed."""
     t = pd.read_csv(ic.RESULTS / 'tiles' / f'{scene_id}.csv')
     t = dg.add_lattice(t[t.band == 'red'])
@@ -114,13 +116,13 @@ def scene_field(scene_id):
     parts = {}
     for comp, sgn, d in (('n', -1, 'y'), ('e', 1, 'x')):
         meas = sgn * RES * t[f'd{d}_px']
-        aff = sgn * RES * (row[f'h_c0_{d}'] + row[f'h_cr_{d}'] * t.row + row[f'h_cc_{d}'] * t.col)
-        elev = sgn * RES * row[f'h_ch_{d}'] * (t.h - ic.HREF)
+        aff = sgn * RES * (row[f'{CP}_c0_{d}'] + row[f'{CP}_cr_{d}'] * t.row + row[f'{CP}_cc_{d}'] * t.col)
+        elev = sgn * RES * row[f'{CP}_ch_{d}'] * (t.h - ic.HREF)
         t[f'meas_{comp}'] = meas - meas.median()
         t[f'aff_{comp}'] = aff - aff.median()
         t[f'elev_{comp}'] = elev - elev.median()
         t[f'res_{comp}'] = (meas - aff - elev) - (meas - aff - elev).median()
-        parts[comp] = sgn * RES * row[f'h_ch_{d}'] * 100
+        parts[comp] = sgn * RES * row[f'{CP}_ch_{d}'] * 100
     l, b, r, top = ic.ISLAND_BOUNDS
     t['x'], t['y'] = l + RES * t.col, top - RES * t.row
     return t, parts, row
@@ -305,6 +307,9 @@ def method(outdir, scene):
             fig.text(x0 + i * (w + gap) + w + gap / 2, 0.43, '=' if i == 0 else '+', fontsize=20, ha='center',
                      va='center')
     fig.suptitle(f'PlanetScope {scene_title(scene, row)}', fontsize=FS, y=0.99, color='0.3')
+    src = ('not fitted: it is the tilt of the scene\'s RPC, its line of sight minus the view direction reported in '
+           'the metadata, relative to the same quantity for the master' if row.elev_source == 'rpc' else
+           'fitted with the affine, because this scene has no RPC on disk')
     save(fig, outdir, 'island_align_method', f"""
         The correction model applied to one scene ({scene}). Each panel shows displacement vectors of the scene's
         192 m matching tiles relative to the master scene {ic.MASTER} (arrows; color and length give the magnitude,
@@ -313,8 +318,9 @@ def method(outdir, scene):
         (scale, rotation and shear); the part proportional to terrain elevation
         ({k['n']:+.1f} m north and {k['e']:+.1f} m east per 100 m of elevation in this scene, relative to the
         master); and the remainder after both are removed, which is at the level of the matching noise
-        (about 1.1 m). The eight coefficients are fitted per scene by least squares over the tiles, and the
-        correction is applied to every 3 m pixel using the elevation model.""")
+        (about 1.1 m). The elevation part is {src}; the six affine coefficients are fitted per scene by least
+        squares over the tiles after it is removed, and the correction is applied to every 3 m pixel using the
+        elevation model.""")
 
 
 # --------------------------------------------------------------------------- steps
@@ -351,7 +357,7 @@ def steps(outdir, scene):
     fig = plt.figure(figsize=(W, H))
     w, gap, x0, y0, h = 0.178, 0.0245, 0.006, 0.03, 0.74
     xs = [x0 + i * (w + gap) for i in range(5)]
-    titles = ['1  Match each tile', '2  Displacement of all tiles', '3  Fit affine + elevation',
+    titles = ['1  Match each tile', '2  Displacement of all tiles', '3  Affine fit + RPC tilt',
               '4  Tie to the drone mosaic', '5  Move every pixel']
     for x, title in zip(xs, titles):
         fig.text(x + w / 2, y0 + h + 0.035, title, ha='center', va='bottom', fontsize=FS_T)
@@ -404,7 +410,7 @@ def steps(outdir, scene):
     ax = fig.add_axes([xs[3], y0, w, h])
     island_axes(ax, hs, vmin=-0.3, vmax=1.3)
     ax.set_anchor('N')
-    c = ic.master_anchor()
+    c = ic.master_anchor(kind=FINAL[0])
     X = np.stack([np.ones(len(t)), t.row, t.col, t.h - ic.HREF], axis=1)
     t['anc_e'], t['anc_n'] = RES * (X @ c[1]), -RES * (X @ c[0])
     quiver(ax, t, 'anc', 0.035, step=2)
@@ -412,7 +418,7 @@ def steps(outdir, scene):
     # 5: per-pixel correction (scene to master plus master to drone)
     ax = fig.add_axes([xs[4], y0, w, h])
     island_axes(ax)
-    dy, dx = ic.displacement_maps(ic.load_model(ic.model_path(ic.RESULTS, scene)), 'Ha')
+    dy, dx = ic.displacement_maps(ic.load_model(ic.model_path(ic.RESULTS, scene)), FINAL)
     mag = np.where(land, RES * np.hypot(dy, dx), np.nan)
     im = ax.imshow(mag, extent=ic.extent(), cmap='plasma', vmin=np.nanpercentile(mag, 1), vmax=np.nanpercentile(mag, 99))
     ic.island_outline().boundary.plot(ax=ax, color='k', lw=0.6)
@@ -423,6 +429,7 @@ def steps(outdir, scene):
     cb.set_label('correction (m)', fontsize=FS_S, labelpad=2)
     cb.ax.tick_params(labelsize=FS_S - 1, length=2)
     fig.suptitle(f'PlanetScope {scene_title(scene, row)}', fontsize=FS, y=0.985, color='0.3')
+    nanchor = json.loads((ic.RESULTS / 'master_abs.json').read_text()).get('R_n', 0)
     save(fig, outdir, 'island_align_steps', f"""
         The alignment procedure, step by step, on one PlanetScope scene ({scene}). (1) The island is cut into
         192 m tiles every 96 m; each tile of the scene is compared with the same tile of the master scene
@@ -435,13 +442,15 @@ def steps(outdir, scene):
         pixel by Lucas-Kanade. (2) The resulting displacement of every tile (arrows; color and length give the
         magnitude, key 10 m) with the scene's median shift removed, over a hillshade of the Copernicus GLO-30
         elevation model; the square marks the tile of panel 1, and tiles with a correlation peak below 0.35 or
-        more than 2 pixels from the median of their neighbors are dropped. (3) The model fitted to those
-        vectors in one robust least-squares fit: a displacement linear in map position (affine) and in terrain
-        elevation, eight coefficients per scene, drawn on the same scale. (4) The master scene's own displacement
-        relative to the 2024-10-14 whole-island drone orthomosaic, modeled the same way and estimated once as the
-        median over 53 scenes of the difference between a scene's fit against the drone mosaic and its fit
-        against the master (same arrow scale, every second tile, median shift included); it is added to every
-        scene's model. (5) The correction applied to this scene: magnitude of the total displacement at every 3 m
+        more than 2 pixels from the median of their neighbors are dropped. (3) The model of those vectors,
+        drawn on the same scale: a displacement proportional to terrain elevation that is not fitted but read
+        from the scene's RPC (the tilt of its line of sight against the view direction in the metadata, relative
+        to the master's), plus a displacement linear in map position (affine, six coefficients) fitted by robust
+        least squares to what is left. (4) The master scene's own displacement relative to the 2024-10-14
+        whole-island drone orthomosaic: its elevation part from its own RPC tilt, and its affine part estimated
+        once as the median over {nanchor} scenes of the difference between a scene's fit against the drone mosaic
+        and its fit against the master (same arrow scale, every second tile, median shift included); it is added
+        to every scene's model. (5) The correction applied to this scene: magnitude of the total displacement at every 3 m
         pixel (color, meters), computed from the summed model and the elevation model, by which the scene is
         resampled.""")
 
@@ -450,11 +459,11 @@ def steps(outdir, scene):
 
 def drone_offsets():
     """Per scene matched to the drone mosaic: median tile distance from the drone as
-    delivered and after the drone-anchored affine + elevation correction."""
+    delivered and after the drone-anchored correction (model FINAL)."""
     t = dg.add_lattice(pd.read_csv(dg.DIAG / 'drone_tiles.csv.gz'))
     t = t[(t.band == 'red') & t.global_ok]
     sm = models_table()
-    anchor = ic.master_anchor()
+    anchor = ic.master_anchor(kind=FINAL[0])
     h = ic.tile_elevation()
     rows = []
     for s, d in t.groupby('scene_id'):
@@ -462,7 +471,7 @@ def drone_offsets():
             c = anchor
         elif s in sm.index:
             r = sm.loc[s]
-            c = anchor + np.array([[r[f'h_{k}_{a}'] for k in ('c0', 'cr', 'cc', 'ch')] for a in ('y', 'x')])
+            c = anchor + np.array([[r[f'{CP}_{k}_{a}'] for k in ('c0', 'cr', 'cc', 'ch')] for a in ('y', 'x')])
         else:
             continue
         X = np.stack([np.ones(len(d)), d.row, d.col, h[d.ri, d.ci] - ic.HREF], axis=1)
@@ -480,8 +489,8 @@ def result(outdir):
     fig.subplots_adjust(left=0.06, right=0.985, bottom=0.15, top=0.88, wspace=0.2)
     ax = axes[0]
     rm = pd.read_csv(ic.RESULTS / 'remeasure.csv')
-    kinds = ['T', 'A', 'L', 'H']
-    labels = ['translation', 'affine', 'local warp', 'affine\n+ elevation']
+    kinds = ['T', 'A', 'L', 'H', 'R']
+    labels = ['translation', 'affine', 'local warp', 'affine\n+ fitted\nelevation', 'affine\n+ RPC tilt']
     med = rm.groupby('model')[['med_high_px', 'med_low_px']].median().reindex(kinds) * RES
     x = np.arange(len(kinds))
     ax.bar(x - 0.2, med.med_high_px, 0.4, color=C_HIGH, label='central plateau')
@@ -491,8 +500,8 @@ def result(outdir):
         ax.text(xi + 0.2, b - 0.05, f'{b:.1f}', ha='center', va='top', fontsize=FS_S, color='white')
     noise = RES * models_table().noise_px.median()
     ax.axhline(noise, color='k', ls='--', lw=0.9)
-    ax.set_xlim(-0.55, 4.45)
-    ax.text(4.42, noise + 0.05, 'matching noise', fontsize=FS_S, ha='right')
+    ax.set_xlim(-0.55, 5.45)
+    ax.text(5.42, noise + 0.05, 'matching noise', fontsize=FS_S, ha='right')
     ax.set_xticks(x)
     ax.set_xticklabels(labels, fontsize=FS)
     ax.set_ylabel('residual misalignment (m)', fontsize=FS)
@@ -520,12 +529,13 @@ def result(outdir):
         as the median over {rm.scene_id.nunique()} scenes (2020-2026, at least 80 % of the island clear) of the
         median displacement of 192 m matching tiles re-measured in the red band, for tiles on the central plateau
         (brown, mean elevation of at least 120 m) and on lower ground (green). The models are one translation per
-        scene, an affine, a local warp (affine plus a 144 m Gaussian-smoothed residual field) and an affine plus a
-        term proportional to elevation; the dashed line is the matching noise floor ({noise:.1f} m, the median
+        scene, an affine, a local warp (affine plus a 144 m Gaussian-smoothed residual field), an affine plus a
+        fitted term proportional to elevation, and an affine plus the elevation term given by the tilt of the
+        scene's RPC against its reported view direction (fitted where no RPC is on disk); the dashed line is the matching noise floor ({noise:.1f} m, the median
         red-versus-near-infrared disagreement of a tile's displacement divided by the square root of 2). Right:
         median distance of each scene's tiles from the 2024-10-14 whole-island drone orthomosaic (20 cm, averaged
         to 3 m), for the {len(d)} scenes matched to it, as delivered by Planet (orange; values above 20 m in the
-        last bin) and after the affine + elevation correction anchored to the drone mosaic (green, computed by
+        last bin) and after the affine + RPC tilt correction anchored to the drone mosaic (green, computed by
         subtracting each scene's model from its measured displacements); the dotted line marks one 3 m pixel. The
         corrected value includes the cross-sensor matching noise of about 1 m.""")
     click.echo(d[['before_m', 'after_m', 'after_high_m']].describe().round(2).to_string())
@@ -543,7 +553,7 @@ def pick_frames(n, b, min_clear=0.995):
     for r in sc.itertuples():
         m = ic.load_model(ic.model_path(ic.RESULTS, r.scene_id))
         c = (win[0] + win[1]) // 2, (win[2] + win[3]) // 2
-        dy, dx = ic.displacement_maps(m, 'Ha', window=(c[0], c[0] + 1, c[1], c[1] + 1))
+        dy, dx = ic.displacement_maps(m, FINAL, window=(c[0], c[0] + 1, c[1], c[1] + 1))
         rows.append(dict(scene_id=r.scene_id, off_m=RES * float(np.hypot(dy, dx)[0, 0]),
                          east=RES * float(dx[0, 0]), north=-RES * float(dy[0, 0])))
     d = pd.DataFrame(rows).sort_values('off_m', ascending=False)
@@ -623,7 +633,7 @@ def compare(outdir, n, hold, dpi):
         sr = ic.read_island(ic.scene_paths(fr.scene_id)[0], [3, 2, 1]).astype(np.float32)
         raw = sr[:, r0:r1, c0:c1]
         model = ic.load_model(ic.model_path(ic.RESULTS, fr.scene_id))
-        dy, dx = ic.displacement_maps(model, 'Ha', window=win)
+        dy, dx = ic.displacement_maps(model, FINAL, window=win)
         cor = np.stack(ic.warp_arrays(list(sr), dy, dx, [3] * 3, [0] * 3, window=win))
         lo = np.percentile(raw, 1, axis=(1, 2))
         hi = np.percentile(raw, 99.7, axis=(1, 2))
@@ -652,7 +662,7 @@ def compare(outdir, n, hold, dpi):
         of Barro Colorado Island inside the 50ha plot. Left: the whole-island drone orthomosaic of 2024-10-14
         (20 cm), fixed in every frame. Middle: each PlanetScope scene as delivered (Planet's orthorectified surface
         reflectance, 3 m, true color with a per-scene 1-99.7 percentile stretch). Right: the same scene after the
-        affine + elevation correction anchored to the drone mosaic (bicubic resampling). Yellow outlines are the
+        affine + RPC tilt correction anchored to the drone mosaic (bicubic resampling). Yellow outlines are the
         {len(crowns)} crowns of at least 250 m2 in the 2024 drone crown map, drawn at the same position in every
         panel and frame as reference marks. The sequence shows the {len(frames)} scenes that were furthest from
         their ground position at this window as delivered ({frames.off_m.min():.0f}-{frames.off_m.max():.0f} m; the

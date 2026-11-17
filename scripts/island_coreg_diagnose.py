@@ -57,7 +57,7 @@ import island_coreg as ic  # noqa: E402
 RESULTS = ic.RESULTS
 DIAG = RESULTS / 'diagnose'
 FIGS = ic.FLOWER / 'figs' / '20261116_updates'
-BASIC = ic.FLOWER / 'csdap' / 'planet'
+BASIC = ic.BASIC
 ORTHO1B = ic.FLOWER / 'planet_bci_1b_ortho'
 DEM_SRC = ic.DEM_DIR / f'{ic.DEM_NAME}.tif'
 RES = ic.RES
@@ -519,8 +519,9 @@ def orthocmp(jobs):
     click.echo(r.groupby('island_instrument')[['offset_m', 'med_T_m', 'affine_amp_m']].median().round(3).to_string())
 
 
-def fit_pairs(df):
-    """T/A/L fit (red, NIR referred to red) per (scene, ref) of a multi table."""
+def fit_pairs(df, tilts=None):
+    """T/A/L/H fit (red, NIR referred to red) per (scene, ref) of a multi table. With
+    `tilts` (scene_id -> elevation coefficients in px per m, or None) also model R."""
     rows = []
     for (s, r), d in df[df.global_ok].groupby(['scene_id', 'ref_id']):
         red, nir = d[d.band == 'red'], d[d.band == 'nir'].copy()
@@ -531,7 +532,7 @@ def fit_pairs(df):
             nir['dx_px'] -= nir.dx_px.median() - red.dx_px.median()
         both = pd.concat([red, nir], ignore_index=True)[['band', 'row', 'col', 'dy_px', 'dx_px', 'peak',
                                                          'valid_frac', 'method']]
-        out, tdf, _ = ic.fit_scene(both, None)
+        out, tdf, _ = ic.fit_scene(both, None, tilt='skip' if tilts is None else tilts.get(s))
         if tdf is None:
             continue
         inb = band_mask()[tdf.ri, tdf.ci]
@@ -589,7 +590,10 @@ def drone(jobs, n, min_clear):
     ids = [ic.MASTER] + [s for s in c.sort_values('dt').index[:n] if s != ic.MASTER]
     df = run_pairs([(s, DRONE) for s in ids], 'drone', DIAG / 'pairs_drone', jobs)
     df.to_csv(DIAG / 'drone_tiles.csv.gz', index=False)
-    f = fit_pairs(df).set_index('scene_id')
+    # against the drone the elevation term of model R is the scene's whole tilt, not the tilt relative to the master
+    tl = ic.load_tilts()
+    abs_tilt = {s: np.array([-tl[s][1], tl[s][0]]) / (RES * 100) for s in ids if s in tl}
+    f = fit_pairs(df, abs_tilt).set_index('scene_id')
     f.to_csv(DIAG / 'drone_fits.csv')
     click.echo(f'{len(f)} of {len(ids)} scenes matched to the drone mosaic; median tile peak {f.peak.median():.2f}; '
                f'median residual T {RES * f.med_T.median():.2f} m, A {RES * f.med_A.median():.2f} m, '
@@ -601,8 +605,25 @@ def drone(jobs, n, min_clear):
     out = dict(n=len(est), median={p: float(est[p].median()) for p in H_PARAMS},
                mad={p: float(mad(est[p])) for p in H_PARAMS},
                direct={p: float(f.loc[ic.MASTER, p]) for p in H_PARAMS} if ic.MASTER in f.index else None)
+    # the same for model R: planar terms as the median of (scene vs drone) - (scene vs master), each fitted
+    # with the scene's elevation term fixed at its RPC tilt; elevation term = the master's own RPC tilt
+    R_PARAMS = ['r' + p[1:] for p in H_PARAMS]
+    if 'r_c0_y' in sm and 'r_c0_y' in f:
+        jr = f[R_PARAMS].join(sm[R_PARAMS], rsuffix='_rel', how='inner')
+        jr = jr[jr.index != ic.MASTER].dropna()
+        est_r = pd.DataFrame({p: jr[p] - jr[f'{p}_rel'] for p in R_PARAMS})
+        r = {'h' + p[1:]: float(est_r[p].median()) for p in R_PARAMS}
+        if ic.MASTER in tl:
+            r['h_ch_y'], r['h_ch_x'] = -tl[ic.MASTER][1] / (RES * 100), tl[ic.MASTER][0] / (RES * 100)
+        out['R'] = r
+        out['R_n'] = len(est_r)
+        out['R_mad'] = {'h' + p[1:]: float(mad(est_r[p])) for p in R_PARAMS}
+        click.echo(f'model R anchor from {len(est_r)} scenes: offset at the island origin '
+                   f'{RES * r["h_c0_y"]:+.2f}, {RES * r["h_c0_x"]:+.2f} px->m (dy, dx); elevation term from the '
+                   f'master RPC {-r["h_ch_y"] * RES * 100:+.2f} N, {r["h_ch_x"] * RES * 100:+.2f} E m per 100 m '
+                   f'(drone tie: {-out["median"]["h_ch_y"] * RES * 100:+.2f} N, {out["median"]["h_ch_x"] * RES * 100:+.2f} E)')
     (DIAG / 'master_abs.json').write_text(json.dumps(out, indent=1))
-    (RESULTS / 'master_abs.json').write_text(json.dumps(out, indent=1))  # read by island_coreg.py (model Ha)
+    (RESULTS / 'master_abs.json').write_text(json.dumps(out, indent=1))  # read by island_coreg.py (models Ha, Ra)
     kn, ke = -est.h_ch_y * RES * 100, est.h_ch_x * RES * 100
     click.echo(f'master elevation term from {len(est)} scenes: north {kn.median():+.2f} (MAD {mad(kn):.2f}), '
                f'east {ke.median():+.2f} (MAD {mad(ke):.2f}) m per 100 m; direct: '
@@ -639,13 +660,18 @@ def crosscheck(shifts):
         m = ic.load_model(p)
         row = dict(scene_id=s)
         for kind in ic.MODELS:
-            dy, dx = ic.displacement_maps(m, kind, window=win)
+            try:
+                dy, dx = ic.displacement_maps(m, kind, window=win)
+            except KeyError:
+                continue
             row[f'{kind}_east'], row[f'{kind}_north'] = RES * float(dx[0, 0]), -RES * float(dy[0, 0])
         rows.append(row)
     j = pd.DataFrame(rows).merge(d, on='scene_id')
     j.to_csv(DIAG / 'plot_crosscheck.csv', index=False)
     click.echo(f'{len(j)} scenes with an island model and a Planet-to-drone shift')
     for kind in ic.MODELS:
+        if f'{kind}_east' not in j:
+            continue
         # the sign of the drone shift relative to the island convention is fixed by the data
         best = None
         for sg in (1, -1):
@@ -654,90 +680,16 @@ def crosscheck(shifts):
             dis = np.hypot(e - e.median(), n - n.median())
             if best is None or dis.median() < best[0]:
                 best = (dis.median(), (dis <= 3).mean(), sg)
-        click.echo(f'  {ic.MODEL_NAMES[kind]:28s} median disagreement {best[0]:.2f} m, within 3 m {best[1]:.0%} '
+        click.echo(f'  {ic.MODEL_NAMES[kind]:36s} median disagreement {best[0]:.2f} m, within 3 m {best[1]:.0%} '
                    f'(sign {best[2]:+d})')
 
 
 # --------------------------------------------------------------------------- Planet metadata and RPC line of sight
 
-META_KEYS = ['ground_control', 'quality_category', 'publishing_stage', 'cloud_cover', 'clear_percent',
-             'visible_percent', 'clear_confidence_percent', 'anomalous_pixels', 'gsd', 'published', 'updated']
-XML_KEYS = {'elevation_model': 'ps:elevationCorrectionApplied', 'geo_level': 'ps:geoCorrectionLevel',
-            'processor_version': 'eop:processorVersion', 'incidence_angle': 'eop:incidenceAngle',
-            'scan_azimuth': 'ps:azimuthAngle', 'xml_view_angle': 'ps:spaceCraftViewAngle'}
-RPC_H0 = 27.0  # m, lake level: the height of most of the tie points available around the island
-_RPC_GROUPS = ('LINE_NUM_COEFF', 'LINE_DEN_COEFF', 'SAMP_NUM_COEFF', 'SAMP_DEN_COEFF')
-
-
-def rpc_txt_path(scene_id):
-    return BASIC / f'PSScene-{scene_id}' / 'assets' / 'basic_analytic_4b_rpc' / f'{scene_id}_1B_AnalyticMS_RPC.TXT'
-
-
-def scene_metadata(scene_id, sr_path):
-    """Planet's item properties (order metadata.json) and the ortho product XML fields
-    that describe the geometric processing of one scene."""
-    import re
-    d = Path(sr_path).parent
-    out = {}
-    j = d / f'{scene_id}_metadata.json'
-    if j.exists():
-        p = json.loads(j.read_text())['properties']
-        out.update({k: p.get(k) for k in META_KEYS})
-    for x in d.glob(f'{scene_id}_3B_AnalyticMS_metadata*.xml'):
-        txt = x.read_text()
-        for k, tag in XML_KEYS.items():
-            m = re.search(rf'<{tag}[^>]*>([^<]*)<', txt)
-            if m:
-                v = m.group(1).strip()
-                out[k] = v if k in ('elevation_model', 'geo_level', 'processor_version') else float(v)
-        break
-    return out
-
-
-def load_rpc(path):
-    kv = dict(line.split(':', 1) for line in Path(path).read_text().splitlines() if ':' in line)
-    rpc = {k: float(v) for k, v in kv.items() if not k.startswith(_RPC_GROUPS)}
-    for g in _RPC_GROUPS:
-        rpc[g] = np.array([float(kv[f'{g}_{i}']) for i in range(1, 21)])
-    return rpc
-
-
-def rpc_project(rpc, lon, lat, h):
-    """Ground (lon, lat, height) to image (line, sample) with the RPC00B rational polynomial."""
-    L = (lon - rpc['LONG_OFF']) / rpc['LONG_SCALE']
-    P = (lat - rpc['LAT_OFF']) / rpc['LAT_SCALE']
-    H = (h - rpc['HEIGHT_OFF']) / rpc['HEIGHT_SCALE']
-    t = np.array([1, L, P, H, L * P, L * H, P * H, L * L, P * P, H * H, P * L * H, L ** 3, L * P * P, L * H * H,
-                  L * L * P, P ** 3, P * H * H, L * L * H, P * P * H, H ** 3])
-    line = (rpc['LINE_NUM_COEFF'] @ t) / (rpc['LINE_DEN_COEFF'] @ t) * rpc['LINE_SCALE'] + rpc['LINE_OFF']
-    samp = (rpc['SAMP_NUM_COEFF'] @ t) / (rpc['SAMP_DEN_COEFF'] @ t) * rpc['SAMP_SCALE'] + rpc['SAMP_OFF']
-    return np.array([line, samp])
-
-
-def rpc_ground(rpc, line, samp, h, start):
-    """Image (line, sample) at height `h` to ground (lon, lat): Newton inverse of rpc_project."""
-    x = np.array(start, float)
-    t = np.array([line, samp], float)
-    eps = 1e-5
-    for _ in range(8):
-        f = rpc_project(rpc, x[0], x[1], h) - t
-        J = np.stack([(rpc_project(rpc, x[0] + eps, x[1], h) - t - f) / eps,
-                      (rpc_project(rpc, x[0], x[1] + eps, h) - t - f) / eps], axis=1)
-        x = x - np.linalg.solve(J, f)
-    return x
-
-
-def rpc_los(rpc, lon, lat, h0=RPC_H0, dh=100.0):
-    """Line of sight of the RPC at a ground point: (east, north) m by which the ground
-    position of one image pixel moves when the assumed height rises by `dh`, and the
-    image position of the point. Points up the line of sight, toward the satellite."""
-    from pyproj import Transformer
-    p0 = rpc_project(rpc, lon, lat, h0)
-    x = rpc_ground(rpc, p0[0], p0[1], h0 + dh, (lon, lat))
-    tr = Transformer.from_crs('EPSG:4326', ic.CRS, always_xy=True)
-    e0, n0 = tr.transform(lon, lat)
-    e1, n1 = tr.transform(x[0], x[1])
-    return e1 - e0, n1 - n0, p0
+# the helpers live in island_coreg.py (model R uses them at fit time)
+META_KEYS, XML_KEYS, RPC_H0 = ic.META_KEYS, ic.XML_KEYS, ic.RPC_H0
+rpc_txt_path, scene_metadata, load_rpc = ic.rpc_txt_path, ic.scene_metadata, ic.load_rpc
+rpc_project, rpc_ground, rpc_los = ic.rpc_project, ic.rpc_ground, ic.rpc_los
 
 
 def _vector_fit(y_e, y_n, x_e, x_n):
@@ -767,26 +719,7 @@ def metadata():
     lon, lat = Transformer.from_crs(ic.CRS, 'EPSG:4326', always_xy=True).transform(cx, cy)
 
     def describe(s, view_angle, satellite_azimuth):
-        row = dict(scene_id=s, view_angle=view_angle, satellite_azimuth=satellite_azimuth)
-        row.update(scene_metadata(s, idx.loc[s, 'sr_path']))
-        inc = row.get('incidence_angle', np.nan)
-        if not np.isfinite(inc):  # ground incidence from the spacecraft off-nadir angle at ~475 km
-            inc = np.degrees(np.arcsin(np.clip((6371 + 475) / 6371 * np.sin(np.radians(view_angle)), -1, 1)))
-        az = np.radians(satellite_azimuth)
-        row.update(meta_los_east=100 * np.tan(np.radians(inc)) * np.sin(az),
-                   meta_los_north=100 * np.tan(np.radians(inc)) * np.cos(az))
-        p = rpc_txt_path(s)
-        if p.exists():
-            # the metadata angles describe the frame center, so that is where the RPC is compared
-            # with them; the island is elsewhere in the frame, where the look direction differs
-            rpc = load_rpc(p)
-            c = rpc_ground(rpc, rpc['LINE_OFF'], rpc['SAMP_OFF'], RPC_H0, (rpc['LONG_OFF'], rpc['LAT_OFF']))
-            e, n, _ = rpc_los(rpc, c[0], c[1])
-            ie, in_, pix = rpc_los(rpc, lon, lat)
-            row.update(rpc_los_east=e, rpc_los_north=n, rpc_island_los_east=ie, rpc_island_los_north=in_,
-                       line_frac=(pix[0] - rpc['LINE_OFF']) / rpc['LINE_SCALE'],
-                       samp_frac=(pix[1] - rpc['SAMP_OFF']) / rpc['SAMP_SCALE'])
-        return row
+        return ic.scene_los(s, idx.loc[s, 'sr_path'], view_angle, satellite_azimuth, (lon, lat))
 
     rows = []
     for s, r in sm.iterrows():
@@ -884,9 +817,12 @@ def save_fig(fig, name, caption):
 
 
 @cli.command()
-def figures():
-    """Figures and captions (figs/20261116_updates/island_diag_*)."""
+@click.option('--outdir', type=click.Path(file_okay=False, path_type=Path), default=FIGS, show_default=True)
+def figures(outdir):
+    """Figures and captions (island_diag_*)."""
     import matplotlib.pyplot as plt
+    global FIGS
+    FIGS = outdir
     sp = pd.read_csv(DIAG / 'spread_tiles.csv')
     cl = pd.read_csv(DIAG / 'closure_tiles_planet.csv')
     cl = cl[cl.band == 'red']
@@ -966,7 +902,7 @@ outside); displacements that are real close to zero, false matches do not.
     ax.legend(fontsize=8)
     ax = axes[2]
     rm = pd.read_csv(RESULTS / 'remeasure.csv')
-    kinds = [k for k in ('T', 'A', 'L', 'H', 'HL') if k in set(rm.model)]
+    kinds = [k for k in ('T', 'A', 'L', 'H', 'HL', 'R') if k in set(rm.model)]
     x = np.arange(len(kinds))
     med = rm.groupby('model')[['med_high_px', 'med_low_px']].median().reindex(kinds) * RES
     ax.bar(x - 0.2, med.med_high_px, 0.4, color='#8c564b', label='plateau tiles (>= 120 m a.s.l.)')
@@ -998,30 +934,6 @@ over scenes of the red-versus-near-infrared disagreement of a tile's displacemen
 of 2).
 """)
     plt.close(fig)
-
-    # captions of the two videos rendered by island_coreg.py video into the same folder
-    n = rm.scene_id.nunique()
-    medH = RES * rm[rm.model == 'H'].med_px.median()
-    (FIGS / 'island_coreg_sequence_caption.md').write_text(f"""
-Time-lapse of Barro Colorado Island from {n} PlanetScope scenes (2020-2026, at least 80 % of the island clear
-by OmniCloudMask), each resampled bilinearly to the 3 m island grid with its own affine + elevation model (a
-displacement linear in map position and in Copernicus GLO-30 elevation, fitted to 192 m tile matches against
-the master scene {ic.MASTER}) and then moved into the frame of the 2024-10-14 drone orthomosaic with the
-master's own affine + elevation model. True color (red, green, blue surface reflectance with per-scene MODIS
-offsets) on one fixed stretch, 6 frames per second; the white line is the island outline, gray is no data.
-Each frame is labeled with its date, satellite, island clear fraction and the median tile displacement
-re-measured against the master after warping (median over scenes {medH:.2f} m).
-""".strip() + '\n')
-    (FIGS / 'island_coreg_comparison_caption.md').write_text(f"""
-The same {n} PlanetScope scenes (2020-2026, at least 80 % of the island clear) over a 900 m window on the
-central plateau of Barro Colorado Island, which contains the 50ha plot, aligned to the master scene
-{ic.MASTER} with three models side by side: one translation per scene (left), the local warp (an affine plus
-a 144 m Gaussian-smoothed residual field, center) and the affine + elevation model (right). True color surface
-reflectance with per-scene MODIS offsets on one fixed stretch, 3 frames per second; the yellow lines are fixed
-marks every 150 m against which motion of the canopy between frames can be judged. The title gives each
-scene's date, satellite, clear fraction and its median tile residual after the translation and after the
-affine + elevation model.
-""".strip() + '\n')
 
 
 if __name__ == '__main__':
