@@ -366,7 +366,7 @@ def short(name):
 
 def plot_heatmap(tabs, outdir):
     cols = [('rho_event', 'either\nall'), ('rho_event_dry', 'either\ndry'),
-            ('rho_event_wet', 'either\nwet'), ('r_anom_event', 'either\nanomaly'),
+            ('rho_event_wet', 'either\nwet'),
             ('rho_flower', 'flowering\nall'), ('rho_flower_window', 'flowering\nin season'),
             ('rho_flower_pure', 'flowering\nin season,\nno leaf loss'),
             ('rho_decid', 'leaf loss\nall'), ('rho_decid_window', 'leaf loss\nin season'),
@@ -386,7 +386,7 @@ def plot_heatmap(tabs, outdir):
                   fontsize=7.5, style='italic', rotation=60, ha='right',
                   rotation_mode='anchor')
     ax.tick_params(length=0)
-    for y in (3.5, 6.5):
+    for y in (2.5, 5.5):
         ax.axhline(y, color='w', lw=3)
     fig.colorbar(im, ax=ax, shrink=0.8, pad=0.01,
                  label='correlation of Planet with drone share')
