@@ -901,6 +901,51 @@ def plot_peak_scatter(cmp, outdir):
     save(fig, outdir, 'phenology_fit_peaks')
 
 
+def plot_peak_scatter_html(cmp, outdir):
+    """Interactive version of phenology_fit_peaks, with each point's species,
+    dates, interval and fit model in its tooltip. plotly.js is inlined so the
+    file opens offline."""
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+    panels = [('event', 'drone either event'), ('decid', 'drone leaf loss'),
+              ('flower', 'drone flowering')]
+    fig = make_subplots(1, 3, shared_yaxes=True, horizontal_spacing=0.04,
+                        subplot_titles=[t for _, t in panels])
+    months = pd.date_range('2001-01-01', periods=12, freq='MS').dayofyear.values
+    model = {'one': 'one bump', 'two_drone_init': 'two bumps, drone-initialized'}
+    for i, (ty, title) in enumerate(panels, 1):
+        d = cmp[(cmp['type'] == ty) & cmp['both_resolved'] & (cmp['source'] == 'mrcnn')]
+        fig.add_hline(y=0, line_color=INK, line_width=1, row=1, col=i)
+        custom = np.column_stack([
+            d['species'], d['drone_peak'].round(0), d['planet_peak'].round(0),
+            d['dpeak_lo'].round(0), d['dpeak_hi'].round(0),
+            d['planet_model'].map(model)])
+        fig.add_trace(go.Scatter(
+            x=d['drone_peak'], y=d['dpeak'], mode='markers',
+            marker=dict(color=C_PLANET, size=8, opacity=0.5),
+            error_y=dict(type='data', symmetric=False, thickness=1, width=0,
+                         array=d['planet_hi'].clip(lower=0),
+                         arrayminus=-d['planet_lo'].clip(upper=0)),
+            customdata=custom, name=f'{SOURCE_NAME["mrcnn"]} (n = {len(d)})',
+            hovertemplate=('<i>%{customdata[0]}</i><br>'
+                           'drone peak: day %{customdata[1]}<br>'
+                           'Planet peak: day %{customdata[2]}<br>'
+                           'Planet − drone: %{y:.0f} d '
+                           '(95%: %{customdata[3]} to %{customdata[4]})<br>'
+                           'Planet fit: %{customdata[5]}<extra></extra>')),
+            row=1, col=i)
+        fig.update_xaxes(tickvals=months, ticktext=list('JFMAMJJASOND'),
+                         range=[0, 366], gridcolor=GRID, row=1, col=i,
+                         title_text=f'{title.replace("drone ", "")} peak date in the drone record')
+        fig.update_yaxes(range=[-185, 185], gridcolor=GRID, zeroline=False, row=1, col=i)
+    fig.update_yaxes(title_text='Planet peak date − drone peak date (days)', row=1, col=1)
+    fig.update_layout(template='simple_white', width=1300, height=480,
+                      legend=dict(orientation='h', y=-0.2))
+    path = outdir / 'phenology_fit_peaks.html'
+    fig.write_html(path, include_plotlyjs=True)
+    click.echo(f'Wrote {path}')
+
+
 def plot_year_shifts(ys, outdir):
     fig, ax = plt.subplots(figsize=(5.2, 5))
     lim = 90
@@ -1083,7 +1128,11 @@ def fit(outdir, n_boot, min_crowns, tolerance, refit):
     click.echo(json.dumps(summary, indent=1))
 
     plot_peak_scatter(cmp, outdir)
-    main = cmp[(cmp['source'] == 'mrcnn') & (cmp['type'] == 'event')]
+    try:
+        plot_peak_scatter_html(cmp, outdir)
+    except ImportError:
+        click.echo('plotly not installed; run `peaks-html` for the HTML version')
+    main =cmp[(cmp['source'] == 'mrcnn') & (cmp['type'] == 'event')]
     order = main.sort_values('drone_amp', ascending=False)['species']
     show = [s for s in order if fits.get((s, 'event')) and resolved(fits[(s, 'event')])][:12]
     plot_fit_curves(fits, series, show, outdir)
@@ -1094,6 +1143,15 @@ def fit(outdir, n_boot, min_crowns, tolerance, refit):
                   'dpeak', 'dpeak_lo', 'dpeak_hi', 'drone_fwhm', 'planet_fwhm',
                   'amp_ratio', 'same_peak', 'trap_flower_peak']]
                .round(2).to_string(index=False))
+
+
+@cli.command('peaks-html')
+@click.option('--outdir', default=str(DEFAULT_OUT), show_default=True)
+def peaks_html(outdir):
+    """Interactive phenology_fit_peaks from the saved comparison table."""
+    outdir = Path(outdir)
+    plot_peak_scatter_html(
+        pd.read_csv(outdir / 'materials' / 'phenology_fit_compare.csv'), outdir)
 
 
 # -------------------------------------------------------------- evaluation
