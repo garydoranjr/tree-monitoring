@@ -25,11 +25,13 @@ checks of those explanations against Planet's own metadata and RPCs for our scen
   100 m of height, equals the elevation term we measured from the imagery: slope 0.975,
   97.5 % of the variance, 544 scenes. For the master scene the RPC predicts +2.13 m east,
   +2.36 m north per 100 m, and the drone orthomosaic measured +2.00 and +2.43.
-- The term can therefore be predicted from two small metadata files with no image
-  matching, to a median of 0.5 m per 100 m of height.
+- The term can therefore be predicted from two small metadata files, to a median of 0.5 m
+  per 100 m of height on the 544 scenes where image matching could check it. The shift and
+  affine parts of the error still need image matching.
 - Published work describes the same error class (RPCs "not accurate enough" for subpixel
-  registration; residual "stereoscopic effects" removed with a polynomial that includes
-  elevation) but none we found measures the RPC tilt against the reported view direction.
+  registration; "strong relief-related artifacts" in ortho scenes; residual "stereoscopic
+  effects" removed with a polynomial that includes elevation) but none we found measures
+  the RPC tilt against the reported view direction.
 
 ## What Planet documents
 
@@ -85,6 +87,7 @@ time series: the error differs from frame to frame and is not a shift.
 |---|---|---|
 | Reference imagery (absolute offset) | Site-dependent mean offsets of up to tens of meters (Semple et al. 2023) | A constant offset common to all scenes would be invisible in scene-to-master work; the master is 6.5 m from the drone mosaic. |
 | Elevation model error × view angle | "the size of which is proportional to the DEM error and the off-nadir viewing angle" (Kääb et al. 2017); the difference in view direction between two scenes "is a robust predictor" of the bias, so pairs are restricted to 0.6° (Mueting and Bookhagen 2024) | Not the cause. One elevation model and processor for all 718 scenes; the term is unrelated to the reported view direction (check 3); at 3.6° median incidence, 1 m of displacement needs 16 m of elevation error. |
+| Relief-related artifacts in ortho scenes | "topography-related artifacts should be negligible given the long focal length and quasi-nadir acquisition. However, we observe strong relief-related artifacts. The observed pattern suggests a mixture of artifacts due to the DEM inaccuracies used during the orthorectification process and the change in attitude between the frames when generating the composite scenes" (Aati et al. 2022a) | The same observation. Here it is one tilt per scene, present in Dove Classic (single frames) as well as in the composite generations, and it is in the RPC. |
 | Sensor orientation after refinement (RPC error) | Georeferencing errors "from imperfect satellite positions and attitude angles, and their refinement from registering the images to reference images" expected to exceed the elevation-model effect (Kääb et al. 2017); "the RFM models delivered with commercial data are commonly not accurate enough for 3-D extraction, subpixel registration or ground deformation measurements" (Aati and Avouac 2020); a topographic pattern in ortho disparity maps "pointing to inaccuracies in the RPCs" (Mueting and Bookhagen 2024) | **The cause of the elevation term** (check 4): the RPC line of sight is tilted from the reported one, by 1.7° at the median. |
 | Unrecorded pitch | An outlying acquisition attributed to "a slightly different satellite pitch angle, which has not been recorded in the metadata" (Mueting and Bookhagen 2024) | The tilt is larger along track (SD 6.3 m per 100 m north against 3.2 m east). But a real pitch would be modeled correctly by the RPC and leave no displacement; ours appears in the imagery, so it is a tilt of the model, not of the satellite. |
 | Ramps (shift, rotation, scale between scenes) | "ramp errors are the dominating error source in the offset field", corrected per footprint with polynomials (Feng et al. 2019); first- and second-order polynomials (Kääb et al. 2017, 2019) | The affine part of model H: 7.4 m median amplitude across the island. |
@@ -100,7 +103,8 @@ time series: the error differs from frame to frame and is not a shift.
 | First- or second-order polynomial per pair or per footprint | Kääb et al. (2017, 2019); Feng et al. (2019) | Model A (first order). |
 | Polynomial in position **and elevation** per pair | Mueting and Bookhagen (2024): ramps and stereoscopic effects "can be efficiently modeled through a polynomial fit that takes into account X and Y position and local elevations" | Model H, arrived at independently. They apply it to displacement maps; we apply it to the imagery. |
 | Pair only scenes with the same view direction | Mueting and Bookhagen (2024) | Does not apply: our term does not follow the reported view direction. |
-| Refine the RPC (bias-compensate or re-fit the rational function model from tie points) and orthorectify the basic scenes | Aati and Avouac (2020): reprojection error 0.38 px for PlanetScope without ground control; Ghuffar (2018); Aati et al. (2022a, 2022b) | Not tried. Check 4 shows which correction is needed (a tilt) and gives its value per scene. |
+| Refine the RPC (bias-compensate or re-fit the rational function model from tie points) and orthorectify the basic scenes | Aati and Avouac (2020): reprojection error 0.38 px for PlanetScope without ground control. Aati et al. (2022a): an affine "pointing error" correction per image from tie points projected at a range of heights. Ghuffar (2018): an affine bias per image; he found the delivered RPC bias "typically less than 0.5 pixels", but that is a residual at tie points in image space and does not test the model's dependence on height. Aati et al. (2022b) develop the approach for other sensors. | Not tried. Check 4 shows which correction is needed (a tilt) and gives its value per scene. |
+| No correction | Frazier and Hemingway (2021), reviewing PlanetScope applications: "the majority of studies we reviewed did not report any additional geometric correction, raising questions about the spatial integrity and uncertainty of data used in those applications" | — |
 | Orthorectify basic scenes on a newer or self-made elevation model | Mueting and Bookhagen (2024), for terrain that changed after the SRTM mission | No effect here: RPC + GLO-30 reproduces Planet's ortho to 0.042 m. |
 
 ## Checks against our scenes
@@ -179,9 +183,13 @@ and tie-point distribution.
 
 ## What this changes
 
-1. **The elevation term needs no image matching.** It is the RPC line of sight at the frame
-   center minus the reported one, both read from metadata, good to a median 0.5 m per 100 m
-   of height (0.7 m over the island's 138 m of relief). Model H currently needs enough clear
+1. **The elevation term can be read from metadata.** It is the RPC line of sight at the
+   frame center minus the reported one, good to a median 0.5 m per 100 m of height (0.7 m
+   over the island's 138 m of relief). That figure is the disagreement with image matching
+   on the 544 scenes that have both, so it bounds the error of the reported view direction
+   and the matching noise together; using the tilt on a scene that could not be matched
+   assumes the same holds there. The shift and the affine part still have to be measured
+   from imagery. Model H currently needs enough clear
    tiles to fit eight parameters; with the term fixed from metadata, cloudy scenes need only
    a shift or an affine. It needs the basic asset's RPC file (on disk for 544 of the 718
    fitted scenes; the files are a few kB each).
@@ -201,32 +209,50 @@ Not done: applying the metadata-derived term in `island_coreg.py` (a model with 
 elevation coefficients fixed); testing it at the plot against the Planet-to-drone shifts;
 RPC refinement; Planet's Coregister tool and basemaps on our scenes.
 
+## Figures (`figs/20261117_updates/`)
+
+From `python scripts/make_island_alignment_figures.py geometry | tilt | rpcmap | model3d`;
+each static figure has a `<name>_caption.md`.
+
+1. `island_rpc_geometry` — one scene (2021-03-05, tilt 7.0°): the reported and the RPC line
+   of sight from orbit (camera positions 61 km apart at 496 km), at the 50ha plot (a crown
+   on the plateau placed 17 m away) and in map view with the measured elevation term.
+2. `island_rpc_tilt` — all 544 scenes: reported and RPC lines of sight in map view, the
+   elevation term against the tilt, and the distribution of the tilt in degrees.
+3. `island_rpc_map` — the same scene over the island: elevation-related displacement
+   measured by image matching, predicted from RPC and metadata, and their difference
+   (median 2.4, 2.4 and 0.7 m).
+4. `island_rpc_model.html` — a self-contained interactive 3-D page of the geometry at
+   three scales (orbit, island, one tree crown) for the master scene, the example, a
+   median scene of each generation and a 90th-percentile scene (template
+   `scripts/island_rpc_model.html`).
+
 ## Reading status
 
-Read in full or in the relevant sections: the Planet specification, the NASA assessment,
-Mueting and Bookhagen (2024; the library copy is the discussion version, and quotations
-are from it), Kääb et al. (2017, 2019), Feng et al. (2019), Ghuffar (2018), Aati and Avouac
-(2020), Fitts et al. (2025). The Planet forum posts and the Coregister documentation were
-read through a text summary of the pages. Not obtained in full text, and cited only for
-what their abstracts state: Aati et al. (2022a, 2022b), Huang et al. (2022), Frazier and
-Hemingway (2021). Not retrieved: Planet's quarterly L1 data quality reports and the
-Sentinel Hub post.
+Read in the relevant sections, with quotations checked against the library text: Mueting
+and Bookhagen (2024; the library copy is the discussion version), Kääb et al. (2017, 2019),
+Feng et al. (2019), Ghuffar (2018), Aati and Avouac (2020), Aati et al. (2022a), Frazier
+and Hemingway (2021), Fitts et al. (2025), and the Planet specification and NASA
+assessment from their PDFs. Aati et al. (2022b) and Huang et al. (2022) were only searched
+for their treatment of PlanetScope RPCs: the first is not specific to PlanetScope and the
+second does not discuss the RPCs beyond using them. The Planet forum posts and the
+Coregister documentation were read through a text summary of the pages. Not retrieved:
+Planet's quarterly L1 data quality reports and the Sentinel Hub post.
 
 ## References
 
-Library ids are Scholium ids (tag `planet-geolocation`); "metadata only" means the library
-has no full text.
+Library ids are Scholium ids (tag `planet-geolocation`).
 
 - Aati and Avouac 2020, *Optimization of Optical Image Geometric Modeling, Application to
   Topography Extraction and Topographic Change Measurements Using PlanetScope and SkySat
   Imagery*, Remote Sensing 12, 3418, doi:10.3390/rs12203418 — library id `b8507bacd2da1bf7`
 - Aati et al. 2022a, *Potential and Limitation of PlanetScope Images for 2-D and 3-D Earth
   Surface Monitoring With Example of Applications to Glaciers and Earthquakes*, IEEE TGRS
-  60, doi:10.1109/TGRS.2022.3215821 — `oa:W4312512425` (metadata only)
+  60, doi:10.1109/TGRS.2022.3215821 — `dac863ee158e9835`
 - Aati et al. 2022b, *A new approach for 2-D and 3-D precise measurements of ground
   deformation from optimized registration and correlation of optical images and ICA-based
   filtering of image geometry artifacts*, Remote Sensing of Environment 277, 113038,
-  doi:10.1016/j.rse.2022.113038 — `oa:W4225145167` (metadata only)
+  doi:10.1016/j.rse.2022.113038 — `5f3b405778fb5a87`
 - Feng et al. 2019, *A Block Ramp Errors Correction Method of Planet Subpixel Offset:
   Application to the 2018 Mw 7.5 Palu Earthquake, Indonesia*, IEEE Access 7,
   doi:10.1109/ACCESS.2019.2956198 — `459fdc3620d702c7`
@@ -235,12 +261,12 @@ has no full text.
   doi:10.1016/j.rse.2025.114650 — `d98cdadd7f56c243`
 - Frazier and Hemingway 2021, *A Technical Review of Planet Smallsat Data: Practical
   Considerations for Processing and Using PlanetScope Imagery*, Remote Sensing 13, 3930,
-  doi:10.3390/rs13193930 — `oa:W3206706034` (metadata only)
+  doi:10.3390/rs13193930 — `0f9e161642c24bc2`
 - Ghuffar 2018, *DEM Generation from Multi Satellite PlanetScope Imagery*, Remote Sensing
   10, 1462, doi:10.3390/rs10091462 — `3fd70d5970ac0b01`
 - Huang et al. 2022, *An evaluation of PlanetScope images for 3D reconstruction and change
   detection – experimental validations with case studies*, GIScience & Remote Sensing 59,
-  doi:10.1080/15481603.2022.2060595 — `oa:W4224235076` (metadata only)
+  doi:10.1080/15481603.2022.2060595 — `fbd1f2555c15ce2c`
 - Kääb et al. 2017, *Coseismic displacements of the 14 November 2016 Mw 7.8 Kaikoura, New
   Zealand, earthquake using the Planet optical cubesat constellation*, NHESS 17, 627–639,
   doi:10.5194/nhess-17-627-2017 — `ce4ba4496ad7e07c`

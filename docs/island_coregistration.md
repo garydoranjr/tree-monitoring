@@ -23,7 +23,8 @@ result to the ground (model **Ha**). Details in
 of sight of the RPC at the frame center, minus the view direction in Planet's metadata,
 equals the term measured from the imagery (slope 0.975, 97.5 % of the variance, 544
 scenes; for the master +2.13 m east, +2.36 m north per 100 m against +2.00 and +2.43
-measured with the drone). The term can be read from metadata without image matching.
+measured with the drone). The term can be predicted from metadata, to a median 0.5 m per
+100 m against image matching; the shift and affine parts still need matching.
 Planet's documented process, the literature and the checks are in
 [planet_geolocation_literature.md](planet_geolocation_literature.md).
 

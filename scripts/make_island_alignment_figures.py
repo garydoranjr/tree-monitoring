@@ -19,6 +19,14 @@ Subcommands (outputs in OUTDIR; all sized for a 12.5 x 6 in slide):
   compare    short MP4/GIF over the 50ha plot: drone mosaic, Planet as delivered and
              Planet corrected, for the scenes that were furthest off, with fixed
              crown outlines as reference marks.
+  geometry   the observation geometry of the example scene: the reported and the
+             RPC line of sight from orbit, at the ground, and in map view.
+  tilt       all scenes with an RPC: reported against RPC line of sight, the
+             elevation term against the RPC tilt, and the size of the tilt.
+  rpcmap     the example scene's elevation-related displacement over the island as
+             measured from imagery and as predicted from its RPC and metadata.
+  model3d    a self-contained interactive 3-D page of the same geometry at three
+             scales (orbit, island, one tree crown) for a handful of scenes.
   all        everything.
 
 Typical usage:
@@ -654,11 +662,387 @@ def compare(outdir, n, hold, dpi):
     click.echo(f'wrote {mp4}, {gif}: {len(frames)} scenes, offsets {frames.off_m.round(1).tolist()}')
 
 
+# --------------------------------------------------------------------------- RPC line of sight
+C_REP, C_RPC, C_MEAS = '0.2', C_BEFORE, C_AFTER
+LAKE = dg.RPC_H0
+
+
+def los_table():
+    """Fitted scenes with a basic RPC (island_coreg_diagnose.py metadata); lines of sight
+    and terms in m east/north per 100 m of height."""
+    d = pd.read_csv(dg.DIAG / 'metadata_checks.csv').set_index('scene_id')
+    return d[d.rpc_los_east.notna()].copy()
+
+
+def frame_center(rpc):
+    return dg.rpc_ground(rpc, rpc['LINE_OFF'], rpc['SAMP_OFF'], LAKE, (rpc['LONG_OFF'], rpc['LAT_OFF']))
+
+
+def master_los():
+    """The master is the reference of every fit and has no row in the table."""
+    idx = pd.read_csv(ic.SR / 'index.csv').set_index('scene_id').loc[ic.MASTER]
+    meta = dg.scene_metadata(ic.MASTER, idx.sr_path)
+    t, az = 100 * np.tan(np.radians(meta['incidence_angle'])), np.radians(idx.satellite_azimuth)
+    rpc = dg.load_rpc(dg.rpc_txt_path(ic.MASTER))
+    c = frame_center(rpc)
+    e, n, _ = dg.rpc_los(rpc, c[0], c[1])
+    kn, ke, _ = master_k()
+    return pd.Series(dict(meta_los_east=t * np.sin(az), meta_los_north=t * np.cos(az), rpc_los_east=e,
+                          rpc_los_north=n, los_gap_east=e - t * np.sin(az), los_gap_north=n - t * np.cos(az),
+                          k_abs_east=ke, k_abs_north=kn, incidence_angle=meta['incidence_angle'],
+                          satellite_azimuth=idx.satellite_azimuth, scan_azimuth=meta['scan_azimuth'],
+                          instrument=idx.instrument, acquired=idx.acquired, satellite_id=idx.satellite_id))
+
+
+def camera_height_km(scene_id):
+    """Height above the ground at which the RPC's rays from pixels across the frame meet."""
+    from pyproj import Transformer
+    rpc = dg.load_rpc(dg.rpc_txt_path(scene_id))
+    tr = Transformer.from_crs('EPSG:4326', ic.CRS, always_xy=True)
+    c = frame_center(rpc)
+
+    def g(samp, h):
+        return np.array(tr.transform(*dg.rpc_ground(rpc, rpc['LINE_OFF'], samp, h, c)))
+    s0, s1 = rpc['SAMP_OFF'], rpc['SAMP_OFF'] + 0.6 * rpc['SAMP_SCALE']
+    lo, hi = np.linalg.norm(g(s1, LAKE) - g(s0, LAKE)), np.linalg.norm(g(s1, LAKE + 1000) - g(s0, LAKE + 1000))
+    return lo / (lo - hi)
+
+
+def deg(v):
+    return np.degrees(np.arctan(np.asarray(v) / 100))
+
+
+def rings(ax, radii_deg, lim, north=-1):
+    th = np.linspace(0, 2 * np.pi, 200)
+    for r in radii_deg:
+        m = 100 * np.tan(np.radians(r))
+        if m < lim * 1.35:
+            ax.plot(m * np.sin(th), m * np.cos(th), color='0.8', lw=0.6, zorder=0)
+            ax.text(m * 0.71, north * m * 0.71, f'{r}°', fontsize=FS_S - 1, color='0.55', ha='left',
+                    va='top' if north < 0 else 'bottom', clip_on=True)
+    ax.axhline(0, color='0.85', lw=0.6, zorder=0)
+    ax.axvline(0, color='0.85', lw=0.6, zorder=0)
+
+
+@cli.command()
+@out_option
+@click.option('--scene', default=None)
+def geometry(outdir, scene):
+    """Observation geometry of one scene: reported and RPC line of sight."""
+    scene = scene or example_scene()
+    r = los_table().loc[scene]
+    H = camera_height_km(scene)
+    gap = np.array([r.los_gap_east, r.los_gap_north])
+    u = gap / np.hypot(*gap)
+    m_rep = (r.meta_los_east * u[0] + r.meta_los_north * u[1]) / 100   # tan of each line of sight in the
+    m_rpc = (r.rpc_los_east * u[0] + r.rpc_los_north * u[1]) / 100     # vertical plane of the tilt
+    tilt_deg = float(deg(np.hypot(*gap)))
+    plot_h = float(ic.dem_arrays()[0][dg.PLOT_CENTER])
+    rise = plot_h - LAKE
+    shift = rise * (m_rpc - m_rep)
+    az_u = np.degrees(np.arctan2(u[0], u[1])) % 360
+
+    fig = plt.figure(figsize=(W, 4.7))
+    # (a) from orbit, to scale
+    ax = fig.add_axes([0.035, 0.1, 0.25, 0.78])
+    xr, xp = H * m_rep, H * m_rpc
+    mid = (xr + xp) / 2
+    ax.plot([mid - 230, mid + 230], [0, 0], color='0.4', lw=1.2)
+    ax.plot([-16.25, 16.25], [0, 0], color='0.4', lw=4, solid_capstyle='butt')
+    ax.plot([0, xr], [0, H], color=C_REP, lw=1.3)
+    ax.plot([0, xp], [0, H], color=C_RPC, lw=1.3)
+    ax.plot([0, 0], [0, H], color='0.75', lw=0.7, ls=':')
+    ax.plot([xr], [H], marker='s', ms=7, color=C_REP)
+    ax.plot([xp], [H], marker='s', ms=7, color=C_RPC)
+    ax.annotate('', (xp, H + 22), (xr, H + 22), arrowprops=dict(arrowstyle='<->', color='0.3', lw=0.8))
+    ax.text((xr + xp) / 2, H + 30, f'{abs(xp - xr):.0f} km', ha='center', fontsize=FS)
+    side = 1 if xp > xr else -1
+    ax.text(xr - side * 14, H, 'camera where\nthe metadata\nputs it', ha='right' if side > 0 else 'left',
+            va='center', fontsize=FS_S, color=C_REP)
+    ax.text(xp + side * 14, H, 'camera where\nthe RPC\nputs it', ha='left' if side > 0 else 'right', va='center',
+            fontsize=FS_S, color=C_RPC)
+    ax.text(0, -14, 'island (inside the 32 km frame)', ha='center', va='top', fontsize=FS_S, color='0.3')
+    ax.text(xp * 0.42 + side * 12, H * 0.42, f'{tilt_deg:.1f}° apart', ha='left' if side > 0 else 'right',
+            va='center', fontsize=FS)
+    ax.set_aspect('equal')
+    ax.set_xlim(mid - 235, mid + 235)
+    ax.set_ylim(-45, H + 60)
+    ax.set_ylabel('Height above the ground (km)', fontsize=FS)
+    ax.set_xlabel(f'Distance toward azimuth {az_u:.0f}° (km)', fontsize=FS)
+    ax.tick_params(labelsize=FS_S)
+    for sp in ('top', 'right'):
+        ax.spines[sp].set_visible(False)
+    ax.set_title('From orbit (to scale)', fontsize=FS_T)
+
+    # (b) at the ground, to scale
+    ax = fig.add_axes([0.365, 0.1, 0.27, 0.78])
+    x0 = -rise * m_rep                       # where both rays cross lake level
+    z = np.array([LAKE - 14, plot_h + 26])
+    lim = (shift / 2 - 82, shift / 2 + 82)
+    side = 1 if shift > 0 else -1
+    ax.fill_between(lim, LAKE, plot_h, color='#c9b79c', alpha=0.35, lw=0)
+    ax.plot(lim, [plot_h, plot_h], color=C_HIGH, lw=1.2)
+    ax.plot(lim, [LAKE, LAKE], color='#3b7dd8', lw=1.2)
+    ax.plot(x0 + (z - LAKE) * m_rep, z, color=C_REP, lw=1.3)
+    ax.plot(x0 + (z - LAKE) * m_rpc, z, color=C_RPC, lw=1.3)
+    ax.plot([x0], [LAKE], 'o', ms=4, color='k', zorder=5)
+    from matplotlib.patches import Ellipse
+    ax.add_patch(Ellipse((0, plot_h + 5), 12, 10, fc='#3a8f3a', ec='none', alpha=0.9))
+    ax.add_patch(Ellipse((shift, plot_h + 5), 12, 10, fc='none', ec=C_RPC, lw=1.3, ls='--'))
+    ax.annotate('', (shift, plot_h - 9), (0, plot_h - 9), arrowprops=dict(arrowstyle='->', color=C_RPC, lw=1.4))
+    ax.text(shift / 2, plot_h - 12, f'{abs(shift):.0f} m', ha='center', va='top', fontsize=FS, color=C_RPC)
+    ax.text(lim[0] + 3, plot_h - 3, f'plateau, {plot_h:.0f} m', fontsize=FS_S, color=C_HIGH, va='top')
+    ax.text(lim[0] + 3, LAKE + 3, f'lake level, {LAKE:.0f} m:\nwhere the tie points are', fontsize=FS_S,
+            color='#3b7dd8', va='bottom')
+    ax.text(-side * 9, plot_h + 7, 'tree crown', ha='right' if side > 0 else 'left', va='center', fontsize=FS_S,
+            color='#2b6e2b')
+    ax.text(shift + side * 9, plot_h + 3, 'where the\northo puts it', ha='left' if side > 0 else 'right',
+            va='bottom', fontsize=FS_S, color=C_RPC)
+    ax.text(x0 + side * 5, LAKE - 8, 'the two lines of\nsight agree here', fontsize=FS_S, va='center',
+            ha='left' if side > 0 else 'right')
+    ax.set_aspect('equal')
+    ax.set_xlim(*lim)
+    ax.set_ylim(z[0], plot_h + 34)
+    ax.set_xlabel(f'Distance toward azimuth {az_u:.0f}° (m)', fontsize=FS)
+    ax.set_ylabel('Elevation (m)', fontsize=FS)
+    ax.tick_params(labelsize=FS_S)
+    for sp in ('top', 'right'):
+        ax.spines[sp].set_visible(False)
+    ax.set_title('At the 50ha plot (to scale)', fontsize=FS_T)
+
+    # (c) map view of the lines of sight
+    ax = fig.add_axes([0.715, 0.1, 0.275, 0.78])
+    vecs = [((r.meta_los_east, r.meta_los_north), C_REP, 'reported by the satellite'),
+            ((r.rpc_los_east, r.rpc_los_north), C_RPC, 'RPC')]
+    lim = 1.25 * max(np.hypot(*v) for v, _, _ in vecs)
+    rings(ax, (2, 4, 6, 8, 10, 12), lim, north=1)
+    a = np.radians(r.scan_azimuth)
+    ax.plot([-lim * np.sin(a), lim * np.sin(a)], [-lim * np.cos(a), lim * np.cos(a)], color='0.7', lw=0.7, ls='--')
+    ax.text(0.93 * lim * np.sin(a), 0.93 * lim * np.cos(a), ' flight line', fontsize=FS_S - 1, color='0.45',
+            rotation=90 - r.scan_azimuth, rotation_mode='anchor', ha='right', va='bottom')
+    for v, c, lab in vecs:
+        ax.annotate('', v, (0, 0), arrowprops=dict(arrowstyle='-|>', color=c, lw=1.8, mutation_scale=14))
+        ax.plot([], [], color=c, lw=1.8, label=f'{lab}: {deg(np.hypot(*v)):.1f}° off vertical')
+    b0 = np.array([r.meta_los_east, r.meta_los_north])
+    ax.annotate('', b0 + gap, b0, arrowprops=dict(arrowstyle='-|>', color='#c0392b', lw=1.3, ls='--',
+                                                   mutation_scale=11))
+    ax.plot([], [], color='#c0392b', lw=1.3, ls='--', label=f'tilt (RPC − reported): {tilt_deg:.1f}°')
+    k = np.array([r.k_abs_east, r.k_abs_north])
+    ax.plot(*(b0 + k), marker='o', ms=7, mfc='none', mec=C_MEAS, mew=1.8, ls='none',
+            label='reported + elevation term\nmeasured from imagery')
+    ax.set_aspect('equal')
+    ax.set_xlim(-lim, lim)
+    ax.set_ylim(-lim * 0.75, lim * 1.15)
+    ax.set_xlabel('East (m per 100 m of height)', fontsize=FS)
+    ax.set_ylabel('North (m per 100 m of height)', fontsize=FS)
+    ax.tick_params(labelsize=FS_S)
+    ax.legend(fontsize=FS_S, loc='lower center', frameon=True, framealpha=0.92, edgecolor='none',
+              bbox_to_anchor=(0.5, 0.0))
+    ax.set_title('Direction to the satellite, seen from above', fontsize=FS_T)
+    fig.suptitle(f'PlanetScope {scene_title(scene, models_table().loc[scene])}', fontsize=FS, y=0.995,
+                 color='0.3')
+    save(fig, outdir, 'island_rpc_geometry', f"""
+        Observation geometry of one PlanetScope scene ({scene}) as reported by the satellite and as modeled by the
+        scene's rational polynomial coefficients (RPC), the geometric model Planet uses to orthorectify it.
+        Left: vertical section from orbit, to scale, along the direction in which the two disagree (azimuth
+        {az_u:.0f}°); the line of sight to the island from the camera position implied by the metadata incidence
+        angle and satellite azimuth (dark gray) and from the position implied by the RPC (orange), with the rays of
+        the RPC converging {H:.0f} km above the ground; the two positions are {abs(xp - xr):.0f} km apart, an
+        angle of {tilt_deg:.1f}° at the ground. Center: the same two lines of sight for one image pixel at the
+        50ha plot, to scale; they coincide at lake level ({LAKE:.0f} m), the height of the tie points that
+        constrain the RPC around the island, and separate with height, so a crown on the plateau
+        ({plot_h:.0f} m; green) is placed {abs(shift):.0f} m away by the orthorectification (dashed orange
+        outline), which is {rise:.0f} m of height times the tangent of the tilt. Right: horizontal displacement
+        of a pixel's ground position per 100 m of height, east and north, which is the direction to the satellite
+        seen from above (rings mark the angle off vertical; dashed line, the flight line), for the reported line of
+        sight (dark gray arrow), the RPC at the frame center (orange arrow) and their difference, the tilt of the
+        RPC (dashed red arrow); the green circle is the reported line of sight plus the elevation term measured
+        independently by image matching ({r.k_abs_east:+.1f} m east, {r.k_abs_north:+.1f} m north per 100 m,
+        against {gap[0]:+.1f} and {gap[1]:+.1f} for the tilt), referred to the ground with the drone orthomosaic
+        of 2024-10-14.""")
+
+
+@cli.command()
+@out_option
+def tilt(outdir):
+    """All scenes with an RPC: reported against RPC line of sight, term against tilt."""
+    d = los_table()
+    m = master_los()
+    fig = plt.figure(figsize=(W, 4.35))
+    # (a) lines of sight in map view
+    ax = fig.add_axes([0.045, 0.125, 0.285, 0.77])
+    lim = 20
+    rings(ax, (2, 4, 6, 8, 10), lim)
+    ax.scatter(d.rpc_los_east, d.rpc_los_north, s=7, c=[ic.INSTRUMENTS[i][1] for i in d.instrument], alpha=0.55,
+               lw=0)
+    ax.scatter(d.meta_los_east, d.meta_los_north, s=7, c='k', alpha=0.6, lw=0)
+    ax.scatter([], [], s=14, c='k', label='reported by the satellite')
+    for inst, (name, col) in ic.INSTRUMENTS.items():
+        ax.scatter([], [], s=14, c=col, label=f'RPC, {name} ({(d.instrument == inst).sum()})')
+    ax.set_aspect('equal')
+    ax.set_xlim(-lim, lim)
+    ax.set_ylim(-lim, lim)
+    ax.set_xlabel('East (m per 100 m of height)', fontsize=FS)
+    ax.set_ylabel('North (m per 100 m of height)', fontsize=FS)
+    ax.tick_params(labelsize=FS_S)
+    ax.legend(fontsize=FS_S - 0.5, loc='upper left', frameon=True, framealpha=0.9, edgecolor='none',
+              handletextpad=0.2, borderpad=0.2)
+    ax.set_title('Line of sight at the frame center', fontsize=FS_T)
+    out = (np.hypot(d.rpc_los_east, d.rpc_los_north) > lim).sum()
+
+    # (b) elevation term against tilt
+    ax = fig.add_axes([0.395, 0.125, 0.285, 0.77])
+    lim2 = 22
+    ax.plot([-lim2, lim2], [-lim2, lim2], color='0.6', lw=0.8)
+    cols = [ic.INSTRUMENTS[i][1] for i in d.instrument]
+    ax.scatter(d.los_gap_east, d.k_abs_east, s=9, c=cols, alpha=0.55, lw=0, marker='o')
+    ax.scatter(d.los_gap_north, d.k_abs_north, s=11, c=cols, alpha=0.55, lw=0, marker='^')
+    ax.scatter([m.los_gap_east], [m.k_abs_east], s=70, marker='o', fc='none', ec='k', lw=1.2)
+    ax.scatter([m.los_gap_north], [m.k_abs_north], s=80, marker='^', fc='none', ec='k', lw=1.2)
+    ax.scatter([], [], s=14, c='0.4', marker='o', label='east component')
+    ax.scatter([], [], s=16, c='0.4', marker='^', label='north component')
+    ax.scatter([], [], s=50, marker='o', fc='none', ec='k', label='master scene (drone)')
+    c, r2, n = dg._vector_fit(d.k_abs_east.values, d.k_abs_north.values, d.los_gap_east.values,
+                              d.los_gap_north.values)
+    ax.text(0.97, 0.05, f'slope {c:.2f}\n{r2:.1%} of variance\n{n} scenes', transform=ax.transAxes, ha='right',
+            fontsize=FS_S)
+    ax.set_aspect('equal')
+    ax.set_xlim(-lim2, lim2)
+    ax.set_ylim(-lim2, lim2)
+    ax.set_xlabel('Tilt of the RPC (m per 100 m of height)', fontsize=FS)
+    ax.set_ylabel('Elevation term from image matching\n(m per 100 m of height)', fontsize=FS)
+    ax.tick_params(labelsize=FS_S)
+    ax.legend(fontsize=FS_S - 0.5, loc='upper left', frameon=False, handletextpad=0.2)
+    ax.set_title('What the imagery shows against the tilt', fontsize=FS_T)
+    out2 = ((d[['los_gap_east', 'los_gap_north', 'k_abs_east', 'k_abs_north']].abs() > lim2).any(axis=1)).sum()
+
+    # (c) size of the tilt
+    ax = fig.add_axes([0.745, 0.125, 0.24, 0.77])
+    td = deg(d.los_gap_m100)
+    bins = np.arange(0, 12.01, 0.5)
+    ax.hist([np.clip(td[d.instrument == i], 0, 11.99) for i in ic.INSTRUMENTS], bins=bins, stacked=True,
+            color=[v[1] for v in ic.INSTRUMENTS.values()], label=[v[0] for v in ic.INSTRUMENTS.values()])
+    med, p90 = float(np.median(td)), float(np.quantile(td, 0.9))
+    for v, lab in ((med, f'median {med:.1f}°'), (p90, f'90th percentile {p90:.1f}°')):
+        ax.axvline(v, color='k', lw=0.8, ls='--')
+        ax.text(v + 0.15, ax.get_ylim()[1] * 0.97, lab, rotation=90, va='top', fontsize=FS_S)
+    ax.set_xlim(0, 12)
+    ax.set_xlabel('Tilt of the RPC (degrees)', fontsize=FS)
+    ax.set_ylabel('Scenes', fontsize=FS)
+    ax.tick_params(labelsize=FS_S)
+    ax.legend(fontsize=FS_S, frameon=False, loc='center right')
+    top = ax.secondary_xaxis('top', functions=(lambda x: 475 * np.tan(np.radians(x)),
+                                                lambda km: np.degrees(np.arctan(km / 475))))
+    top.set_xlabel('Camera displacement at 475 km (km)', fontsize=FS_S)
+    top.tick_params(labelsize=FS_S)
+    for sp in ('right',):
+        ax.spines[sp].set_visible(False)
+    save(fig, outdir, 'island_rpc_tilt', f"""
+        The line of sight of each PlanetScope scene's rational polynomial coefficients (RPC) against the view
+        direction reported in its metadata, for the {len(d)} scenes over Barro Colorado Island (2020-2026) that
+        were aligned to the master scene and have a basic (level 1B) RPC. Left: horizontal displacement of the
+        ground position of the frame-center pixel per 100 m of height, east and north, which is the direction to
+        the satellite seen from above (rings mark the angle off vertical), from the metadata incidence angle and
+        satellite azimuth (black, along the across-track direction because only an across-track angle is
+        reported) and from the RPC evaluated between {LAKE:.0f} and {LAKE + 100:.0f} m (colored by satellite
+        generation; {out} scenes fall outside the axes). Center: the elevation term of each scene, the
+        displacement per 100 m of terrain height measured by matching image tiles to the master scene and
+        referred to the ground with the drone orthomosaic of 2024-10-14, against the tilt of its RPC, the RPC line
+        of sight minus the reported one (circles, east component; triangles, north component; gray line, equality;
+        {out2} scenes outside the axes); the black outlines are the master scene, whose term was measured against
+        the drone orthomosaic. Right: magnitude of the tilt in degrees, stacked by generation (values above 12°
+        in the last bin), with the horizontal displacement of the camera it corresponds to at 475 km altitude on
+        the top axis.""")
+
+
+@cli.command()
+@out_option
+@click.option('--scene', default=None)
+def rpcmap(outdir, scene):
+    """The example scene's elevation-related displacement: measured and predicted from the RPC."""
+    scene = scene or example_scene()
+    t, k, row = scene_field(scene)
+    r, m = los_table().loc[scene], master_los()
+    _, _, hs = terrain()
+    rel = np.array([r.los_gap_east - m.los_gap_east, r.los_gap_north - m.los_gap_north])
+    t['m_e'], t['m_n'] = t.elev_e + t.res_e, t.elev_n + t.res_n         # measured minus the affine part
+    for j, comp in enumerate('en'):
+        pred = rel[j] * (t.h - ic.HREF) / 100
+        t[f'p_{comp}'] = pred - pred.median()
+        t[f'd_{comp}'] = t[f'm_{comp}'] - t[f'p_{comp}']
+        t[f'd_{comp}'] -= t[f'd_{comp}'].median()
+    fig = plt.figure(figsize=(W, 4.0))
+    names = [('m', 'Measured by image matching'), ('p', 'Predicted from RPC and metadata'), ('d', 'Difference')]
+    w, gap, x0 = 0.3, 0.035, 0.012
+    for i, (key, title) in enumerate(names):
+        ax = fig.add_axes([x0 + i * (w + gap), 0.02, w, 0.84])
+        island_axes(ax, hs, vmin=-0.3, vmax=1.3)
+        qv = quiver(ax, t, key, 0.035)
+        med = np.hypot(t[f'{key}_e'], t[f'{key}_n']).median()
+        ax.set_title(f'{title} (median {med:.1f} m)', fontsize=FS_T)
+        if i == 0:
+            ax.quiverkey(qv, 0.16, 0.07, 10, '10 m', labelpos='E', fontproperties=dict(size=FS_S))
+        if i < 2:
+            fig.text(x0 + i * (w + gap) + w + gap / 2, 0.43, '−' if i == 0 else '=', fontsize=20, ha='center',
+                     va='center')
+    fig.suptitle(f'PlanetScope {scene_title(scene, row)}', fontsize=FS, y=0.99, color='0.3')
+    save(fig, outdir, 'island_rpc_map', f"""
+        Elevation-related displacement of one PlanetScope scene ({scene}) over Barro Colorado Island, measured from
+        imagery and predicted from metadata alone. Each panel shows displacement vectors at the scene's 192 m
+        matching tiles (arrows; color and length give the magnitude, key 10 m) with the median removed, over a
+        hillshade of the Copernicus GLO-30 elevation model. Left: the displacement measured by matching the scene
+        to the master scene {ic.MASTER}, after removing the part that is an affine function of map position.
+        Center: the displacement predicted with no image matching, as tile elevation times the tilt of the scene's
+        rational polynomial coefficients (RPC) relative to the master's, where the tilt is the RPC line of sight at
+        the frame center minus the line of sight given by the metadata incidence angle and satellite azimuth
+        ({rel[0]:+.1f} m east and {rel[1]:+.1f} m north per 100 m of elevation; the fit to the imagery gives
+        {k['e']:+.1f} and {k['n']:+.1f}). Right: measured minus predicted.""")
+
+
+@cli.command()
+@out_option
+def model3d(outdir):
+    """Interactive 3-D page: reported and RPC lines of sight at orbit, island and crown scale."""
+    d, m = los_table(), master_los()
+    kn, ke, _ = master_k()
+    ex = example_scene()
+    mag = d.los_gap_m100
+    picks = [ex]
+    for inst in ic.INSTRUMENTS:                       # the scene nearest each generation's median tilt
+        g = mag[d.instrument == inst]
+        picks.append((g - g.median()).abs().idxmin())
+    picks.append((mag - mag.quantile(0.9)).abs().idxmin())
+    scenes = []
+    for sid, r, note in [(ic.MASTER, m, 'master scene')] + [
+            (s, d.loc[s], n) for s, n in zip(picks, ['largest clear example', 'median Dove Classic', 'median Dove-R',
+                                                     'median SuperDove', '90th percentile of all scenes'])]:
+        scenes.append(dict(
+            id=sid, note=note, date=f'{pd.Timestamp(r.acquired):%d %b %Y}', inst=ic.INSTRUMENTS[r.instrument][0],
+            H=round(float(camera_height_km(sid)), 1), rep=[round(float(r.meta_los_east), 3),
+                                                           round(float(r.meta_los_north), 3)],
+            rpc=[round(float(r.rpc_los_east), 3), round(float(r.rpc_los_north), 3)],
+            term=[round(float(r.k_abs_east), 3), round(float(r.k_abs_north), 3)],
+            scan=round(float(r.scan_azimuth), 1)))
+    elev, land, _ = terrain()
+    step = 30                                           # 90 m nodes
+    z = elev[::step, ::step]
+    lm = land[::step, ::step]
+    pr, pc = dg.PLOT_CENTER
+    data = dict(lake=LAKE, dx=step * RES, nx=int(z.shape[1]), ny=int(z.shape[0]),
+                z=[round(float(v), 1) for v in np.where(lm, z, LAKE).ravel()], land=[int(v) for v in lm.ravel()],
+                plot=dict(col=pc / step, row=pr / step, h=round(float(elev[pr, pc]), 1)), scenes=scenes)
+    html = (Path(__file__).resolve().parent / 'island_rpc_model.html').read_text()
+    out = outdir / 'island_rpc_model.html'
+    outdir.mkdir(parents=True, exist_ok=True)
+    out.write_text(html.replace('__DATA__', json.dumps(data, separators=(',', ':'))))
+    click.echo(f'wrote {out} ({out.stat().st_size / 1e3:.0f} kB, {len(scenes)} scenes)')
+
+
 @cli.command(name='all')
 @out_option
 @click.pass_context
 def all_(ctx, outdir):
-    for cmd in (problem, diagnosis, steps, method, result, compare):
+    for cmd in (problem, diagnosis, steps, method, result, compare, geometry, tilt, rpcmap, model3d):
         ctx.invoke(cmd, outdir=outdir)
 
 
