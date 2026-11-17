@@ -9,6 +9,9 @@ Subcommands (outputs in OUTDIR; all sized for a 12.5 x 6 in slide):
   diagnosis  how the cause was found: triangle closure (not false matches), our RPC
              ortho against Planet's (not the orthorectification), and the elevation
              term against the drone mosaic (real geometry).
+  steps      the procedure on the example scene: match one tile, the field of all
+             tiles, the fitted model, the tie to the drone mosaic, the per-pixel
+             correction.
   method     the example scene's field split into affine part, elevation part and
              what is left.
   result     residual by model on plateau and lower tiles, and the offset from the
@@ -306,6 +309,135 @@ def method(outdir, scene):
         correction is applied to every 3 m pixel using the elevation model.""")
 
 
+# --------------------------------------------------------------------------- steps
+
+def tile_example(scene_id, t, search=15):
+    """Master tile, scene tile (as delivered, same map position) and the NCC surface
+    of the tile with the largest measured displacement on the plateau."""
+    from skimage.feature import match_template
+    md = ic.master_data()
+    bands, clear, data = ic.read_scene(scene_id, bands=('red',))
+    valid = clear & data & ic.land_mask()
+    c = t[t.h >= 150].assign(m=lambda d: np.hypot(d.meas_e, d.meas_n)).sort_values('m').iloc[-1]
+    r0, c0 = int(c.row - ic.TILE / 2), int(c.col - ic.TILE / 2)
+    sl = (slice(r0, r0 + ic.TILE), slice(c0, c0 + ic.TILE))
+    big = (slice(r0 - search, r0 + ic.TILE + search), slice(c0 - search, c0 + ic.TILE + search))
+    mz = ic.zscore(md['bands']['red'], md['valid'])
+    sz = ic.zscore(bands['red'], valid)
+    surf = match_template(sz[big], mz[sl])
+    i, j = np.unravel_index(np.argmax(surf), surf.shape)
+    return dict(master=md['bands']['red'][sl], scene=bands['red'][sl], surface=surf, search=search,
+                east=RES * (j - search), north=-RES * (i - search), peak=float(surf[i, j]), x=c.x, y=c.y)
+
+
+@cli.command()
+@out_option
+@click.option('--scene', default=None)
+def steps(outdir, scene):
+    """The procedure, step by step, on one scene."""
+    scene = scene or example_scene()
+    t, k, row = scene_field(scene)
+    elev, land, hs = terrain()
+    ex = tile_example(scene, t)
+    H = 3.9
+    fig = plt.figure(figsize=(W, H))
+    w, gap, x0, y0, h = 0.178, 0.0245, 0.006, 0.03, 0.74
+    xs = [x0 + i * (w + gap) for i in range(5)]
+    titles = ['1  Match each tile', '2  Displacement of all tiles', '3  Fit affine + elevation',
+              '4  Tie to the drone mosaic', '5  Move every pixel']
+    for x, title in zip(xs, titles):
+        fig.text(x + w / 2, y0 + h + 0.035, title, ha='center', va='bottom', fontsize=FS_T)
+    for x in xs[1:]:
+        fig.text(x - gap / 2, y0 + h / 2, '\u2192', ha='center', va='center', fontsize=17, color='0.3')
+
+    # 1: master tile, scene tile, correlation surface
+    hw = (w - 0.006) / 2
+    hh = hw * W / H
+    lo, hi = np.percentile(ex['master'], [2, 98])
+    lo2, hi2 = np.percentile(ex['scene'], [2, 98])
+    for xi, img, name, a, b in ((xs[0], ex['master'], 'master', lo, hi), (xs[0] + hw + 0.006, ex['scene'], 'scene', lo2, hi2)):
+        ax = fig.add_axes([xi, y0 + h - hh, hw, hh])
+        ax.imshow(img, cmap='gray', vmin=a, vmax=b, interpolation='nearest')
+        ax.axhline(ic.TILE / 2 - 0.5, color=C_OUTLINE, lw=0.7)
+        ax.axvline(ic.TILE / 2 - 0.5, color=C_OUTLINE, lw=0.7)
+        ic.bare(ax)
+        ax.text(0.04, 0.95, name, transform=ax.transAxes, fontsize=FS_S, color='white', va='top',
+                path_effects=[__import__('matplotlib.patheffects', fromlist=['x']).withStroke(linewidth=2, foreground='black')])
+    m = ex['search'] * RES
+    sh = y0 + h - hh - 0.075 - y0
+    sw = sh * H / W
+    ax = fig.add_axes([xs[0] + (w - sw) / 2 + 0.012, y0 + 0.055, sw, sh - 0.055])
+    ax.imshow(ex['surface'], extent=(-m - 1.5, m + 1.5, -m - 1.5, m + 1.5), cmap='viridis', interpolation='nearest')
+    ax.plot(ex['east'], ex['north'], marker='+', color='white', ms=9, mew=1.6)
+    ax.axhline(0, color='white', lw=0.4, alpha=0.6)
+    ax.axvline(0, color='white', lw=0.4, alpha=0.6)
+    ax.set_xlabel('east shift (m)', fontsize=FS_S, labelpad=1)
+    ax.set_ylabel('north shift (m)', fontsize=FS_S, labelpad=0)
+    ax.tick_params(labelsize=FS_S - 1.5, length=2, pad=1)
+    ax.set_xticks([-30, 0, 30])
+    ax.set_yticks([-30, 0, 30])
+
+    # 2: all tiles
+    ax = fig.add_axes([xs[1], y0, w, h])
+    island_axes(ax, hs, vmin=-0.3, vmax=1.3)
+    ax.set_anchor('N')
+    qv = quiver(ax, t, 'meas', 0.035)
+    ax.plot(ex['x'], ex['y'], marker='s', mfc='none', mec='k', ms=7, mew=1.2)
+    ax.quiverkey(qv, 0.18, 0.06, 10, '10 m', labelpos='E', fontproperties=dict(size=FS_S))
+
+    # 3: fitted model (affine + elevation)
+    ax = fig.add_axes([xs[2], y0, w, h])
+    island_axes(ax, hs, vmin=-0.3, vmax=1.3)
+    ax.set_anchor('N')
+    t['fit_e'], t['fit_n'] = t.aff_e + t.elev_e, t.aff_n + t.elev_n
+    quiver(ax, t, 'fit', 0.035)
+
+    # 4: the master's own model relative to the drone mosaic
+    ax = fig.add_axes([xs[3], y0, w, h])
+    island_axes(ax, hs, vmin=-0.3, vmax=1.3)
+    ax.set_anchor('N')
+    c = ic.master_anchor()
+    X = np.stack([np.ones(len(t)), t.row, t.col, t.h - ic.HREF], axis=1)
+    t['anc_e'], t['anc_n'] = RES * (X @ c[1]), -RES * (X @ c[0])
+    quiver(ax, t, 'anc', 0.035, step=2)
+
+    # 5: per-pixel correction (scene to master plus master to drone)
+    ax = fig.add_axes([xs[4], y0, w, h])
+    island_axes(ax)
+    dy, dx = ic.displacement_maps(ic.load_model(ic.model_path(ic.RESULTS, scene)), 'Ha')
+    mag = np.where(land, RES * np.hypot(dy, dx), np.nan)
+    im = ax.imshow(mag, extent=ic.extent(), cmap='plasma', vmin=np.nanpercentile(mag, 1), vmax=np.nanpercentile(mag, 99))
+    ic.island_outline().boundary.plot(ax=ax, color='k', lw=0.6)
+    ic.bare(ax)
+    ax.set_anchor('N')
+    cax = fig.add_axes([xs[4] + 0.03, y0 + 0.13, w - 0.06, 0.028])
+    cb = fig.colorbar(im, cax=cax, orientation='horizontal')
+    cb.set_label('correction (m)', fontsize=FS_S, labelpad=2)
+    cb.ax.tick_params(labelsize=FS_S - 1, length=2)
+    fig.suptitle(f'PlanetScope {scene_title(scene, row)}', fontsize=FS, y=0.985, color='0.3')
+    save(fig, outdir, 'island_align_steps', f"""
+        The alignment procedure, step by step, on one PlanetScope scene ({scene}). (1) The island is cut into
+        192 m tiles every 96 m; each tile of the scene is compared with the same tile of the master scene
+        {ic.MASTER} by normalized cross-correlation of the red band (and separately the near-infrared band) over
+        cloud-free land pixels. Top: one tile on the central plateau in the master and, at the same map position,
+        in the scene as delivered (yellow cross at the tile center). Bottom: the correlation of that tile as a
+        function of the trial shift; the white cross marks the best match ({ex['east']:+.0f} m east,
+        {ex['north']:+.0f} m north, correlation {ex['peak']:.2f}), which the pipeline finds in two stages (one
+        whole-island shift searched over 90 m, then a search of 18 m per tile) and refines to a fraction of a
+        pixel by Lucas-Kanade. (2) The resulting displacement of every tile (arrows; color and length give the
+        magnitude, key 10 m) with the scene's median shift removed, over a hillshade of the Copernicus GLO-30
+        elevation model; the square marks the tile of panel 1, and tiles with a correlation peak below 0.35 or
+        more than 2 pixels from the median of their neighbors are dropped. (3) The model fitted to those
+        vectors in one robust least-squares fit: a displacement linear in map position (affine) and in terrain
+        elevation, eight coefficients per scene, drawn on the same scale. (4) The master scene's own displacement
+        relative to the 2024-10-14 whole-island drone orthomosaic, modeled the same way and estimated once as the
+        median over 53 scenes of the difference between a scene's fit against the drone mosaic and its fit
+        against the master (same arrow scale, every second tile, median shift included); it is added to every
+        scene's model. (5) The correction applied to this scene: magnitude of the total displacement at every 3 m
+        pixel (color, meters), computed from the summed model and the elevation model, by which the scene is
+        resampled.""")
+
+
 # --------------------------------------------------------------------------- result
 
 def drone_offsets():
@@ -526,7 +658,7 @@ def compare(outdir, n, hold, dpi):
 @out_option
 @click.pass_context
 def all_(ctx, outdir):
-    for cmd in (problem, diagnosis, method, result, compare):
+    for cmd in (problem, diagnosis, steps, method, result, compare):
         ctx.invoke(cmd, outdir=outdir)
 
 
