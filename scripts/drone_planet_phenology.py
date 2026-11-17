@@ -884,16 +884,12 @@ def plot_peak_scatter(cmp, outdir):
     for ax, (ty, title) in zip(axes, panels):
         c = cmp[(cmp['type'] == ty) & cmp['both_resolved']]
         ax.plot([0, 366], [0, 0], color=INK, lw=0.8)
-        ax.axhspan(-21, 21, color=GRID, alpha=0.6, lw=0)
         for src, mk, col in (('mrcnn', 'o', C_PLANET),):
             d = c[c['source'] == src]
             ax.errorbar(d['drone_peak'], d['dpeak'],
                         yerr=[-d['planet_lo'].clip(upper=0), d['planet_hi'].clip(lower=0)],
-                        fmt=mk, ms=5, color=col, lw=0.7, capsize=0,
+                        fmt=mk, ms=5, color=col, lw=0.7, capsize=0, alpha=0.5,
                         label=f'{SOURCE_NAME[src]} (n = {len(d)})')
-        for r in c[(c['source'] == 'mrcnn') & (c['dpeak'].abs() > 21)].itertuples():
-            ax.annotate(short(r.species), (r.drone_peak, r.dpeak), fontsize=6.5,
-                        style='italic', xytext=(3, 3), textcoords='offset points')
         style(ax)
         ax.set_xticks(months, list('JFMAMJJASOND'))
         ax.set_xlim(0, 366)
