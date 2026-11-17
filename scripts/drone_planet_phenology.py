@@ -617,6 +617,66 @@ def fit_two(t, k, n, w, x1):
     return best
 
 
+MIX_TYPES = ('flower', 'decid')
+
+
+def _match(comps, peaks):
+    """Order of the two components that puts each nearest its peak in
+    `peaks` (summed circular distance)."""
+    def cost(order):
+        return sum(abs(circ_diff(comps[i][1], p)) for i, p in zip(order, peaks))
+    return min(((0, 1), (1, 0)), key=cost)
+
+
+def fit_drone_init(s, x1, drone_rows, n_boot, rng):
+    """Two-bump fit of a merged Planet event series with one bump started
+    at each drone event type's fit (flowering, leaf loss), the peaks free to
+    move after that. Each fitted bump is labelled by the drone type whose
+    peak it lies nearest, with a crown-bootstrap interval on its peak date,
+    and the AIC difference against the one-bump fit `x1`."""
+    k, n = s.counts()
+    nll1 = _nll(x1, s.t, k, n, s.w, 1)
+    base, ((amp, _, _),) = _unpack(x1, 1)
+    drone = [_unpack(r['_x1'], 1)[1][0] for r in drone_rows]
+    peaks = [c[1] for c in drone]
+    best = (None, np.inf)
+    for split in (0.5, 0.8, 0.2):
+        a1, a2 = split * amp, (1 - split) * amp
+        x0 = [x1[0], _logit(a1 / (1 - base))]
+        x0 += [drone[0][1], np.log(np.clip(drone[0][2], 1, 200))]
+        x0 += [_logit(a2 / max(1 - base - a1, 1e-3))]
+        x0 += [drone[1][1], np.log(np.clip(drone[1][2], 1, 200))]
+        r = fit_curve(s.t, k, n, s.w, 2, x0)
+        if r[1] < best[1]:
+            best = r
+    xm, nll2 = best
+    mbase, comps = _unpack(xm, 2)
+    comps = [comps[i] for i in _match(comps, peaks)]
+    out = {'mix_base': mbase, 'daic_mix': 2 * (nll1 - nll2) - 2 * 3, '_xmix': xm}
+    for ty, (a, mu, kap) in zip(MIX_TYPES, comps):
+        out.update({f'mix_{ty}_amp': a, f'mix_{ty}_peak': mu,
+                    f'mix_{ty}_kappa': kap, f'mix_{ty}_fwhm': fwhm_days(kap),
+                    f'mix_{ty}_peak_obs': _peak_obs(s, mu)})
+    boot = []
+    for _ in range(n_boot):
+        tagw = np.bincount(rng.integers(0, len(s.tags), len(s.tags)),
+                           minlength=len(s.tags)).astype(float)
+        kb, nb = s.counts(tagw)
+        ok = nb > 0
+        if kb.sum() == 0:
+            continue
+        xb, _ = fit_curve(s.t[ok], kb[ok], nb[ok], s.w[ok], 2, xm)
+        cb = _unpack(xb, 2)[1]
+        boot.append([cb[i][1] for i in _match(cb, [c[1] for c in comps])])
+    for i, ty in enumerate(MIX_TYPES):
+        if len(boot) >= 0.8 * n_boot and n_boot:
+            d = circ_diff([b[i] for b in boot], out[f'mix_{ty}_peak'])
+            out[f'mix_{ty}_peak_lo'], out[f'mix_{ty}_peak_hi'] = np.percentile(d, [2.5, 97.5])
+        else:
+            out[f'mix_{ty}_peak_lo'] = out[f'mix_{ty}_peak_hi'] = np.nan
+    return out
+
+
 class Series:
     """Crown-level event observations of one species from one source, kept
     per crown so that crowns can be resampled."""
@@ -700,6 +760,21 @@ def resolved(row, min_amp=0.03, min_events=10):
                 and row['peak_month_obs'] >= 3)
 
 
+def mixed(row):
+    """Whether the drone-initialized two-bump fit is selected (by AIC)."""
+    return bool(row is not None and row.get('daic_mix', -np.inf) > 0)
+
+
+def resolved_comp(row, ty, min_amp=0.03, min_events=10):
+    """`resolved` for the `ty` bump of a selected two-bump fit."""
+    if not mixed(row):
+        return False
+    a = row[f'mix_{ty}_amp']
+    return bool(row['events'] >= min_events and a >= min_amp
+                and a >= 2 * row['mix_base'] and 10 <= row[f'mix_{ty}_fwhm'] <= 183
+                and row[f'mix_{ty}_peak_obs'] >= 3)
+
+
 def yearly_peaks(s, x1, half=120, min_near=3):
     """Peak date and amplitude in each year, holding the baseline and the
     width of the all-years fit: one row per year with observations on both
@@ -769,6 +844,19 @@ def plot_fit_curves(fits, series, species, outdir):
                 continue
             ax.plot(mid, monthly(series[(sp, key)]).values, 'o', ms=3.5, color=col,
                     alpha=0.6)
+            if key == 'mrcnn' and mixed(row):
+                base, comps = _unpack(row['_xmix'], 2)
+                ok = any(resolved_comp(row, ty) for ty in MIX_TYPES)
+                ax.plot(tt, curve(tt, base, comps), color=col, lw=1.6,
+                        ls='-' if ok else ':', label=lab)
+                for ty, tcol in zip(MIX_TYPES, (C_FLOWER, C_DECID)):
+                    a, mu = row[f'mix_{ty}_amp'], row[f'mix_{ty}_peak']
+                    one = [(a, mu, row[f'mix_{ty}_kappa'])]
+                    ax.plot(tt, curve(tt, base, one), color=col, lw=0.9, ls='--',
+                            alpha=0.8, label='Planet bump (drone-initialized)'
+                            if ty == 'flower' else None)
+                    ax.plot([mu], [base + a], 'v', ms=5, color=tcol, mec=col, mew=0.6)
+                continue
             base, comps = _unpack(row['_x1'], 1)
             ax.plot(tt, curve(tt, base, comps), color=col, lw=1.6,
                     ls='-' if resolved(row) else ':', label=lab)
@@ -780,7 +868,11 @@ def plot_fit_curves(fits, series, species, outdir):
         ax.axis('off')
     for ax in axes[:, 0]:
         ax.set_ylabel('share of crowns', fontsize=8)
-    axes.ravel()[0].legend(fontsize=7, frameon=False)
+    handles = {}
+    for ax in axes.ravel()[:n]:
+        for h, lab in zip(*ax.get_legend_handles_labels()):
+            handles.setdefault(lab, h)
+    axes.ravel()[0].legend(handles.values(), handles.keys(), fontsize=7, frameon=False)
     save(fig, outdir, 'phenology_fit_curves')
 
 
@@ -852,13 +944,10 @@ def fit(outdir, n_boot, min_crowns, tolerance, refit):
     drone = drone[drone['tag'].isin(tags) & (drone['date'] >= start)]
     ncr = drone.groupby('species')['tag'].nunique()
     species = ncr.index[ncr >= min_crowns]
-    fits, series, rows = {}, {}, []
+    fits, series = {}, {}
     cache = mat / f'phenology_fits_b{n_boot}.pkl'
     if cache.exists() and not refit:
         fits, series = pd.read_pickle(cache)
-        for (sp, key), row in fits.items():
-            row['resolved'] = resolved(row)
-            rows.append({k: v for k, v in row.items() if not k.startswith('_')})
     for sp in ([] if fits else species):
         d = drone[drone['species'] == sp]
         srcs = {ty: Series(d, ty) for ty in TYPES}
@@ -869,10 +958,34 @@ def fit(outdir, n_boot, min_crowns, tolerance, refit):
             if s.counts()[0].sum() < 3:
                 continue
             row = fit_series(s, n_boot, rng, two=key in ('event', 'mrcnn', 'pse'))
-            row.update(species=sp, series=key, resolved=resolved(row))
+            row.update(species=sp, series=key)
             fits[(sp, key)], series[(sp, key)] = row, s
-            rows.append({k: v for k, v in row.items() if not k.startswith('_')})
     pd.to_pickle((fits, series), cache)
+    # Planet two-bump fits started from the drone flowering and leaf-loss
+    # fits, where the drone resolves both seasons.
+    mcache = mat / f'phenology_mix_fits_b{n_boot}.pkl'
+    if mcache.exists() and not refit:
+        mix = pd.read_pickle(mcache)
+    else:
+        mix = {}
+        for sp in species:
+            dr = [fits.get((sp, ty)) for ty in MIX_TYPES]
+            if not all(r is not None and resolved(r) for r in dr):
+                continue
+            for src in planet:
+                if (sp, src) in fits:
+                    mix[(sp, src)] = fit_drone_init(
+                        series[(sp, src)], fits[(sp, src)]['_x1'], dr, n_boot, rng)
+        pd.to_pickle(mix, mcache)
+    rows = []
+    for key, row in fits.items():
+        row.update(mix.get(key, {}))
+        row['resolved'] = resolved(row)
+        if key in mix:
+            row['mix_selected'] = mixed(row)
+            for ty in MIX_TYPES:
+                row[f'mix_{ty}_resolved'] = resolved_comp(row, ty)
+        rows.append({k: v for k, v in row.items() if not k.startswith('_')})
     ft = pd.DataFrame(rows)
     first = ['species', 'series', 'resolved', 'n_crowns', 'n_dates', 'events',
              'base', 'amp1', 'peak1', 'peak1_lo', 'peak1_hi', 'fwhm1']
@@ -890,21 +1003,32 @@ def fit(outdir, n_boot, min_crowns, tolerance, refit):
                 dr = fits.get((sp, ty))
                 if dr is None:
                     continue
-                both = resolved(pr) and resolved(dr)
-                dpk = float(circ_diff(pr['peak1'], dr['peak1']))
-                lo = np.hypot(pr['peak1_lo'], dr['peak1_hi'])
-                hi = np.hypot(pr['peak1_hi'], dr['peak1_lo'])
+                # The flowering and leaf-loss rows compare against the matched
+                # bump of the drone-initialized two-bump fit when AIC selects it.
+                if ty in MIX_TYPES and mixed(pr):
+                    model, pres = 'two_drone_init', resolved_comp(pr, ty)
+                    pp = {f: pr[f'mix_{ty}_{f}']
+                          for f in ('peak', 'peak_lo', 'peak_hi', 'fwhm', 'amp')}
+                else:
+                    model, pres = 'one', resolved(pr)
+                    pp = {'peak': pr['peak1'], 'peak_lo': pr['peak1_lo'],
+                          'peak_hi': pr['peak1_hi'], 'fwhm': pr['fwhm1'],
+                          'amp': pr['amp1']}
+                both = pres and resolved(dr)
+                dpk = float(circ_diff(pp['peak'], dr['peak1']))
+                lo = np.hypot(pp['peak_lo'], dr['peak1_hi'])
+                hi = np.hypot(pp['peak_hi'], dr['peak1_lo'])
                 cmp_rows.append({
-                    'species': sp, 'source': src, 'type': ty,
-                    'drone_resolved': resolved(dr), 'planet_resolved': resolved(pr),
+                    'species': sp, 'source': src, 'type': ty, 'planet_model': model,
+                    'drone_resolved': resolved(dr), 'planet_resolved': pres,
                     'both_resolved': both, 'drone_peak': dr['peak1'],
-                    'planet_peak': pr['peak1'], 'dpeak': dpk,
-                    'planet_lo': pr['peak1_lo'], 'planet_hi': pr['peak1_hi'],
+                    'planet_peak': pp['peak'], 'dpeak': dpk,
+                    'planet_lo': pp['peak_lo'], 'planet_hi': pp['peak_hi'],
                     'dpeak_lo': dpk - lo, 'dpeak_hi': dpk + hi,
-                    'drone_fwhm': dr['fwhm1'], 'planet_fwhm': pr['fwhm1'],
-                    'dfwhm': pr['fwhm1'] - dr['fwhm1'],
-                    'drone_amp': dr['amp1'], 'planet_amp': pr['amp1'],
-                    'amp_ratio': pr['amp1'] / dr['amp1'],
+                    'drone_fwhm': dr['fwhm1'], 'planet_fwhm': pp['fwhm'],
+                    'dfwhm': pp['fwhm'] - dr['fwhm1'],
+                    'drone_amp': dr['amp1'], 'planet_amp': pp['amp'],
+                    'amp_ratio': pp['amp'] / dr['amp1'],
                     'same_peak': both and abs(dpk) <= tolerance,
                     'planet_two_bumps': pr.get('daic2', -np.inf) > 10,
                 })
@@ -940,6 +1064,8 @@ def fit(outdir, n_boot, min_crowns, tolerance, refit):
                 'drone_resolved': int(c['drone_resolved'].sum()),
                 'planet_resolved': int(c['planet_resolved'].sum()),
                 'both_resolved': int(len(b)),
+                'n_two_drone_init': int((c['planet_model'] == 'two_drone_init').sum()),
+                'both_resolved_two_drone_init': int((b['planet_model'] == 'two_drone_init').sum()),
                 'same_peak': int(b['same_peak'].sum()),
                 'median_abs_dpeak': float(b['dpeak'].abs().median()) if len(b) else None,
                 'median_dpeak': float(b['dpeak'].median()) if len(b) else None,
