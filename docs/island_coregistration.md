@@ -1,9 +1,23 @@
-# Whole-island Planet coregistration and the case for local warping
+# Whole-island Planet coregistration: translation, affine, local warp and the elevation term
 
-Script: [`scripts/island_coreg.py`](../scripts/island_coreg.py).
-Outputs (November 2026 run): tables in `/Volumes/Earth03/flower/results/island_coreg/`,
-aligned rasters in `/Volumes/Earth03/flower/planet_bci_aligned/L/`, figures and videos in
-`/Volumes/Earth03/flower/figs/20261110_updates/` (`island_coreg_*`).
+Scripts: [`scripts/island_coreg.py`](../scripts/island_coreg.py) (alignment) and
+[`scripts/island_coreg_diagnose.py`](../scripts/island_coreg_diagnose.py) (diagnosis of the
+central band, drone anchoring).
+Outputs: tables in `/Volumes/Earth03/flower/results/island_coreg/` (diagnostics in
+`diagnose/`), aligned rasters in `/Volumes/Earth03/flower/planet_bci_aligned/Ha/` (recommended;
+the earlier local-warp set is in `L/`), figures and videos in
+`/Volumes/Earth03/flower/figs/20261110_updates/` (`island_coreg_*`) and
+`/Volumes/Earth03/flower/figs/20261116_updates/` (`island_diag_*`, re-rendered videos).
+
+**Summary of the 2026-11-16 revision.** The band of residual across the center of the
+island is not match error and not a product of Planet's orthorectification resampling. It
+is the island's central plateau, and what it shows is that every scene carries a
+displacement proportional to terrain elevation (median 2.8 m per 100 m of elevation, 90th
+percentile 9.9 m). An affine plus that one elevation term (model **H**, 8 parameters per
+scene) aligns better than the local warp (re-measured median residual 1.04 m against
+1.29 m, better on 95 % of scenes), and the drone orthomosaic of 2024-10-14 anchors the
+result to the ground (model **Ha**). Details in
+[The central band](#the-central-band-match-error-master-or-orthorectification).
 
 ## Question
 
@@ -46,13 +60,18 @@ tile vectors, a median of 1,718 tiles per scene.
   scenes and 0.5 m in 64 %. With the local warp, 44 % of scenes still have a 90th
   percentile residual above one pixel, against 85 % with a translation and 74 %
   with an affine.
-- **The coherent residual is not orthorectification parallax.** Averaged over
+- **The coherent residual is not parallax along the nominal view direction, but it
+  is proportional to elevation** (revised 2026-11-16; see
+  [The central band](#the-central-band-match-error-master-or-orthorectification)).
+  Averaged over
   scenes, the translation residual forms a 2–3 m band along the island's central
   ridge that points the same way whether the satellite was east or west of the
   island (340 vs 378 scenes; `island_coreg_residual_map`). Parallax from an
-  elevation error reverses with the viewing side, so this field is common to all
-  scenes, which with a single-scene reference means it is the master's own
-  distortion relative to the archive. Nothing depends on the view angle (0–5.2°
+  elevation error in the DEM reverses with the viewing side, so the mean field is
+  common to all scenes: it is the master's own elevation term (+2.4 m north,
+  +2.0 m east per 100 m of elevation). Each scene has its own such term, in a
+  direction unrelated to its reported view vector, which is why
+  nothing depends on the view angle (0–5.2°
   in the fitted set, median 3.3°): Spearman ρ with view angle is 0.03 for the
   affine amplitude, 0.04 for the local-warp gain and 0.03 for the coherence
   (`island_coreg_view_geometry`). Per scene, the along-view residual component has
@@ -132,10 +151,10 @@ island):
   footprint is lake anyway, so the refinement over the island rests on few,
   distant points and the attitude-model residual shows through.
 - **More than half of what the local warp removes is beyond affine** (median
-  gain over translation 0.22 m from the affine part, 0.38 m from the local part),
-  so the per-frame error bends within the frame rather than being a pure
-  rotation or scale, as a tie-point-driven mesh correction with sparse control
-  would.
+  gain over translation 0.22 m from the affine part, 0.38 m from the local part).
+  The 2026-11-16 analysis shows what that part is: not a bend of the frame but a
+  displacement proportional to terrain elevation, which an affine in map
+  coordinates cannot represent and a smooth local field only approximates.
 
 This is the island-scale face of what the 50ha work already saw: adjacent frames
 of one strip registered to the drone with shifts more than 10 m apart
@@ -143,7 +162,131 @@ of one strip registered to the drone with shifts more than 10 m apart
 assigned frame by frame, and within a frame it is a smooth field of a few meters
 to a few tens of meters across 6 km.
 
-**Answer.** Over the whole island a translation is not enough: it leaves 2 m
+## The central band: match error, master or orthorectification?
+
+Added 2026-11-16 (`island_coreg_diagnose.py`). The mean residual map has a 2–3 m band
+across the center of the island, over the 50ha plot, and by eye the alignment there
+looked wrong. Three explanations were tested.
+
+**1. False matches on ambiguous canopy texture: no.**
+
+- The band is 184 of 1,520 tiles. Its across-scene spread is higher than elsewhere
+  (2.33 m against 1.73 m, robust), but the red-versus-NIR disagreement of the same
+  tile and scene is the same (1.40 m against 1.39 m) and so is the NCC peak (0.62
+  against 0.61). False matches would make the two bands disagree
+  (`island_diag_band`, panel c).
+- The ±6 px NCC surfaces of 60 scenes against 4 masters (612,000 tiles) are
+  single-peaked: 31 % have any secondary local maximum at all, and where one exists
+  its value is a median 3 % of the main peak (1 % in the band).
+- Triangle closure. With the master M0 and three alternate masters Mk (a wet-season
+  SuperDove, a Dove Classic and another dry-season SuperDove, all fully clear),
+  d(S→M0) − d(Mk→M0) − d(S→Mk) was formed per tile for 60 scenes (417,000
+  triangles). Real displacements close to zero whatever they are; false matches do
+  not. The median closure error is 0.64 m in red and 0.39 m in NIR, the same inside
+  the band (0.61 m) as outside (0.64 m), and exceeds 3 m on 1.8 % of red tiles
+  (0.9 % in the band). Swapping scene and reference between two masters reverses the
+  band-mean field to within 0.03 m (`island_diag_band`, panel d).
+
+**2. The master's own distortion: partly.** Under the original master the band-mean
+residual is 2.9 m; under the three alternates it is 1.1–1.7 m, in different
+directions, and the masters differ from one another by 1.5–3.9 m in the band against
+0.3–0.5 m outside it. So the band is not one scene's defect: it is a place where every
+scene is displaced differently, and the across-scene spread there is high under every
+master (2.2–2.6 m against 1.4–1.6 m).
+
+**3. Planet's orthorectification resampling: no.** The basic (level 1B,
+non-orthorectified) scenes with their RPCs are in
+`csdap/planet/PSScene-<id>/assets/basic_analytic_4b/`; 542 of the 718 fitted scenes
+have one. `ortho1b` projects them with `gdalwarp -rpc` (cubic, `RPC_DEM` = the
+Copernicus GLO-30 tile) onto the island lattice. For 64 scenes (the 60-scene sample
+and the 4 masters) our RPC ortho and Planet's ortho of the same image agree to a
+median tile residual of 0.042 m after a constant offset of 0.9 m (worst scene
+0.064 m; affine amplitude 0.23 m across the island; NCC peak 0.99), against 1.7 m of
+scene-to-master residual for the same scenes. Planet's ortho product is the RPC model
+applied with a DEM equivalent to GLO-30, and nothing else: no tie-point mesh, no
+resampling artifact. Re-measuring scene against scene in our own RPC orthos would
+therefore reproduce the Planet-ortho results to 0.04 m and was not run. The error is
+upstream of the orthorectification, in the geometric model (the RPC) of each frame.
+
+**What it is: a displacement proportional to elevation.** The band is the island's
+central plateau (band tiles average 155 m above sea level, the rest 80 m;
+`island_diag_band`, panel b). Adding a term k·(h − 100 m) to the per-scene affine,
+with h the GLO-30 elevation and k a 2-vector per scene, removes it:
+
+| Model (per scene) | Parameters | Fit residual, 718 scenes (m) | Re-measured after warping, 288 scenes (m) | Same, plateau tiles ≥ 120 m (m) | 90th percentile above 1 px (share of scenes, re-measured) |
+|---|---|---|---|---|---|
+| Translation (T) | 2 | 1.99 | 1.92 | 2.95 | 87 % |
+| Affine (A) | 6 | 1.68 | 1.68 | 2.71 | 77 % |
+| Local warp (L) | field | 1.23 (hold-out) | 1.29 | 1.25 | 45 % |
+| Affine + elevation (H) | 8 | 1.11 | 1.04 | 1.02 | 28 % |
+| H + local (HL) | field | 1.15 (hold-out) | 1.26 | 1.19 | 42 % |
+
+(Medians over scenes of the per-scene median tile residual; noise floor 1.10 m.)
+H reaches the noise floor with 8 parameters, beats the local warp on 95 % of the
+re-measured scenes (85 % on the plateau tiles) and the affine on 96 %. Adding a local
+field on top of H makes it worse: what is left after H is matching noise, and a
+smooth field fitted to noise adds error when applied.
+
+- **Size.** Referred to the ground (see the anchoring below), the term has a median
+  magnitude of 2.8 m per 100 m of elevation and a 90th percentile of 9.9 m; it
+  exceeds 5 m per 100 m on 28 % of scenes and 10 m on 10 %. Between the lake shore
+  (27 m) and the top of the plateau (165 m) that is 3.9 m at the median and 13.8 m at
+  the 90th percentile. It is larger along track (standard deviation 5.7 m per 100 m
+  north–south against 3.0 m east–west) and similar across generations (median 1.8 m
+  for Dove Classic, 2.9 m for Dove-R and SuperDove).
+- **It is per frame.** In the 108 same-satellite same-day groups the term differs
+  between consecutive frames by a median of 2.1 m (north) and 1.5 m (east) per 100 m.
+  It is uncorrelated with the reported view angle (ρ = −0.03), the clear fraction
+  (−0.06) and the sun elevation (0.06), and it does not follow the reported view
+  vector: regressing each tile's residual on tan(view angle) along the satellite
+  azimuth, or on the sun's shadow vector, explains 3 % of its variance.
+- **Likely mechanism.** A displacement of height × angle is what an error in a
+  frame's pointing leaves after orthorectification: 2.8 m per 100 m is 1.6° and
+  9.9 m is 5.6°. Planet's ground-control adjustment can absorb a pointing error as a
+  shift at the height of its tie points, which around BCI are mostly near lake
+  level, and the error then reappears in proportion to height above them. This fits
+  the data but the adjustment itself was not examined.
+- **Independent confirmation against the drone.** The 2024-10-14 whole-island drone
+  orthomosaic (20 cm, averaged to the 3 m grid; red and green bands) was matched to
+  the 120 Planet scenes nearest in date that are at least 90 % clear; 54 pass the global gate (tile NCC peak
+  0.42). The elevation term of a scene measured against the drone and the one
+  measured against the Planet master agree at r = 0.98 (north) and 0.97 (east), with
+  a constant difference that is the master's own term: +2.43 m north (MAD 0.26) and
+  +2.00 m east (MAD 0.29) per 100 m from 53 scenes, +2.60 and +2.17 m measured
+  directly on the master (`island_diag_elevation`, panel b). The archive consensus
+  (minus the median of all scenes' terms relative to the master) gives +3.4 and
+  +1.4 m.
+- **At the 50ha plot.** Against the independent Planet-to-drone shifts of 596
+  scenes, the island models evaluated at the plot center disagree by a median of
+  3.40 m (translation), 3.31 m (affine), 2.52 m (local warp), 2.30 m (H) and 2.50 m
+  (HL); within 3 m on 41 / 44 / 61 / 68 / 63 % of scenes
+  (`diagnose/plot_crosscheck.csv`).
+
+**Anchoring to the ground (model Ha).** Alignment to a master inherits the master's
+errors: an offset of 6.5 m from the drone mosaic, affine terms of up to 3.8 m across the
+island and the elevation term above. `island_coreg_diagnose.py drone` estimates the
+master's own affine + elevation model as the median over 53 scenes of (scene against
+drone) − (scene against master) and writes it to `results/island_coreg/master_abs.json`;
+model `Ha` adds it to each scene's H coefficients (the two fields add to first order).
+Checked on 6 scenes re-measured against the drone after the `Ha` warp: offset 0.1–0.6 m
+(6–13 m as delivered), elevation term within ±0.8 m per 100 m of zero (one scene
+−1.5 m east), median tile residual 1.1–1.3 m, which is the cross-sensor matching
+noise. `planet_bci_aligned/Ha/` holds the 288 video scenes warped this way.
+
+**Not done from the original plan.** The known-shift test on real scene pairs was
+dropped because the triangle closure answers the same question without a synthetic
+shift. The scene-to-scene measurement in RPC-ortho geometry was dropped for the reason
+given under 3. Matcher changes (coarse-to-fine, joint red + NIR, ambiguity weighting)
+were not needed: the matches were not the problem.
+
+**Answer (revised 2026-11-16).** Use affine + elevation (H; Ha where absolute position
+matters) for whole-island products. It is the physically motivated model, has 8
+parameters, reaches the matching noise floor everywhere including the plateau, and
+agrees best with the drone. The local warp of the first run was approximating the
+elevation term with a smooth field and should not be used on top of H. The paragraph
+below is the first run's answer, kept for the record.
+
+**Answer (first run).** Over the whole island a translation is not enough: it leaves 2 m
 (0.65 px) of median residual with 85 % of scenes above one pixel at the 90th
 percentile, and about half of that residual is coherent geometry. The coherent
 part is not terrain parallax (view angles are too small and nothing depends on
@@ -228,6 +371,15 @@ some scenes):
   lie on a lattice, cloud gaps are handled by the weights, and the one
   regularization length is in meters.
 
+- **H, affine + elevation** (2026-11-16): least squares of each component on
+  (1, row, col, h − 100 m), h the mean GLO-30 elevation of the tile
+  (`dem/bci_glo30_3m.tif`), with the same clipping. Applied per pixel with the 3 m
+  DEM. `k_north_m100`, `k_east_m100` in `scene_models.csv` are the elevation term in
+  meters per 100 m of elevation, relative to the master.
+- **HL:** H plus the smoothed H residual, scored by the same hold-out as L.
+- **Ha:** H plus the master's own affine + elevation model relative to the drone
+  orthomosaic (`master_abs.json`), so the output is in the drone's frame.
+
 **Honest evaluation.** T and A are 2- and 6-parameter fits to ~1,500 tiles, so their
 in-sample residuals are already honest. L is scored by hold-out: every 4th tile in
 each lattice direction (16 phases) is predicted from a field fitted without it and
@@ -262,6 +414,16 @@ for every frame, 6 frames per second, through the same ffmpeg raw-video pipe as
 after translation and after the local warp.
 
 ## Caveats
+
+- The elevation in H is the Copernicus GLO-30 surface model resampled from 30 m; it
+  does not resolve individual crowns or gaps, and the term is fitted to 192 m tiles.
+- The anchor rests on one drone mosaic (2024-10-14) and on 53 scenes; its affine
+  terms are known to about 0.5–1.1 m across the island (MAD over scenes) and its
+  elevation term to about 0.3 m per 100 m. Against the drone a common local field
+  remains (hold-out residual 0.65 m with it, 0.98 m without), which may be the
+  mosaic's own local distortion; it is not applied.
+- The pointing-error mechanism is an inference from the form of the term (linear in
+  height, random direction per frame), not from Planet's processing.
 
 - Alignment is relative to one Planet scene. The whole sequence inherits its
   georeferencing error, and its own orthorectification distortion is the zero of
@@ -303,6 +465,17 @@ Each has a `<name>_caption.md` with the full caption and the numbers behind it.
    UTM 625737–626637 E, 1011690–1012590 N, which is the 50ha plot, because the plot
    sits on the central-ridge band where the coherent residual is largest.
 
+Added 2026-11-16 (`figs/20261116_updates/`):
+
+10. `island_diag_band` — tile maps of the mean residual, elevation, red–NIR
+    disagreement and triangle closure error, with the band outlined.
+11. `island_diag_elevation` — the elevation term of every scene, its agreement
+    between the Planet master and the drone orthomosaic, and the re-measured residual
+    by model on plateau and lower tiles.
+12. `island_coreg_sequence.mp4` — the 288 video scenes aligned with `Ha`.
+13. `island_coreg_comparison.mp4` — the 900 m window over the 50ha plot under
+    translation / local warp / affine + elevation, side by side.
+
 ## Data locations
 
 | What | Where |
@@ -314,7 +487,18 @@ Each has a `<name>_caption.md` with the full caption and the numbers behind it.
 | Island models at the 50ha plot center vs the Planet-to-drone shifts | `results/island_coreg/plot_crosscheck.csv` |
 | DEM on the island grid (elevation, slope, aspect) | `dem/bci_glo30_3m.tif` (source `dem/Copernicus_DSM_COG_10_N09_00_W080_00_DEM.tif`) |
 | Aligned SR scenes and OCM, index with offsets | `planet_bci_aligned/L/<YYYY>/<scene>_{4band,ocm}.tif`, `planet_bci_aligned/L/index.csv` |
-| Figures, captions, videos | `figs/20261110_updates/island_coreg_*` |
+| Figures, captions, videos | `figs/20261110_updates/island_coreg_*`, `figs/20261116_updates/` |
+| Master's model relative to the drone mosaic | `results/island_coreg/master_abs.json` |
+| Aligned scenes, affine + elevation, drone-anchored | `planet_bci_aligned/Ha/<YYYY>/`, `planet_bci_aligned/Ha/index.csv` |
+| Diagnostics: per-tile spread and band tiles | `results/island_coreg/diagnose/spread_tiles.csv` |
+| Diagnostics: sample, alternate masters | `diagnose/sample.csv`, `diagnose/masters.json` |
+| Diagnostics: tile vectors and NCC-surface statistics for every scene–master pair | `diagnose/multi_planet.csv.gz` (per pair in `diagnose/pairs_planet/`) |
+| Diagnostics: triangle closure, mean field per master | `diagnose/closure_planet.csv.gz`, `closure_tiles_planet.csv`, `master_fields_planet.csv`, `master_pairs_planet.csv` |
+| RPC orthos of basic scenes (red, NIR, udm2 clear; island grid + 40 px margin) | `planet_bci_1b_ortho/<YYYY>/<scene>_1b_ortho.tif` |
+| RPC ortho against Planet ortho | `diagnose/orthocmp_scenes.csv`, `orthocmp_tiles.csv.gz` |
+| Drone mosaic at 3 m, scene-to-drone tiles and fits | `diagnose/drone_20241014_3m.tif`, `drone_tiles.csv.gz`, `drone_fits.csv` |
+| Island models at the plot center against Planet-to-drone shifts, all models | `diagnose/plot_crosscheck.csv` |
+| Tables of the first run, before the H models were added | `diagnose/scene_models_before_H.csv`, `remeasure_before_H.csv` |
 
 ## Commands
 
@@ -328,4 +512,22 @@ python scripts/island_coreg.py remeasure --jobs 5        # video scenes, T/A/L
 python scripts/island_coreg.py warp --model L --jobs 5   # ~8 GB
 python scripts/island_coreg.py video
 python scripts/island_coreg.py figures
+
+# 2026-11-16: diagnosis, elevation models, drone anchoring
+python scripts/island_coreg_diagnose.py spread
+python scripts/island_coreg_diagnose.py sample
+python scripts/island_coreg_diagnose.py multi --jobs 4      # 252 pairs, ~25 min
+python scripts/island_coreg_diagnose.py closure
+python scripts/island_coreg_diagnose.py ortho1b --jobs 3    # needs gdalwarp on PATH
+python scripts/island_coreg_diagnose.py orthocmp --jobs 3
+python scripts/island_coreg_diagnose.py drone --jobs 5      # writes master_abs.json
+python scripts/island_coreg_diagnose.py crosscheck
+python scripts/island_coreg.py remeasure --jobs 5           # T, A, L, H, HL
+python scripts/island_coreg.py warp --model Ha --jobs 3
+python scripts/island_coreg.py video --model Ha --which sequence --outdir <figs>/20261116_updates
+python scripts/island_coreg.py video --model H --which comparison --panels T,L,H --outdir <figs>/20261116_updates
+python scripts/island_coreg_diagnose.py figures
 ```
+
+`island_coreg_diagnose.py` also has `island1b` and `multi --source rpc` (the standard
+measurement in RPC-ortho geometry); they were not run, see the central-band section.

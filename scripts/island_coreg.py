@@ -107,9 +107,13 @@ LAND_ERODE = 2             # px; the shoreline moves with the lake level
 OUTLIER_PX = 2.0           # vs the 3x3 tile-neighbor median
 SIGMA_TILES = 1.5          # local field smoothing, in tiles (x STRIDE px)
 HOLDOUT_SPACING = 4        # test tiles every 4th lattice point; exclude their 3x3 ring
-MODELS = ('T', 'A', 'L')
+HREF = 100.0               # m; reference elevation of the elevation term (mid-range of the island)
+MODELS = ('T', 'A', 'L', 'H', 'HL', 'Ha')
 MODEL_NAMES = {'raw': 'uncorrected', 'T': 'translation', 'Tc': 'translation + archive-mean field',
-               'A': 'affine', 'L': 'local warp', 'Lh': 'local warp (hold-out)'}
+               'A': 'affine', 'L': 'local warp', 'Lh': 'local warp (hold-out)',
+               'H': 'affine + elevation', 'HL': 'affine + elevation + local',
+               'HLh': 'affine + elevation + local (hold-out)',
+               'Ha': 'affine + elevation, drone-anchored'}
 INSTRUMENTS = {'PS2': ('Dove Classic', '#1f77b4'), 'PS2.SD': ('Dove-R', '#ff7f0e'),
                'PSB.SD': ('SuperDove', '#2ca02c')}
 
@@ -270,11 +274,13 @@ def tile_lattice(shape=ISLAND_SHAPE, tile=TILE, stride=STRIDE):
 
 
 def tile_field(master_z, master_valid, scene, scene_valid, refine='lk', search=TILE_SEARCH,
-               tile=TILE, stride=STRIDE):
+               tile=TILE, stride=STRIDE, min_peak=TILE_MIN_PEAK, surfaces=False):
     """Displacement of every tile of `scene` relative to the master (both on the
     island grid, scene already corrected for the integer global shift).
     Yields dicts with the tile center (row, col), dy_px, dx_px, peak, valid_frac,
-    method."""
+    method, and the diagnostics second (best NCC more than search/2 px from the
+    peak) and, with `surfaces`, the NCC surface itself (index [search - dy,
+    search - dx])."""
     scene_z = zscore(scene, scene_valid)
     rows, cols = tile_lattice(scene.shape, tile, stride)
     for r0 in rows:
@@ -284,8 +290,8 @@ def tile_field(master_z, master_valid, scene, scene_valid, refine='lk', search=T
             vf = valid.mean()
             if vf < TILE_MIN_VALID:
                 continue
-            dy, dx, peak, _, on_edge, r = ncc_search(master_z[sl], scene_z[sl], search)
-            if peak < TILE_MIN_PEAK or on_edge:
+            dy, dx, peak, second, on_edge, r = ncc_search(master_z[sl], scene_z[sl], search)
+            if peak < min_peak or on_edge:
                 continue
             i, j = search - dy, search - dx
             di, dj = parabolic(r, i, j)
@@ -296,15 +302,20 @@ def tile_field(master_z, master_valid, scene, scene_valid, refine='lk', search=T
                 d_lk = lk_refine(master_z[sl], scene_z[sl], valid, (dy, dx))
                 if np.all(np.isfinite(d_lk)) and np.abs(d_lk - np.array(d_par)).max() < 1.0:
                     d, method = tuple(d_lk), 'lk'
-            yield dict(row=r0 + tile / 2, col=c0 + tile / 2, dy_px=float(d[0]),
-                       dx_px=float(d[1]), peak=peak, valid_frac=float(vf), method=method)
+            out = dict(row=r0 + tile / 2, col=c0 + tile / 2, dy_px=float(d[0]),
+                       dx_px=float(d[1]), peak=peak, valid_frac=float(vf), method=method,
+                       second=second)
+            if surfaces:
+                out['surface'] = r.astype(np.float32)
+            yield out
 
 
 def measure_arrays(bands, clear, data, master=MASTER, refine='lk', global_search=GLOBAL_SEARCH,
-                   skip_global=False):
+                   skip_global=False, surfaces=False, md=None):
     """Global shift (red) and the tile fields (all bands) of one scene given its
-    arrays. Returns (global record, list of tile dicts)."""
-    md = master_data(master)
+    arrays. Returns (global record, list of tile dicts). `md` replaces the cached
+    master (a dict with `bands` and `valid`, e.g. another reference image)."""
+    md = md or master_data(master)
     land = md['valid']  # master clear & land
     scene_valid = clear & data & land_mask()
     rec = dict(global_dy_px=0, global_dx_px=0, global_peak=np.nan, global_second=np.nan,
@@ -324,7 +335,7 @@ def measure_arrays(bands, clear, data, master=MASTER, refine='lk', global_search
     for name, arr in bands.items():
         mz = zscore(md['bands'][name], md['valid'])
         s = translate(arr, dy, dx, 0)
-        for t in tile_field(mz, md['valid'], s, shifted_valid, refine=refine):
+        for t in tile_field(mz, md['valid'], s, shifted_valid, refine=refine, surfaces=surfaces):
             t.update(band=name, dy_px=t['dy_px'] + dy, dx_px=t['dx_px'] + dx)
             tiles.append(t)
     return rec, tiles
@@ -397,6 +408,31 @@ def fit_affine(ri, ci, dy, dx, rows, cols, passes=2):
         mad = np.median(np.abs(res[keep] - np.median(res[keep]))) * 1.4826 + 1e-9
         keep = res <= np.median(res[keep]) + 3 * mad
     return coef, keep
+
+
+def fit_linear(X, dy, dx, passes=2):
+    """Least squares of each displacement component on the columns of X with
+    `passes` of 3-MAD clipping. Returns the (2, n) coefficients and the keep mask."""
+    keep = np.ones(len(dy), bool)
+    coef = None
+    for _ in range(passes + 1):
+        coef = np.stack([np.linalg.lstsq(X[keep], v[keep], rcond=None)[0] for v in (dy, dx)])
+        res = np.hypot(dy - X @ coef[0], dx - X @ coef[1])
+        mad = np.median(np.abs(res[keep] - np.median(res[keep]))) * 1.4826 + 1e-9
+        keep = res <= np.median(res[keep]) + 3 * mad
+    return coef, keep
+
+
+_TILE_ELEV = {}
+
+
+def tile_elevation():
+    """Mean DEM elevation (m) of every tile of the lattice, cached."""
+    if 'g' not in _TILE_ELEV:
+        elev = dem_arrays()[0]
+        rows, cols = tile_lattice()
+        _TILE_ELEV['g'] = np.array([[elev[r:r + TILE, c:c + TILE].mean() for c in cols] for r in rows])
+    return _TILE_ELEV['g']
 
 
 def affine_predict(coef, y, x):
@@ -488,7 +524,26 @@ def fit_scene(df, rec, sigma=SIGMA_TILES, sigmas_eval=(1.0, 1.5, 2.0, 3.0)):
         else:
             py, px = holdout_predict(ri, ci, rdy, rdx, shape, s)
             out[f'med_Lh_s{s:g}'] = float(np.nanmedian(np.hypot(rdy - py, rdx - px)))
-    for name, r in (('raw', raw), ('T', rT), ('A', rA), ('L', rL), ('Lh', rLh)):
+    # H: affine plus a displacement proportional to elevation (a per-scene pointing
+    # error leaves a parallax of height x angle error after orthorectification), and
+    # HL: H plus the smoothed H residual
+    hh = tile_elevation()[ri, ci] - HREF
+    XH = np.stack([np.ones(len(dy)), rows_c[ri], cols_c[ci], hh], axis=1)
+    coef_h, keep_h = fit_linear(XH, dy, dx)
+    hdy, hdx = dy - XH @ coef_h[0], dx - XH @ coef_h[1]
+    rH = np.hypot(hdy, hdx)
+    ghy, ghx = to_grid(ri, ci, hdy, shape), to_grid(ri, ci, hdx, shape)
+    fhy, fhx = smooth_field(ghy, present, sigma), smooth_field(ghx, present, sigma)
+    rHL = np.hypot(hdy - fhy[ri, ci], hdx - fhx[ri, ci])
+    hhy, hhx = holdout_predict(ri, ci, hdy, hdx, shape, sigma)
+    rHLh = np.hypot(hdy - hhy, hdx - hhx)
+    out.update(k_dy_px=float(coef_h[0, 3]), k_dx_px=float(coef_h[1, 3]),
+               k_north_m100=float(-coef_h[0, 3] * RES * 100), k_east_m100=float(coef_h[1, 3] * RES * 100),
+               n_h_kept=int(keep_h.sum()),
+               **{f'h_{k}': float(v) for k, v in zip(
+                   ['c0_y', 'cr_y', 'cc_y', 'ch_y', 'c0_x', 'cr_x', 'cc_x', 'ch_x'], coef_h.ravel())})
+    for name, r in (('raw', raw), ('T', rT), ('A', rA), ('L', rL), ('Lh', rLh), ('H', rH), ('HL', rHL),
+                    ('HLh', rHLh)):
         out[f'med_{name}'] = float(np.nanmedian(r))
         out[f'p90_{name}'] = float(np.nanpercentile(r, 90))
         out[f'rms_{name}'] = float(np.sqrt(np.nanmean(r ** 2)))
@@ -497,9 +552,11 @@ def fit_scene(df, rec, sigma=SIGMA_TILES, sigmas_eval=(1.0, 1.5, 2.0, 3.0)):
                                         zip(['c0_y', 'cr_y', 'cc_y', 'c0_x', 'cr_x', 'cc_x'],
                                             coef.ravel())})
     tiles = df.assign(ri=ri, ci=ci, rT_dy=dy - t[0], rT_dx=dx - t[1], rA_dy=rdy, rA_dx=rdx,
-                      rL_dy=rdy - fy[ri, ci], rL_dx=rdx - fx[ri, ci], rLh_dy=rdy - hy, rLh_dx=rdx - hx)
+                      rL_dy=rdy - fy[ri, ci], rL_dx=rdx - fx[ri, ci], rLh_dy=rdy - hy, rLh_dx=rdx - hx,
+                      rH_dy=hdy, rH_dx=hdx, rHLh_dy=hdy - hhy, rHLh_dx=hdx - hhx)
     model = dict(t=t, coef=coef, field_dy=ay_grid(coef, rows_c, cols_c)[0] + fy,
-                 field_dx=ay_grid(coef, rows_c, cols_c)[1] + fx, support=present)
+                 field_dx=ay_grid(coef, rows_c, cols_c)[1] + fx, support=present,
+                 coef_h=coef_h, hres_dy=fhy, hres_dx=fhx)
     return out, tiles, model
 
 
@@ -525,6 +582,20 @@ def displacement_maps(model, kind, shape=ISLAND_SHAPE, window=None):
         dy = ndimage.map_coordinates(model['field_dy'], [fy, fx], order=1, mode='nearest')
         dx = ndimage.map_coordinates(model['field_dx'], [fy, fx], order=1, mode='nearest')
         return dy, dx
+    if kind in ('H', 'HL', 'Ha'):
+        c = model['coef_h']
+        if kind == 'Ha':
+            # to first order the scene-to-master and master-to-drone fields add
+            c = c + master_anchor()
+        h = dem_arrays()[0][r0:r1, c0:c1] - HREF
+        dy = c[0, 0] + c[0, 1] * Y + c[0, 2] * X + c[0, 3] * h
+        dx = c[1, 0] + c[1, 1] * Y + c[1, 2] * X + c[1, 3] * h
+        if kind == 'HL':
+            fy = (Y - TILE / 2) / STRIDE
+            fx = (X - TILE / 2) / STRIDE
+            dy = dy + ndimage.map_coordinates(model['hres_dy'], [fy, fx], order=1, mode='nearest')
+            dx = dx + ndimage.map_coordinates(model['hres_dx'], [fy, fx], order=1, mode='nearest')
+        return dy, dx
     raise ValueError(kind)
 
 
@@ -537,9 +608,21 @@ def warp_arrays(arrays, dy, dx, orders, cvals, window=None):
             for a, o, c in zip(arrays, orders, cvals)]
 
 
+_ANCHOR = {}
+
+
+def master_anchor(results=RESULTS):
+    """(2, 4) affine + elevation coefficients of the master relative to the drone
+    orthomosaic (island_coreg_diagnose.py drone): the content at ground (drone)
+    pixel p appears at p + d in the master."""
+    if 'c' not in _ANCHOR:
+        m = json.loads((results / 'master_abs.json').read_text())['median']
+        _ANCHOR['c'] = np.array([[m[f'h_{k}_{a}'] for k in ('c0', 'cr', 'cc', 'ch')] for a in ('y', 'x')])
+    return _ANCHOR['c']
+
+
 def save_model(path, model):
-    np.savez_compressed(path, t=model['t'], coef=model['coef'], field_dy=model['field_dy'],
-                        field_dx=model['field_dx'], support=model['support'])
+    np.savez_compressed(path, **model)
 
 
 def load_model(path):
@@ -685,7 +768,7 @@ def fit(results, sigma_tiles):
     b = sm[sm.band == 'both']
     click.echo(f'{len(b)} scenes fitted. Median over scenes of the median tile residual (px):\n'
                + '\n'.join(f'  {MODEL_NAMES[k]:26s} {b[f"med_{k}"].median():.3f}'
-                           for k in ('raw', 'T', 'A', 'L', 'Lh')))
+                           for k in ('raw', 'T', 'A', 'L', 'Lh', 'H', 'HL', 'HLh')))
     r = sm[sm.band == 'red']
     click.echo(f'noise floor (red-NIR, median over scenes): {r.noise_px.median():.3f} px; '
                f'coherence median {r.coherence.median():.2f}\n'
@@ -809,7 +892,16 @@ def remeasure_scene(args):
                                     dy, dx, [1, 1, 1], [0, 0, 0])
         _, tiles = measure_arrays({'red': red}, clr > 0.99, dat > 0.99, master, skip_global=True)
         mag = np.hypot([t['dy_px'] for t in tiles], [t['dx_px'] for t in tiles])
+        # tiles on the central plateau (>= 120 m a.s.l.), where a translation or an
+        # affine leaves the elevation-proportional displacement
+        if len(tiles):
+            ri, ci = lattice_index(pd.DataFrame(tiles))
+            high = tile_elevation()[ri, ci] >= 120
+        else:
+            high = np.zeros(0, bool)
         rows.append(dict(scene_id=scene_id, model=kind, n_tiles=len(tiles),
+                         med_high_px=float(np.median(mag[high])) if high.sum() >= 10 else np.nan,
+                         med_low_px=float(np.median(mag[~high])) if (~high).sum() >= 10 else np.nan,
                          med_px=float(np.median(mag)) if len(mag) else np.nan,
                          p90_px=float(np.percentile(mag, 90)) if len(mag) else np.nan,
                          med_dy_px=float(np.median([t['dy_px'] for t in tiles])) if len(mag) else np.nan,
@@ -821,7 +913,7 @@ def remeasure_scene(args):
 @results_option
 @master_option
 @click.option('--jobs', default=5, show_default=True)
-@click.option('--models', default='T,A,L', show_default=True)
+@click.option('--models', default='T,A,L,H,HL', show_default=True)
 @click.option('--limit', default=None, type=int)
 def remeasure(results, master, jobs, models, limit):
     """Warp the video scenes with each model and re-run the tile matcher: the residual
@@ -838,8 +930,8 @@ def remeasure(results, master, jobs, models, limit):
             click.echo(f'[{k}/{len(ids)} {time.time() - t0:5.0f}s] {sid}: {msg}')
     out = pd.DataFrame(rows)
     out.to_csv(results / 'remeasure.csv', index=False)
-    click.echo('median over scenes of the re-measured median residual (px): '
-               + out.groupby('model').med_px.median().round(3).to_dict().__repr__())
+    click.echo('median over scenes of the re-measured median residual (px), all / plateau / lower tiles:\n'
+               + out.groupby('model')[['med_px', 'med_high_px', 'med_low_px', 'p90_px']].median().round(3).to_string())
 
 
 def warp_scene(args):
@@ -894,7 +986,7 @@ def warp(results, kind, jobs, limit):
             'fraction_clear', 'offset_blue', 'offset_green', 'offset_red', 'offset_nir', 'offset_source']
     idx = df[df.scene_id.isin(ids)][cols].copy()
     idx['model'] = kind
-    for c in ('med_raw', 'med_T', 'med_A', 'med_Lh'):
+    for c in ('med_raw', 'med_T', 'med_A', 'med_Lh', 'med_H'):
         idx[f'{c}_px'] = idx.scene_id.map(sm[c])
     idx['noise_px'] = idx.scene_id.map(sm.noise_px)
     idx['path'] = idx.scene_id.map(lambda s: str(outdir / s[:4] / f'{s}_4band.tif'))
@@ -980,13 +1072,13 @@ def video_scenes(results, kind):
     df = df[df.use_video & df.scene_id.map(lambda s: model_path(results, s).exists())].copy()
     sm = pd.read_csv(results / 'scene_models.csv')
     sm = sm[sm.band == 'both'].set_index('scene_id')
-    key = {'T': 'med_T', 'A': 'med_A', 'L': 'med_Lh'}[kind]
+    key = {'T': 'med_T', 'A': 'med_A', 'L': 'med_Lh', 'H': 'med_H', 'HL': 'med_HLh', 'Ha': 'med_H'}[kind]
     df['resid_px'] = df.scene_id.map(sm[key])
-    df['resid_src'] = 'hold-out'
+    df['resid_src'] = 'hold-out' if kind in ('L', 'HL') else 'fit'
     rm = results / 'remeasure.csv'
     if rm.exists():
         r = pd.read_csv(rm)
-        r = r[r.model == kind].set_index('scene_id').med_px
+        r = r[r.model == ('H' if kind == 'Ha' else kind)].set_index('scene_id').med_px
         has = df.scene_id.isin(r.index)
         df.loc[has, 'resid_px'] = df.loc[has, 'scene_id'].map(r)
         df.loc[has, 'resid_src'] = 'remeasured'
@@ -1028,7 +1120,9 @@ def comparison_window(results, ids, size=300):
 @click.option('--which', type=click.Choice(['sequence', 'comparison', 'both']), default='both',
               show_default=True)
 @click.option('--limit', default=None, type=int)
-def video(results, outdir, kind, fps, dpi, min_clear, which, limit):
+@click.option('--panels', default=None,
+              help='Three comma-separated models for the comparison video (default raw,T,<model>).')
+def video(results, outdir, kind, fps, dpi, min_clear, which, limit, panels):
     """The aligned whole-island sequence and the three-panel comparison video."""
     import matplotlib.pyplot as plt
     outdir.mkdir(parents=True, exist_ok=True)
@@ -1056,8 +1150,8 @@ def video(results, outdir, kind, fps, dpi, min_clear, which, limit):
         t1 = ax.text(0.02, 0.975, '', transform=ax.transAxes, color='white', fontsize=12, va='top',
                      fontweight='bold', path_effects=[__import__('matplotlib.patheffects', fromlist=['x'])
                                                       .withStroke(linewidth=2.5, foreground='black')])
-        t2 = ax.text(0.98, 0.975, '', transform=ax.transAxes, color='white', fontsize=9.5, va='top',
-                     ha='right', path_effects=[__import__('matplotlib.patheffects', fromlist=['x'])
+        t2 = ax.text(0.02, 0.94, '', transform=ax.transAxes, color='white', fontsize=9.5, va='top',
+                     ha='left', path_effects=[__import__('matplotlib.patheffects', fromlist=['x'])
                                                .withStroke(linewidth=2.0, foreground='black')])
         fig.canvas.draw()
         w, h = fig.canvas.get_width_height()
@@ -1096,8 +1190,8 @@ def video(results, outdir, kind, fps, dpi, min_clear, which, limit):
         wext = extent(win)
         json.dump(dict(window=win, extent=wext, mean_local_minus_translation_px=score),
                   open(outdir / f'{name}_window.json', 'w'))
-        kinds = ['raw', 'T', kind]
-        titles = ['as delivered', 'translation', MODEL_NAMES[kind]]
+        kinds = panels.split(',') if panels else ['raw', 'T', kind]
+        titles = ['as delivered' if k == 'raw' else MODEL_NAMES[k] for k in kinds]
         md = master_data()
         fig, axes = plt.subplots(1, 3, figsize=(12.0, 4.5), dpi=dpi)
         fig.subplots_adjust(left=0.005, right=0.995, bottom=0.005, top=0.90, wspace=0.02)
