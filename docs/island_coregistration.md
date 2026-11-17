@@ -19,6 +19,14 @@ scene) aligns better than the local warp (re-measured median residual 1.04 m aga
 result to the ground (model **Ha**). Details in
 [The central band](#the-central-band-match-error-master-or-orthorectification).
 
+**Addition of 2026-11-17.** The elevation term is the tilt of each frame's RPC. The line
+of sight of the RPC at the frame center, minus the view direction in Planet's metadata,
+equals the term measured from the imagery (slope 0.975, 97.5 % of the variance, 544
+scenes; for the master +2.13 m east, +2.36 m north per 100 m against +2.00 and +2.43
+measured with the drone). The term can be read from metadata without image matching.
+Planet's documented process, the literature and the checks are in
+[planet_geolocation_literature.md](planet_geolocation_literature.md).
+
 ## Question
 
 Every Planet registration so far is one rigid shift per scene over the 50ha plot
@@ -246,6 +254,21 @@ smooth field fitted to noise adds error when applied.
   shift at the height of its tie points, which around BCI are mostly near lake
   level, and the error then reappears in proportion to height above them. This fits
   the data but the adjustment itself was not examined.
+- **Mechanism confirmed from the RPCs (2026-11-17).** `island_coreg_diagnose.py
+  metadata` computes, for the 544 fitted scenes with a basic RPC, how far the ground
+  position of the frame-center pixel moves per 100 m of assumed height (the RPC's line
+  of sight) and subtracts the line of sight given by the metadata incidence angle and
+  satellite azimuth. That tilt has a median of 3.03 m per 100 m (1.73°) and a 90th
+  percentile of 10.65 m (6.08°), and it equals the elevation term: term = 0.975 × tilt,
+  97.5 % of the variance of the east and north components (98.8 % for SuperDove,
+  92.7 % for Dove-R, 57.8 % for Dove Classic), median difference 0.51 m per 100 m. For
+  the master the tilt is +2.13 m east and +2.36 m north, against the +2.00 and +2.43
+  measured with the drone. The term is unrelated to the difference between a scene's
+  reported line of sight and the master's (0.0 % of variance) and to where the island
+  falls in the frame (0.1 %). All 718 ortho XMLs record the same elevation model
+  (`FineDEM`) and processor version (4.1.4). The six `ground_control` false scenes are
+  13–82 m from the master. See
+  [planet_geolocation_literature.md](planet_geolocation_literature.md).
 - **Independent confirmation against the drone.** The 2024-10-14 whole-island drone
   orthomosaic (20 cm, averaged to the 3 m grid; red and green bands) was matched to
   the 120 Planet scenes nearest in date that are at least 90 % clear; 54 pass the global gate (tile NCC peak
@@ -422,8 +445,11 @@ after translation and after the local warp.
   elevation term to about 0.3 m per 100 m. Against the drone a common local field
   remains (hold-out residual 0.65 m with it, 0.98 m without), which may be the
   mosaic's own local distortion; it is not applied.
-- The pointing-error mechanism is an inference from the form of the term (linear in
-  height, random direction per frame), not from Planet's processing.
+- The pointing-error mechanism is confirmed by the RPCs (the tilt of each frame's RPC
+  against the reported view direction equals the term), but why Planet's refinement
+  leaves that tilt is not known; the reading in
+  [planet_geolocation_literature.md](planet_geolocation_literature.md) (tilt and shift
+  are nearly interchangeable for a narrow field of view over flat tie points) is ours.
 
 - Alignment is relative to one Planet scene. The whole sequence inherits its
   georeferencing error, and its own orthorectification distortion is the zero of
@@ -499,6 +525,7 @@ Added 2026-11-16 (`figs/20261116_updates/`):
 | Drone mosaic at 3 m, scene-to-drone tiles and fits | `diagnose/drone_20241014_3m.tif`, `drone_tiles.csv.gz`, `drone_fits.csv` |
 | Island models at the plot center against Planet-to-drone shifts, all models | `diagnose/plot_crosscheck.csv` |
 | Tables of the first run, before the H models were added | `diagnose/scene_models_before_H.csv`, `remeasure_before_H.csv` |
+| Planet quality flags, ortho XML fields, reported and RPC line of sight per fitted scene | `diagnose/metadata_checks.csv` |
 
 ## Commands
 
@@ -527,6 +554,9 @@ python scripts/island_coreg.py warp --model Ha --jobs 3
 python scripts/island_coreg.py video --model Ha --which sequence --outdir <figs>/20261116_updates
 python scripts/island_coreg.py video --model H --which comparison --panels T,L,H --outdir <figs>/20261116_updates
 python scripts/island_coreg_diagnose.py figures
+
+# 2026-11-17: Planet metadata and RPC line of sight against the fitted terms
+python scripts/island_coreg_diagnose.py metadata            # writes diagnose/metadata_checks.csv
 ```
 
 `island_coreg_diagnose.py` also has `island1b` and `multi --source rpc` (the standard

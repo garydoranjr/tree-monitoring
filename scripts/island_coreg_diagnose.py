@@ -22,13 +22,17 @@ Subcommands (in order):
              image: what Planet's orthorectification did beyond RPC + DEM.
   island1b   the standard measurement and T/A/L fit on the RPC orthos against
              the RPC ortho of the master, next to the Planet-ortho results.
+  metadata   Planet's quality flags and ortho XML fields, the reported view
+             direction and the line of sight of each basic scene's RPC, against
+             the fitted offset and elevation term of every scene.
   figures    figures and captions.
 
 Displacement convention as in island_coreg.py: d = (dy, dx) px means the content
 at reference pixel p appears at p + d in the scene.
 
 Outputs: results/island_coreg/diagnose/ (tables), planet_bci_1b_ortho/ (rasters),
-figs/20261116_updates/island_diag_* (figures). See docs/island_coregistration.md.
+figs/20261116_updates/island_diag_* (figures). See docs/island_coregistration.md and,
+for the metadata checks, docs/planet_geolocation_literature.md.
 """
 import os
 
@@ -652,6 +656,223 @@ def crosscheck(shifts):
                 best = (dis.median(), (dis <= 3).mean(), sg)
         click.echo(f'  {ic.MODEL_NAMES[kind]:28s} median disagreement {best[0]:.2f} m, within 3 m {best[1]:.0%} '
                    f'(sign {best[2]:+d})')
+
+
+# --------------------------------------------------------------------------- Planet metadata and RPC line of sight
+
+META_KEYS = ['ground_control', 'quality_category', 'publishing_stage', 'cloud_cover', 'clear_percent',
+             'visible_percent', 'clear_confidence_percent', 'anomalous_pixels', 'gsd', 'published', 'updated']
+XML_KEYS = {'elevation_model': 'ps:elevationCorrectionApplied', 'geo_level': 'ps:geoCorrectionLevel',
+            'processor_version': 'eop:processorVersion', 'incidence_angle': 'eop:incidenceAngle',
+            'scan_azimuth': 'ps:azimuthAngle', 'xml_view_angle': 'ps:spaceCraftViewAngle'}
+RPC_H0 = 27.0  # m, lake level: the height of most of the tie points available around the island
+_RPC_GROUPS = ('LINE_NUM_COEFF', 'LINE_DEN_COEFF', 'SAMP_NUM_COEFF', 'SAMP_DEN_COEFF')
+
+
+def rpc_txt_path(scene_id):
+    return BASIC / f'PSScene-{scene_id}' / 'assets' / 'basic_analytic_4b_rpc' / f'{scene_id}_1B_AnalyticMS_RPC.TXT'
+
+
+def scene_metadata(scene_id, sr_path):
+    """Planet's item properties (order metadata.json) and the ortho product XML fields
+    that describe the geometric processing of one scene."""
+    import re
+    d = Path(sr_path).parent
+    out = {}
+    j = d / f'{scene_id}_metadata.json'
+    if j.exists():
+        p = json.loads(j.read_text())['properties']
+        out.update({k: p.get(k) for k in META_KEYS})
+    for x in d.glob(f'{scene_id}_3B_AnalyticMS_metadata*.xml'):
+        txt = x.read_text()
+        for k, tag in XML_KEYS.items():
+            m = re.search(rf'<{tag}[^>]*>([^<]*)<', txt)
+            if m:
+                v = m.group(1).strip()
+                out[k] = v if k in ('elevation_model', 'geo_level', 'processor_version') else float(v)
+        break
+    return out
+
+
+def load_rpc(path):
+    kv = dict(line.split(':', 1) for line in Path(path).read_text().splitlines() if ':' in line)
+    rpc = {k: float(v) for k, v in kv.items() if not k.startswith(_RPC_GROUPS)}
+    for g in _RPC_GROUPS:
+        rpc[g] = np.array([float(kv[f'{g}_{i}']) for i in range(1, 21)])
+    return rpc
+
+
+def rpc_project(rpc, lon, lat, h):
+    """Ground (lon, lat, height) to image (line, sample) with the RPC00B rational polynomial."""
+    L = (lon - rpc['LONG_OFF']) / rpc['LONG_SCALE']
+    P = (lat - rpc['LAT_OFF']) / rpc['LAT_SCALE']
+    H = (h - rpc['HEIGHT_OFF']) / rpc['HEIGHT_SCALE']
+    t = np.array([1, L, P, H, L * P, L * H, P * H, L * L, P * P, H * H, P * L * H, L ** 3, L * P * P, L * H * H,
+                  L * L * P, P ** 3, P * H * H, L * L * H, P * P * H, H ** 3])
+    line = (rpc['LINE_NUM_COEFF'] @ t) / (rpc['LINE_DEN_COEFF'] @ t) * rpc['LINE_SCALE'] + rpc['LINE_OFF']
+    samp = (rpc['SAMP_NUM_COEFF'] @ t) / (rpc['SAMP_DEN_COEFF'] @ t) * rpc['SAMP_SCALE'] + rpc['SAMP_OFF']
+    return np.array([line, samp])
+
+
+def rpc_ground(rpc, line, samp, h, start):
+    """Image (line, sample) at height `h` to ground (lon, lat): Newton inverse of rpc_project."""
+    x = np.array(start, float)
+    t = np.array([line, samp], float)
+    eps = 1e-5
+    for _ in range(8):
+        f = rpc_project(rpc, x[0], x[1], h) - t
+        J = np.stack([(rpc_project(rpc, x[0] + eps, x[1], h) - t - f) / eps,
+                      (rpc_project(rpc, x[0], x[1] + eps, h) - t - f) / eps], axis=1)
+        x = x - np.linalg.solve(J, f)
+    return x
+
+
+def rpc_los(rpc, lon, lat, h0=RPC_H0, dh=100.0):
+    """Line of sight of the RPC at a ground point: (east, north) m by which the ground
+    position of one image pixel moves when the assumed height rises by `dh`, and the
+    image position of the point. Points up the line of sight, toward the satellite."""
+    from pyproj import Transformer
+    p0 = rpc_project(rpc, lon, lat, h0)
+    x = rpc_ground(rpc, p0[0], p0[1], h0 + dh, (lon, lat))
+    tr = Transformer.from_crs('EPSG:4326', ic.CRS, always_xy=True)
+    e0, n0 = tr.transform(lon, lat)
+    e1, n1 = tr.transform(x[0], x[1])
+    return e1 - e0, n1 - n0, p0
+
+
+def _vector_fit(y_e, y_n, x_e, x_n):
+    """Least-squares scalar c in (y_e, y_n) = c (x_e, x_n) + const, and the share of
+    the variance of y it explains."""
+    ok = np.isfinite(y_e) & np.isfinite(y_n) & np.isfinite(x_e) & np.isfinite(x_n)
+    y = np.concatenate([y_e[ok] - y_e[ok].mean(), y_n[ok] - y_n[ok].mean()])
+    x = np.concatenate([x_e[ok] - x_e[ok].mean(), x_n[ok] - x_n[ok].mean()])
+    c = float(x @ y / (x @ x))
+    return c, float(1 - ((y - c * x) ** 2).sum() / (y ** 2).sum()), int(ok.sum())
+
+
+@cli.command()
+def metadata():
+    """Planet's own metadata and the RPC line of sight against the fitted terms: (1) the
+    ground_control / quality flags and cloud fields, (2) the elevation model recorded in
+    the ortho XML, (3) the metadata view direction, and (4) the line of sight of each
+    basic scene's RPC, each against the scene's offset and elevation term."""
+    from pyproj import Transformer
+    from scipy.stats import spearmanr
+    sm = pd.read_csv(RESULTS / 'scene_models.csv')
+    sm = sm[sm.band == 'both'].set_index('scene_id')
+    idx = pd.read_csv(ic.SR / 'index.csv').set_index('scene_id')
+    absm = json.loads((RESULTS / 'master_abs.json').read_text())['median']
+    k_master = np.array([absm['h_ch_x'], -absm['h_ch_y']]) * RES * 100  # east, north m per 100 m
+    cx, cy = (ic.ISLAND_BOUNDS[0] + ic.ISLAND_BOUNDS[2]) / 2, (ic.ISLAND_BOUNDS[1] + ic.ISLAND_BOUNDS[3]) / 2
+    lon, lat = Transformer.from_crs(ic.CRS, 'EPSG:4326', always_xy=True).transform(cx, cy)
+
+    def describe(s, view_angle, satellite_azimuth):
+        row = dict(scene_id=s, view_angle=view_angle, satellite_azimuth=satellite_azimuth)
+        row.update(scene_metadata(s, idx.loc[s, 'sr_path']))
+        inc = row.get('incidence_angle', np.nan)
+        if not np.isfinite(inc):  # ground incidence from the spacecraft off-nadir angle at ~475 km
+            inc = np.degrees(np.arcsin(np.clip((6371 + 475) / 6371 * np.sin(np.radians(view_angle)), -1, 1)))
+        az = np.radians(satellite_azimuth)
+        row.update(meta_los_east=100 * np.tan(np.radians(inc)) * np.sin(az),
+                   meta_los_north=100 * np.tan(np.radians(inc)) * np.cos(az))
+        p = rpc_txt_path(s)
+        if p.exists():
+            # the metadata angles describe the frame center, so that is where the RPC is compared
+            # with them; the island is elsewhere in the frame, where the look direction differs
+            rpc = load_rpc(p)
+            c = rpc_ground(rpc, rpc['LINE_OFF'], rpc['SAMP_OFF'], RPC_H0, (rpc['LONG_OFF'], rpc['LAT_OFF']))
+            e, n, _ = rpc_los(rpc, c[0], c[1])
+            ie, in_, pix = rpc_los(rpc, lon, lat)
+            row.update(rpc_los_east=e, rpc_los_north=n, rpc_island_los_east=ie, rpc_island_los_north=in_,
+                       line_frac=(pix[0] - rpc['LINE_OFF']) / rpc['LINE_SCALE'],
+                       samp_frac=(pix[1] - rpc['SAMP_OFF']) / rpc['SAMP_SCALE'])
+        return row
+
+    rows = []
+    for s, r in sm.iterrows():
+        row = describe(s, r.view_angle, r.satellite_azimuth)
+        row.update(instrument=r.instrument, acquired=r.acquired, fraction_clear=r.fraction_clear,
+                   offset_m=RES * np.hypot(r.t_dy_px, r.t_dx_px), affine_amp_m=r.affine_amp_m,
+                   res_T_m=RES * r.med_T, res_H_m=RES * r.med_H,
+                   k_east=r.k_east_m100, k_north=r.k_north_m100, k_m100=np.hypot(r.k_east_m100, r.k_north_m100))
+        rows.append(row)
+    d = pd.DataFrame(rows).set_index('scene_id')
+    d['k_abs_east'], d['k_abs_north'] = d.k_east + k_master[0], d.k_north + k_master[1]
+    # the master is the reference of every fit, so it has no row of its own
+    m = pd.Series(describe(ic.MASTER, idx.loc[ic.MASTER, 'view_angle'], idx.loc[ic.MASTER, 'satellite_azimuth']))
+    m['los_gap_east'], m['los_gap_north'] = m.rpc_los_east - m.meta_los_east, m.rpc_los_north - m.meta_los_north
+    for src in ('meta', 'rpc'):
+        for ax in ('east', 'north'):
+            d[f'd{src}_los_{ax}'] = d[f'{src}_los_{ax}'] - m[f'{src}_los_{ax}']
+    d['los_gap_east'], d['los_gap_north'] = d.rpc_los_east - d.meta_los_east, d.rpc_los_north - d.meta_los_north
+    d['los_gap_m100'] = np.hypot(d.los_gap_east, d.los_gap_north)
+    DIAG.mkdir(parents=True, exist_ok=True)
+    d.to_csv(DIAG / 'metadata_checks.csv')
+    click.echo(f'{len(d)} fitted scenes; elevation term of the master against the drone: '
+               f'{k_master[0]:+.2f} E, {k_master[1]:+.2f} N m per 100 m')
+
+    targets = ['offset_m', 'k_m100', 'affine_amp_m', 'res_T_m']
+    click.echo('\n(1) Planet quality flags (median of each quantity by flag value)')
+    for col in ('ground_control', 'quality_category', 'publishing_stage'):
+        click.echo(d.groupby(col, dropna=False)[targets].agg(['size', 'median']).round(2).to_string())
+    click.echo('Spearman rho against the cloud and resolution fields:')
+    for col in ('cloud_cover', 'clear_percent', 'visible_percent', 'clear_confidence_percent', 'fraction_clear',
+                'gsd', 'view_angle'):
+        v = pd.to_numeric(d[col], errors='coerce')
+        click.echo(f'  {col:26s} ' + '  '.join(
+            f'{t} {spearmanr(v, d[t], nan_policy="omit").statistic:+.2f}' for t in targets))
+
+    click.echo('\n(2) geometric processing recorded in the ortho XML')
+    for col in ('elevation_model', 'geo_level'):
+        click.echo(d[col].value_counts(dropna=False).to_string())
+    pv = d.assign(year=d.acquired.astype(str).str[:4]).groupby(['year', 'processor_version']).size().unstack(0)
+    click.echo(pv.fillna(0).astype(int).to_string())
+
+    click.echo('\n(3) elevation term (relative to the master) against the metadata view direction, m per 100 m')
+    click.echo(f'  line of sight |tan(incidence)| x 100: median {np.hypot(d.meta_los_east, d.meta_los_north).median():.2f}'
+               f' (master {np.hypot(m.meta_los_east, m.meta_los_north):.2f})')
+    c, r2, n = _vector_fit(d.k_east.values, d.k_north.values, d.dmeta_los_east.values, d.dmeta_los_north.values)
+    click.echo(f'  k = c x (line of sight - master line of sight): c = {c:+.3f}, variance explained {r2:.1%}, n = {n}')
+    for ax in ('east', 'north'):
+        click.echo(f'  Pearson r, {ax}: {d[f"k_{ax}"].corr(d[f"dmeta_los_{ax}"]):+.2f}')
+
+    q = d[d.rpc_los_east.notna()]
+    inside = (q.line_frac.abs() <= 1) & (q.samp_frac.abs() <= 1)
+    click.echo(f'\n(4) RPC line of sight at the frame center against the metadata view direction, {len(q)} scenes '
+               f'with a basic RPC ({int(inside.sum())} with the island center inside the frame), m per 100 m')
+    click.echo(f'  master: RPC ({m.rpc_los_east:+.2f} E, {m.rpc_los_north:+.2f} N) - metadata '
+               f'({m.meta_los_east:+.2f} E, {m.meta_los_north:+.2f} N) = ({m.los_gap_east:+.2f} E, '
+               f'{m.los_gap_north:+.2f} N); elevation term measured against the drone '
+               f'({k_master[0]:+.2f} E, {k_master[1]:+.2f} N)')
+    g = q.los_gap_m100
+    click.echo(f'  |RPC - metadata|: median {g.median():.2f}, 90th percentile {g.quantile(0.9):.2f} '
+               f'({np.degrees(np.arctan(g.median() / 100)):.2f} and '
+               f'{np.degrees(np.arctan(g.quantile(0.9) / 100)):.2f} deg)')
+    ka = np.hypot(q.k_abs_east, q.k_abs_north)
+    click.echo(f'  |absolute elevation term|: median {ka.median():.2f}, 90th percentile {ka.quantile(0.9):.2f}')
+    c, r2, n = _vector_fit(q.k_abs_east.values, q.k_abs_north.values, q.los_gap_east.values, q.los_gap_north.values)
+    click.echo(f'  elevation term = c x (RPC - metadata): c = {c:+.3f}, variance explained {r2:.1%}, n = {n}')
+    for inst, gi in q.groupby('instrument'):
+        c, r2, n = _vector_fit(gi.k_abs_east.values, gi.k_abs_north.values, gi.los_gap_east.values,
+                               gi.los_gap_north.values)
+        click.echo(f'    {inst:7s} c = {c:+.3f}, variance explained {r2:.1%}, n = {n}')
+    res = np.hypot(q.k_abs_east - q.los_gap_east, q.k_abs_north - q.los_gap_north)
+    click.echo(f'  |elevation term - (RPC - metadata)|: median {res.median():.2f}, 90th percentile '
+               f'{res.quantile(0.9):.2f} (mean difference {(q.k_abs_east - q.los_gap_east).mean():+.2f} E, '
+               f'{(q.k_abs_north - q.los_gap_north).mean():+.2f} N)')
+    ve, vn = q.rpc_island_los_east - q.rpc_los_east, q.rpc_island_los_north - q.rpc_los_north
+    c, r2, n = _vector_fit(q.k_abs_east.values, q.k_abs_north.values, ve.values, vn.values)
+    click.echo(f'  look direction at the island minus at the frame center: median {np.hypot(ve, vn).median():.2f}; '
+               f'elevation term on it: c = {c:+.3f}, variance explained {r2:.1%}')
+    click.echo('  |RPC - metadata| by ground_control: ' + ', '.join(
+        f'{k}: {v:.2f} (n = {int(cnt)})' for k, v, cnt in zip(*[
+            q.groupby('ground_control').los_gap_m100.median().index,
+            q.groupby('ground_control').los_gap_m100.median().values,
+            q.groupby('ground_control').los_gap_m100.size().values])))
+    for col in ('cloud_cover', 'clear_percent', 'fraction_clear'):
+        click.echo(f'  Spearman rho of |RPC - metadata| with {col}: '
+                   f'{spearmanr(pd.to_numeric(q[col], errors="coerce"), g, nan_policy="omit").statistic:+.2f}')
+    click.echo(f'wrote {DIAG / "metadata_checks.csv"}')
 
 
 def save_fig(fig, name, caption):
