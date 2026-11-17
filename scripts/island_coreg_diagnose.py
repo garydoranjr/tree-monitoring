@@ -284,8 +284,8 @@ def run_pairs(pairs, source, outdir, jobs):
                 measure_pair, [(s, r, source, outdir) for s, r in pairs]), 1):
             if msg.startswith('error') or k % 20 == 0 or k == len(pairs):
                 click.echo(f'[{k}/{len(pairs)} {time.time() - t0:5.0f}s] {s} vs {r}: {msg}')
-    return pd.concat([pd.read_csv(outdir / f'{s}__{r}.csv') for s, r in pairs
-                      if (outdir / f'{s}__{r}.csv').exists()], ignore_index=True)
+    dfs = [pd.read_csv(outdir / f'{s}__{r}.csv') for s, r in pairs if (outdir / f'{s}__{r}.csv').exists()]
+    return pd.concat([d for d in dfs if len(d)], ignore_index=True)  # failed global matches have no tiles
 
 
 @cli.command()
@@ -598,6 +598,7 @@ def drone(jobs, n, min_clear):
                mad={p: float(mad(est[p])) for p in H_PARAMS},
                direct={p: float(f.loc[ic.MASTER, p]) for p in H_PARAMS} if ic.MASTER in f.index else None)
     (DIAG / 'master_abs.json').write_text(json.dumps(out, indent=1))
+    (RESULTS / 'master_abs.json').write_text(json.dumps(out, indent=1))  # read by island_coreg.py (model Ha)
     kn, ke = -est.h_ch_y * RES * 100, est.h_ch_x * RES * 100
     click.echo(f'master elevation term from {len(est)} scenes: north {kn.median():+.2f} (MAD {mad(kn):.2f}), '
                f'east {ke.median():+.2f} (MAD {mad(ke):.2f}) m per 100 m; direct: '
@@ -611,6 +612,195 @@ def drone(jobs, n, min_clear):
     click.echo('master affine terms across the island (m), median (MAD) over scenes: '
                + ', '.join(f'{nm} {RES * est[p].median() * L:+.2f} ({RES * mad(est[p]) * L:.2f})' for nm, p, L in
                            [('dy/row', 'h_cr_y', h), ('dy/col', 'h_cc_y', w), ('dx/row', 'h_cr_x', h), ('dx/col', 'h_cc_x', w)]))
+
+
+PLOT_CENTER = (960, 736)  # row, col of the 50ha plot center on the island grid
+
+
+@cli.command()
+@click.option('--shifts', type=click.Path(path_type=Path),
+              default=ic.FLOWER / 'crown_series_20261101' / 'coreg_all_scenes.json', show_default=True)
+def crosscheck(shifts):
+    """Island models evaluated at the 50ha plot center against the independent
+    Planet-to-drone shifts (one AROSICS window per scene over the plot)."""
+    d = pd.DataFrame(json.loads(Path(shifts).read_text()))
+    d = d[d.coreg_ok].assign(scene_id=d.scene.str.replace('_4band', ''))[['scene_id', 'x_shift_m', 'y_shift_m']]
+    r0, c0 = PLOT_CENTER
+    win = (r0, r0 + 1, c0, c0 + 1)
+    rows = []
+    for s in d.scene_id:
+        p = ic.model_path(RESULTS, s)
+        if not p.exists():
+            continue
+        m = ic.load_model(p)
+        row = dict(scene_id=s)
+        for kind in ic.MODELS:
+            dy, dx = ic.displacement_maps(m, kind, window=win)
+            row[f'{kind}_east'], row[f'{kind}_north'] = RES * float(dx[0, 0]), -RES * float(dy[0, 0])
+        rows.append(row)
+    j = pd.DataFrame(rows).merge(d, on='scene_id')
+    j.to_csv(DIAG / 'plot_crosscheck.csv', index=False)
+    click.echo(f'{len(j)} scenes with an island model and a Planet-to-drone shift')
+    for kind in ic.MODELS:
+        # the sign of the drone shift relative to the island convention is fixed by the data
+        best = None
+        for sg in (1, -1):
+            e = j[f'{kind}_east'] - sg * j.x_shift_m
+            n = j[f'{kind}_north'] - sg * j.y_shift_m
+            dis = np.hypot(e - e.median(), n - n.median())
+            if best is None or dis.median() < best[0]:
+                best = (dis.median(), (dis <= 3).mean(), sg)
+        click.echo(f'  {ic.MODEL_NAMES[kind]:28s} median disagreement {best[0]:.2f} m, within 3 m {best[1]:.0%} '
+                   f'(sign {best[2]:+d})')
+
+
+def save_fig(fig, name, caption):
+    FIGS.mkdir(parents=True, exist_ok=True)
+    for ext in ('png', 'pdf'):
+        fig.savefig(FIGS / f'{name}.{ext}', dpi=200, bbox_inches='tight')
+    (FIGS / f'{name}_caption.md').write_text(caption.strip() + '\n')
+    click.echo(f'wrote {FIGS / name}.png')
+
+
+@cli.command()
+def figures():
+    """Figures and captions (figs/20261116_updates/island_diag_*)."""
+    import matplotlib.pyplot as plt
+    sp = pd.read_csv(DIAG / 'spread_tiles.csv')
+    cl = pd.read_csv(DIAG / 'closure_tiles_planet.csv')
+    cl = cl[cl.band == 'red']
+    elev = ic.tile_elevation()
+    land = np.zeros(ic.grid_shape(), bool)
+    land[sp.ri, sp.ci] = True
+    inband = band_mask()
+    n_scenes = pd.read_csv(RESULTS / 'scene_models.csv').scene_id.nunique()
+    n_tri = pd.read_csv(DIAG / 'closure_planet.csv.gz', usecols=['scene_id', 'mk']).drop_duplicates()
+
+    # 1. maps on the tile lattice
+    fig, axes = plt.subplots(2, 2, figsize=(11, 9.4))
+    panels = [(grid(sp, 'mean_m'), 'mean residual after translation (m)', 'viridis', 0, 4),
+              (np.where(land, elev, np.nan), 'elevation (m a.s.l.)', 'terrain', 20, 190),
+              (grid(sp, 'rednir_m'), 'red-NIR disagreement (m)', 'magma', 0, 4),
+              (grid(cl, 'closure_med_m'), 'triangle closure error (m)', 'magma', 0, 4)]
+    for ax, (g, title, cmap, vmin, vmax), lab in zip(axes.ravel(), panels, 'abcd'):
+        im = ax.imshow(g, cmap=cmap, vmin=vmin, vmax=vmax, interpolation='nearest')
+        ax.contour(inband.astype(float), levels=[0.5], colors='white' if lab != 'b' else 'black', linewidths=1.0)
+        ax.set_title(f'({lab}) {title}', fontsize=10, loc='left')
+        ic.bare(ax)
+        fig.colorbar(im, ax=ax, shrink=0.8, pad=0.02)
+    q = sp.dropna(subset=['mean_dy'])
+    axes[0, 0].quiver(q.ci[::2], q.ri[::2], q.mean_dx[::2], -q.mean_dy[::2], color='white', scale=18, width=0.003)
+    fig.tight_layout()
+    b, o = sp[sp.in_band], sp[~sp.in_band]
+    cb = cl.assign(in_band=inband[cl.ri, cl.ci])
+    save_fig(fig, 'island_diag_band', f"""
+Where the central band of whole-island misalignment lies and whether it is match error. Each cell is one
+64-pixel (192 m) matching tile on a 96 m lattice over Barro Colorado Island; the outline encloses the band,
+defined as the largest connected set of tiles whose mean residual is at least {BAND_MIN_M:.0f} m ({len(b)} of
+{len(sp)} tiles). (a) Mean residual displacement of each tile (color, meters; arrows give its direction) after
+removing each scene's median shift, averaged over the {n_scenes} scenes matched in the red band to the master
+scene {ic.MASTER}, 2020-2026. (b) Mean Copernicus GLO-30 elevation of each tile: the band is the island's
+central plateau (mean {elev[inband].mean():.0f} m against {np.nanmean(elev[land & ~inband]):.0f} m elsewhere).
+(c) Median over those scenes of the distance between the red-band and the near-infrared-band displacement of
+the same tile and scene, a measure of matching noise ({b.rednir_m.median():.2f} m in the band,
+{o.rednir_m.median():.2f} m outside). (d) Median triangle closure error of the red-band displacement,
+|d(scene to master) - d(alternate master to master) - d(scene to alternate master)|, over {len(n_tri)}
+triangles formed by {n_tri.scene_id.nunique()} scenes and {n_tri.mk.nunique()} alternate master scenes
+({cb[cb.in_band].closure_med_m.median():.2f} m in the band, {cb[~cb.in_band].closure_med_m.median():.2f} m
+outside); displacements that are real close to zero, false matches do not.
+""")
+    plt.close(fig)
+
+    # 2. the elevation term
+    sm = pd.read_csv(RESULTS / 'scene_models.csv')
+    sm = sm[(sm.band == 'both') & sm.med_H.notna()].set_index('scene_id')
+    anchor = json.loads((DIAG / 'master_abs.json').read_text())
+    kM = (-anchor['median']['h_ch_y'] * RES * 100, anchor['median']['h_ch_x'] * RES * 100)
+    df = pd.read_csv(DIAG / 'drone_fits.csv').set_index('scene_id')
+    j = df.join(sm[['k_north_m100', 'k_east_m100']], rsuffix='_rel', how='inner')
+    j = j[j.index != ic.MASTER]
+    fig, axes = plt.subplots(1, 3, figsize=(14.5, 4.6))
+    ax = axes[0]
+    for inst, (nm, col) in ic.INSTRUMENTS.items():
+        d = sm[sm.instrument == inst]
+        ax.scatter(d.k_east_m100 + kM[1], d.k_north_m100 + kM[0], s=7, color=col, alpha=0.6, label=f'{nm} ({len(d)})')
+    ax.scatter([kM[1]], [kM[0]], marker='*', s=220, color='k', zorder=5, label='master scene')
+    ax.axhline(0, color='0.6', lw=0.6)
+    ax.axvline(0, color='0.6', lw=0.6)
+    ax.set_xlim(-15, 15)
+    ax.set_ylim(-20, 15)
+    ax.set_xlabel('eastward displacement per 100 m of elevation (m)')
+    ax.set_ylabel('northward displacement per 100 m of elevation (m)')
+    ax.set_title('(a) elevation term of every scene', fontsize=10, loc='left')
+    ax.legend(fontsize=8, loc='lower right')
+    ax = axes[1]
+    ax.scatter(j.k_north_m100_rel, j.k_north_m100, s=14, color='#d62728', label=f'north (r = {j.k_north_m100.corr(j.k_north_m100_rel):.2f})')
+    ax.scatter(j.k_east_m100_rel, j.k_east_m100, s=14, color='#1f77b4', label=f'east (r = {j.k_east_m100.corr(j.k_east_m100_rel):.2f})')
+    lim = np.array([-12, 8])
+    ax.plot(lim, lim + kM[0], color='#d62728', lw=0.8)
+    ax.plot(lim, lim + kM[1], color='#1f77b4', lw=0.8)
+    ax.set_xlabel('term measured against the Planet master (m per 100 m)')
+    ax.set_ylabel('term measured against the drone orthomosaic (m per 100 m)')
+    ax.set_title('(b) the same term from two references', fontsize=10, loc='left')
+    ax.legend(fontsize=8)
+    ax = axes[2]
+    rm = pd.read_csv(RESULTS / 'remeasure.csv')
+    kinds = [k for k in ('T', 'A', 'L', 'H', 'HL') if k in set(rm.model)]
+    x = np.arange(len(kinds))
+    med = rm.groupby('model')[['med_high_px', 'med_low_px']].median().reindex(kinds) * RES
+    ax.bar(x - 0.2, med.med_high_px, 0.4, color='#8c564b', label='plateau tiles (>= 120 m a.s.l.)')
+    ax.bar(x + 0.2, med.med_low_px, 0.4, color='#7f9f7f', label='lower tiles')
+    noise = RES * sm.noise_px.median()
+    ax.axhline(noise, color='k', ls='--', lw=0.8, label=f'red-NIR noise floor ({noise:.2f} m)')
+    ax.set_xticks(x)
+    ax.set_xticklabels([ic.MODEL_NAMES[k].replace(' + ', '\n+ ') for k in kinds], fontsize=8)
+    ax.set_ylabel('re-measured median tile residual (m)')
+    ax.set_title('(c) residual after warping with each model', fontsize=10, loc='left')
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    kmag = np.hypot(sm.k_north_m100 + kM[0], sm.k_east_m100 + kM[1])
+    save_fig(fig, 'island_diag_elevation', f"""
+The elevation-proportional displacement of PlanetScope scenes over Barro Colorado Island and what correcting
+it achieves. (a) Elevation term of each of {len(sm)} scenes (2020-2026; color, Dove generation): the
+displacement per 100 m of terrain elevation, fitted per scene together with an affine to the tile
+displacements against the master scene {ic.MASTER} and referred to the ground by adding the master's own term
+(star: {kM[0]:+.1f} m north, {kM[1]:+.1f} m east per 100 m, the median over {anchor['n']} scenes of the
+difference between each scene's term against the 2024-10-14 drone orthomosaic and against the master). The
+median magnitude is {kmag.median():.1f} m per 100 m and the 90th percentile {kmag.quantile(0.9):.1f} m; the
+island spans 25-190 m. (b) For the {len(j)} scenes matched to both references, the term measured against the
+drone orthomosaic (20 cm, averaged to 3 m) versus the term measured against the Planet master, north (red) and
+east (blue) components, with lines of unit slope offset by the master's term. (c) Median residual tile
+displacement re-measured against the master after warping each of {rm.scene_id.nunique()} scenes (at least 80 %
+of the island clear) with each model, as the median over scenes, for tiles on the central plateau (brown, mean
+elevation of at least 120 m) and for lower tiles (green); the dashed line is the matching noise floor (median
+over scenes of the red-versus-near-infrared disagreement of a tile's displacement divided by the square root
+of 2).
+""")
+    plt.close(fig)
+
+    # captions of the two videos rendered by island_coreg.py video into the same folder
+    n = rm.scene_id.nunique()
+    medH = RES * rm[rm.model == 'H'].med_px.median()
+    (FIGS / 'island_coreg_sequence_caption.md').write_text(f"""
+Time-lapse of Barro Colorado Island from {n} PlanetScope scenes (2020-2026, at least 80 % of the island clear
+by OmniCloudMask), each resampled bilinearly to the 3 m island grid with its own affine + elevation model (a
+displacement linear in map position and in Copernicus GLO-30 elevation, fitted to 192 m tile matches against
+the master scene {ic.MASTER}) and then moved into the frame of the 2024-10-14 drone orthomosaic with the
+master's own affine + elevation model. True color (red, green, blue surface reflectance with per-scene MODIS
+offsets) on one fixed stretch, 6 frames per second; the white line is the island outline, gray is no data.
+Each frame is labeled with its date, satellite, island clear fraction and the median tile displacement
+re-measured against the master after warping (median over scenes {medH:.2f} m).
+""".strip() + '\n')
+    (FIGS / 'island_coreg_comparison_caption.md').write_text(f"""
+The same {n} PlanetScope scenes (2020-2026, at least 80 % of the island clear) over a 900 m window on the
+central plateau of Barro Colorado Island, which contains the 50ha plot, aligned to the master scene
+{ic.MASTER} with three models side by side: one translation per scene (left), the local warp (an affine plus
+a 144 m Gaussian-smoothed residual field, center) and the affine + elevation model (right). True color surface
+reflectance with per-scene MODIS offsets on one fixed stretch, 3 frames per second; the yellow lines are fixed
+marks every 150 m against which motion of the canopy between frames can be judged. The title gives each
+scene's date, satellite, clear fraction and its median tile residual after the translation and after the
+affine + elevation model.
+""".strip() + '\n')
 
 
 if __name__ == '__main__':
