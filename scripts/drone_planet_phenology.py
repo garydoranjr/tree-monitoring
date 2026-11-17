@@ -371,31 +371,24 @@ def plot_heatmap(tabs, outdir):
             ('rho_flower_pure', 'flowering\nin season,\nno leaf loss'),
             ('rho_decid', 'leaf loss\nall'), ('rho_decid_window', 'leaf loss\nin season'),
             ('rho_decid_pure', 'leaf loss\nin season,\nno flowering')]
-    order = tabs['mrcnn']['species'].tolist()
-    srcs = ['mrcnn']
-    fig, axes = plt.subplots(1, len(srcs), figsize=(7 * len(srcs), 0.27 * len(order) + 2.2),
-                             sharey=True, squeeze=False)
-    axes = axes[0]
-    for ax, src in zip(axes, srcs):
-        t = tabs[src].set_index('species').reindex(order)
-        m = t[[c for c, _ in cols]].values.astype(float)
-        im = ax.imshow(m, cmap='RdBu', vmin=-1, vmax=1, aspect='auto')
-        for (i, j), v in np.ndenumerate(m):
-            if np.isfinite(v):
-                ax.text(j, i, f'{v:.2f}'.replace('0.', '.'), ha='center',
-                        va='center', fontsize=6.5,
-                        color='w' if abs(v) > 0.6 else INK)
-        ax.xaxis.tick_top()
-        ax.set_xticks(range(len(cols)), [n.replace('\n', ' ') for _, n in cols],
-                      fontsize=7.5, rotation=50, ha='left')
-        ax.set_yticks(range(len(order)),
-                      [f'{short(s)} ({int(n)})' for s, n in
-                       zip(order, tabs['mrcnn'].set_index('species')['n_crowns'])],
-                      fontsize=7.5, style='italic')
-        ax.set_title(SOURCE_NAME[src], fontsize=10, pad=95)
-        for x in (3.5, 6.5):
-            ax.axvline(x, color='w', lw=3)
-    fig.colorbar(im, ax=axes, shrink=0.5, pad=0.01,
+    t = tabs['mrcnn']
+    m = t[[c for c, _ in cols]].values.astype(float).T
+    fig, ax = plt.subplots(figsize=(0.235 * len(t) + 2.6, 6.2))
+    im = ax.imshow(m, cmap='RdBu', vmin=-1, vmax=1, aspect='auto')
+    for (i, j), v in np.ndenumerate(m):
+        if np.isfinite(v):
+            ax.text(j, i, f'{v:.2f}'.replace('0.', '.'), ha='center', va='center',
+                    fontsize=5.5, rotation=90, color='w' if abs(v) > 0.6 else INK)
+    ax.set_yticks(range(len(cols)), [n.replace('\n', ' ') for _, n in cols],
+                  fontsize=8)
+    ax.set_xticks(range(len(t)), [f'{short(s)} ({int(n)})' for s, n in
+                                  zip(t['species'], t['n_crowns'])],
+                  fontsize=7.5, style='italic', rotation=60, ha='right',
+                  rotation_mode='anchor')
+    ax.tick_params(length=0)
+    for y in (3.5, 6.5):
+        ax.axhline(y, color='w', lw=3)
+    fig.colorbar(im, ax=ax, shrink=0.8, pad=0.01,
                  label='correlation of Planet with drone share')
     save(fig, outdir, 'phenology_corr_species')
 
