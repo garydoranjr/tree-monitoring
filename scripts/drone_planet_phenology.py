@@ -372,9 +372,10 @@ def plot_heatmap(tabs, outdir):
             ('rho_decid', 'leaf loss\nall'), ('rho_decid_window', 'leaf loss\nin season'),
             ('rho_decid_pure', 'leaf loss\nin season,\nno flowering')]
     order = tabs['mrcnn']['species'].tolist()
-    srcs = ['mrcnn', 'pse']
-    fig, axes = plt.subplots(1, 2, figsize=(14, 0.27 * len(order) + 2.2),
-                             sharey=True)
+    srcs = ['mrcnn']
+    fig, axes = plt.subplots(1, len(srcs), figsize=(7 * len(srcs), 0.27 * len(order) + 2.2),
+                             sharey=True, squeeze=False)
+    axes = axes[0]
     for ax, src in zip(axes, srcs):
         t = tabs[src].set_index('species').reindex(order)
         m = t[[c for c, _ in cols]].values.astype(float)
@@ -799,7 +800,7 @@ def plot_peak_scatter(cmp, outdir):
         c = cmp[(cmp['type'] == ty) & cmp['both_resolved']]
         ax.plot([0, 366], [0, 0], color=INK, lw=0.8)
         ax.axhspan(-21, 21, color=GRID, alpha=0.6, lw=0)
-        for src, mk, col in (('mrcnn', 'o', C_PLANET), ('pse', 's', '#8a8a8a')):
+        for src, mk, col in (('mrcnn', 'o', C_PLANET),):
             d = c[c['source'] == src]
             ax.errorbar(d['drone_peak'], d['dpeak'],
                         yerr=[-d['planet_lo'].clip(upper=0), d['planet_hi'].clip(lower=0)],
@@ -1258,8 +1259,7 @@ def plot_factors(fs, outdir, factors=FACTORS, figname='planet_eval_factors'):
 
 def plot_manual(mt, outdir):
     fig, axes = plt.subplots(1, 3, figsize=(14, 4.1))
-    series = [('drone', 'drone classifier', INK), ('mrcnn', 'Planet Mask R-CNN', C_PLANET),
-              ('pse', 'Planet PSE-LTAE', '#e8a13a')]
+    series = [('drone', 'drone classifier', INK), ('mrcnn', 'Planet Mask R-CNN', C_PLANET)]
     ax = axes[0]
     classes = ['flowering', 'leafless', 'both', 'none']
     t = mt[mt['group'] == 'class'].set_index(['level', 'source'])
@@ -1267,8 +1267,8 @@ def plot_manual(mt, outdir):
         y = [t.loc[(c, src), 'rate'] if (c, src) in t.index else np.nan for c in classes]
         lo = [t.loc[(c, src), 'lo'] if (c, src) in t.index else np.nan for c in classes]
         hi = [t.loc[(c, src), 'hi'] if (c, src) in t.index else np.nan for c in classes]
-        x = np.arange(len(classes)) + (j - 1) * 0.26
-        ax.bar(x, y, 0.24, color=col, label=name)
+        x = np.arange(len(classes)) + (j - (len(series) - 1) / 2) * 0.3
+        ax.bar(x, y, 0.28, color=col, label=name)
         ax.errorbar(x, y, yerr=[np.subtract(y, lo), np.subtract(hi, y)], fmt='none',
                     ecolor='0.35', lw=0.8)
     n = [int(t.loc[(c, 'mrcnn'), 'n']) if (c, 'mrcnn') in t.index else 0 for c in classes]
