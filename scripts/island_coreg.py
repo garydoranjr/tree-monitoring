@@ -1433,7 +1433,10 @@ def comparison_window(results, ids, size=300):
               help='Three comma-separated models for the comparison video (default raw,T,<model>).')
 @click.option('--extra-results', type=click.Path(path_type=Path), default=None,
               help='Second results directory whose scenes join the sequence (the sparse set).')
-def video(results, outdir, kind, fps, dpi, min_clear, which, limit, panels, extra_results):
+@click.option('--as-delivered', is_flag=True,
+              help='Sequence only: the same scenes and frames, but showing Planet\'s orthorectified images '
+                   'unchanged (island_coreg_sequence_raw*), to set beside the aligned sequence.')
+def video(results, outdir, kind, fps, dpi, min_clear, which, limit, panels, extra_results, as_delivered):
     """The aligned whole-island sequence and the three-panel comparison video."""
     import matplotlib.pyplot as plt
     outdir.mkdir(parents=True, exist_ok=True)
@@ -1444,9 +1447,13 @@ def video(results, outdir, kind, fps, dpi, min_clear, which, limit, panels, extr
     ext = extent()
     offsets_cols = ['offset_blue', 'offset_green', 'offset_red', 'offset_nir']
     tag = '' if min_clear == 0.8 else f'_clear{int(min_clear * 100)}'
+    if as_delivered:
+        which = 'sequence'
+        raw_px = pd.concat([pd.read_csv(r / 'scene_models.csv').query("band == 'both'").set_index('scene_id').med_raw
+                            for r in [results] + ([extra_results] if extra_results else [])])
 
     if which in ('sequence', 'both'):
-        name = f'island_coreg_sequence{tag}'
+        name = f'island_coreg_sequence{"_raw" if as_delivered else ""}{tag}'
         fig = plt.figure(figsize=(8.0, 7.6))
         ax = fig.add_axes([0.01, 0.01, 0.98, 0.98])
         bare(ax)
@@ -1473,15 +1480,22 @@ def video(results, outdir, kind, fps, dpi, min_clear, which, limit, panels, extr
         ff = ffmpeg_pipe(outdir / f'{name}.mp4', w, h, fps)
         t0 = time.time()
         for k, row in df.iterrows():
-            p4 = ALIGNED / kind / row.scene_id[:4] / f'{row.scene_id}_4band.tif'
-            with rasterio.open(p4) as src:
-                sr = src.read()
+            if as_delivered:
+                sr = read_island(scene_paths(row.scene_id)[0], [1, 2, 3, 4])
+            else:
+                with rasterio.open(ALIGNED / kind / row.scene_id[:4] / f'{row.scene_id}_4band.tif') as src:
+                    sr = src.read()
             cal = calibrate(sr, row[offsets_cols].values.astype(float))
             im.set_data(to_rgb(cal, lo, hi, valid=sr[0] > 0))
             t1.set_text(scene_label(row))
-            t2.set_text(f'{row.fraction_clear:.0%} clear   aligned: {MODEL_NAMES[kind]}, '
-                        + (f'residual {row.resid_px * RES:.1f} m ({row.resid_src})' if np.isfinite(row.resid_px)
-                           else 'reference scene' if row.scene_id == MASTER else 'residual not measured'))
+            if as_delivered:
+                off = raw_px.get(row.scene_id, np.nan) * RES
+                t2.set_text(f'{row.fraction_clear:.0%} clear   as delivered by Planet, '
+                            + (f'{off:.1f} m from the reference scene' if np.isfinite(off) else 'reference scene'))
+            else:
+                t2.set_text(f'{row.fraction_clear:.0%} clear   aligned: {MODEL_NAMES[kind]}, '
+                            + (f'residual {row.resid_px * RES:.1f} m ({row.resid_src})' if np.isfinite(row.resid_px)
+                               else 'reference scene' if row.scene_id == MASTER else 'residual not measured'))
             fig.canvas.draw()
             frame = bytes(fig.canvas.buffer_rgba())
             ff.stdin.write(frame)
@@ -1502,6 +1516,20 @@ def video(results, outdir, kind, fps, dpi, min_clear, which, limit, panels, extr
                'against its reported view direction (fitted where no RPC is on disk)' if kind in ('R', 'Ra') else
                f'the {MODEL_NAMES[kind]} model fitted to 192 m tile matches against the master scene {MASTER}')
         nres = int(df.resid_px.notna().sum())
+        if as_delivered:
+            off = df.scene_id.map(raw_px) * RES
+            (outdir / f'{name}_caption.md').write_text(' '.join(f"""
+                Time-lapse of Barro Colorado Island from the same {len(df)} PlanetScope scenes
+                ({df.acquired.min():%Y-%m-%d} to {df.acquired.max():%Y-%m-%d}, at least {min_clear:.0%} of the
+                island clear by OmniCloudMask) and with the same frames as island_coreg_sequence{tag}.mp4, but
+                showing Planet's orthorectified surface reflectance product as delivered, placed on the 3 m island
+                grid by its own georeferencing with no correction. True color (red, green, blue with per-scene
+                MODIS offsets) on one fixed stretch, {fps} frames per second; the white line is the island outline
+                and gray is no data. Each frame is labeled with its date, satellite, island clear fraction and the
+                median displacement of its 192 m tiles from the reference scene {MASTER} (median over
+                {int(off.notna().sum())} scenes {off.median():.1f} m, 90th percentile {off.quantile(0.9):.1f} m).
+                """.split()) + '\n')
+            return
         (outdir / f'{name}_caption.md').write_text(' '.join(f"""
             Time-lapse of Barro Colorado Island from {len(df)} PlanetScope scenes
             ({df.acquired.min():%Y-%m-%d} to {df.acquired.max():%Y-%m-%d}, at least {min_clear:.0%} of the island

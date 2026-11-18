@@ -624,6 +624,10 @@ Model R (`figs/20261118_updates/`; from `island_coreg.py video`,
 14. `island_coreg_sequence.mp4` (289 scenes, `Ra`), `island_coreg_comparison.mp4` (as
     delivered, translation, `Ra`), `island_coreg_sequence_clear30.mp4` (933 scenes at
     least 30 % clear, including the cloudier set); captions written by `video`.
+    `island_coreg_sequence_raw.mp4` (`video --model Ra --as-delivered`) shows the same 289
+    scenes frame for frame as delivered by Planet, and
+    `island_coreg_sequence_side_by_side.mp4` joins the two (as delivered left, `Ra` right;
+    `ffmpeg -i raw -i aligned -filter_complex hstack`).
 15. `island_diag_band`, `island_diag_elevation` — as 10 and 11, with R in the residual panel.
 16. `island_align_problem`, `_diagnosis`, `_steps`, `_method`, `_result`, `_compare` — the
     slide figures of the correction, now with model R (the 2026-11-17 versions with H are
@@ -708,6 +712,7 @@ python scripts/island_coreg.py warp --model Ra --jobs 4
 python scripts/island_coreg.py warp --model Ra --jobs 4 --min-clear 0.3 --index index_all.csv
 python scripts/island_coreg.py warp --model Ra --jobs 4 --results $S --min-clear 0.3 --index index_sparse.csv --max-resid 1.5
 python scripts/island_coreg.py video --model Ra --outdir $O
+python scripts/island_coreg.py video --model Ra --as-delivered --outdir $O   # island_coreg_sequence_raw.mp4
 python scripts/island_coreg.py video --model Ra --which sequence --min-clear 0.3 --extra-results $S --outdir $O
 python scripts/island_coreg_diagnose.py figures --outdir $O
 python scripts/make_island_alignment_figures.py all         # figs/20261118_updates/
