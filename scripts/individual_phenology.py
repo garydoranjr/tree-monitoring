@@ -135,22 +135,31 @@ def unit_means(pairs, min_crowns=5):
     return t[t['n'] >= min_crowns].reset_index()
 
 
-def correlate_means(means, units, min_flights=20):
+def correlate_means(means, units, min_flights=20, kind='pearson'):
     rows = []
     for unit, t in means.groupby('species'):
         if unit not in units or len(t) < min_flights:
             continue
         rows.append({'species': unit, 'n_flights': len(t),
                      **{f'r_{ty}': _corr(t[PROB[ty]].values, t['score'].values,
-                                         'pearson') for ty in TYPES}})
+                                         kind) for ty in TYPES}})
     return pd.DataFrame(rows)
 
 
 # ---------------------------------------------------------- crown analyses
 
-def pearson_cols(a, B, min_n=15):
-    """Pearson of vector `a` with each column of `B` over the rows where
-    both are finite; NaN below `min_n` rows or without variation."""
+def pearson_cols(a, B, min_n=15, kind='pearson'):
+    """Pearson (or Spearman) of vector `a` with each column of `B` over the
+    rows where both are finite; NaN below `min_n` rows or without variation."""
+    if kind == 'spearman':
+        from scipy.stats import rankdata
+        out = np.full(B.shape[1], np.nan)
+        for j in range(B.shape[1]):
+            ok = np.isfinite(a) & np.isfinite(B[:, j])
+            if ok.sum() >= min_n:
+                out[j] = pearson_cols(rankdata(a[ok]), rankdata(B[ok, j])[:, None],
+                                      min_n)[0]
+        return out
     ok = np.isfinite(a)[:, None] & np.isfinite(B)
     n = ok.sum(0)
     with warnings.catch_warnings(), np.errstate(invalid='ignore', divide='ignore'):
@@ -176,7 +185,7 @@ def crown_pivots(pairs, min_pairs=15):
     return piv, species.reindex(piv['score'].columns)
 
 
-def own_vs_others(crowns, piv, species, rng, n_hetero=40, min_n=15):
+def own_vs_others(crowns, piv, species, rng, n_hetero=40, min_n=15, kind='pearson'):
     """For each crown: the correlation of its Planet series with (a) the
     drone series of each other crown of its species (mean over them), (b)
     the mean drone series of the other crowns of its species, (c) drone
@@ -193,7 +202,7 @@ def own_vs_others(crowns, piv, species, rng, n_hetero=40, min_n=15):
         diff = np.nonzero(sp != sp[i])[0]
         row = {'tag': tag, 'n_conspecific': len(same)}
         if len(same):
-            rc = pearson_cols(S[:, i], E[:, same], min_n)
+            rc = pearson_cols(S[:, i], E[:, same], min_n, kind)
             row['r_conspecific'] = np.nanmean(rc) if np.isfinite(rc).any() else np.nan
             row['n_conspecific_used'] = int(np.isfinite(rc).sum())
         if len(same) >= 3:
@@ -202,11 +211,11 @@ def own_vs_others(crowns, piv, species, rng, n_hetero=40, min_n=15):
                 cnt = np.isfinite(E[:, same]).sum(1)
                 eo = np.where(cnt >= 3, np.nanmean(E[:, same], 1), np.nan)
                 so = np.where(cnt >= 3, np.nanmean(S[:, same], 1), np.nan)
-            row['r_species_mean'] = pearson_cols(S[:, i], eo[:, None], min_n)[0]
+            row['r_species_mean'] = pearson_cols(S[:, i], eo[:, None], min_n, kind)[0]
             row['r_departure'] = pearson_cols(S[:, i] - so, (E[:, i] - eo)[:, None],
-                                              min_n)[0]
+                                              min_n, kind)[0]
         pick = rng.choice(diff, min(n_hetero, len(diff)), replace=False)
-        rh = pearson_cols(S[:, i], E[:, pick], min_n)
+        rh = pearson_cols(S[:, i], E[:, pick], min_n, kind)
         row['r_other_species'] = np.nanmean(rh) if np.isfinite(rh).any() else np.nan
         rows.append(row)
     return pd.DataFrame(rows)
@@ -569,6 +578,8 @@ def page_data(T, source, n_boot, rng):
     pairs, drone, planet = T['pairs'][source], T['drone'], T['planet'][source]
     stab, ptab, masks = scale_tables(T, source, 'pearson', n_boot, rng)
     tab = pd.concat([ptab, stab], ignore_index=True).set_index('species')
+    stab_s, ptab_s, _ = scale_tables(T, source, 'spearman', n_boot, rng)
+    tab_s = pd.concat([ptab_s, stab_s], ignore_index=True).set_index('species')
     lo = planet['date'].min()
     seen = drone[(drone['date'] >= lo) & drone['tag'].isin(planet['tag'])]
     units = []
@@ -583,9 +594,13 @@ def page_data(T, source, n_boot, rng):
             if m is None or not np.isfinite(v):
                 cells.append(None)
                 continue
+            skey = cell_key(ty, sub, 'rho')
             cells.append({'r': round(float(v), 3), 'n': int(m.sum()),
                           'ci': _r([tab.loc[unit, f'{key}_lo'],
                                     tab.loc[unit, f'{key}_hi']], 2),
+                          'rho': _r([tab_s.loc[unit, skey]])[0],
+                          'cis': _r([tab_s.loc[unit, f'{skey}_lo'],
+                                     tab_s.loc[unit, f'{skey}_hi']], 2),
                           'idx': np.nonzero(m)[0].tolist()})
         units.append({
             'name': unit, 'label': unit if unit == PLOT else short(unit),
@@ -598,6 +613,8 @@ def page_data(T, source, n_boot, rng):
             'cells': cells})
     # Crowns.
     crowns = correlate_crowns(pairs, kind='pearson')
+    crowns = crowns.merge(correlate_crowns(pairs)[['tag', 'rho', 'rho_flower',
+                                                   'rho_decid']], on='tag')
     crowns = crowns[crowns['r'].notna()]
     ddates = np.sort(seen['date'].unique())
     sdates = np.sort(planet['date'].unique())
@@ -613,6 +630,7 @@ def page_data(T, source, n_boot, rng):
         clist.append({
             'tag': tag, 'sp': c['species'], 'area': round(float(c['area_m2'])),
             'n': int(c['n']), 'r': _r([c['r'], c['r_flower'], c['r_decid']]),
+            'rho': _r([c['rho'], c['rho_flower'], c['rho_decid']]),
             'f': np.searchsorted(ddates, p['flight'].values).tolist(),
             'pf': (p['p_flower'] * 10000).round().astype(int).tolist(),
             'pd': (p['p_decid'] * 10000).round().astype(int).tolist(),
@@ -659,6 +677,9 @@ h1{font-size:16px;margin:0;font-weight:600}
  <div class="grp" id="view">
   <button data-v="species" class="on">Plot and species</button>
   <button data-v="trees">Individual trees</button></div>
+ <div class="grp" id="method">
+  <button data-m="r" class="on">Pearson</button>
+  <button data-m="rho">Spearman</button></div>
  <div class="grp" id="type" style="display:none">
   <button data-t="0" class="on">either event</button>
   <button data-t="1">flowering</button>
@@ -679,7 +700,17 @@ const TYPE_NAME = {event: 'either event', flower: 'flowering', decid: 'leaf loss
 const RDBU = [[0,'#67001f'],[0.125,'#b2182b'],[0.25,'#d6604d'],[0.375,'#f4a582'],
   [0.5,'#f7f7f7'],[0.625,'#92c5de'],[0.75,'#4393c3'],[0.875,'#2166ac'],[1,'#053061']];
 const CFG = {displayModeBar: false, responsive: true};
-let view = 'species', ttype = 0, pinned = null, treeRows = null;
+let view = 'species', ttype = 0, pinned = null, treeRows = null, method = 'r', cur = null;
+const MNAME = {r: 'Pearson r', rho: 'Spearman ρ'}, SYM = {r: 'r', rho: 'ρ'};
+const CIKEY = {r: 'ci', rho: 'cis'}, OTHER = {r: 'rho', rho: 'r'};
+// Ranks with ties given their mean rank, as Spearman's correlation uses.
+function ranks(v) {
+  const o = v.map((x, i) => i).sort((a, b) => v[a] - v[b]), r = new Array(v.length);
+  for (let i = 0; i < o.length;) { let j = i; while (j + 1 < o.length && v[o[j + 1]] === v[o[i]]) j++;
+    for (let k = i; k <= j; k++) r[o[k]] = (i + j) / 2 + 1; i = j + 1; }
+  return r;
+}
+function val(v) { return v === null || v === undefined ? 'n/a' : fmt(v); }
 
 function pearson(x, y) {
   const n = x.length; if (n < 2) return NaN;
@@ -703,13 +734,13 @@ function fmt(v) { return (v >= 0 ? '' : '−') + Math.abs(v).toFixed(2); }
 
 // ------------------------------------------------------------ heatmaps
 function drawSpeciesHeat() {
-  const z = D.units.map(u => u.cells.map(c => c ? c.r : null));
+  const z = D.units.map(u => u.cells.map(c => c ? c[method] : null));
   const y = D.units.map(u => `${u.label} (${u.n_crowns})`);
   const text = z.map(r => r.map(v => v === null ? '' : fmt(v).replace('0.', '.')));
   Plotly.newPlot('heat', [{type: 'heatmap', z: z, x: D.cols.map((c, i) => i), y: y,
     text: text, texttemplate: '%{text}', textfont: {size: 10},
     colorscale: RDBU, zmin: -1, zmax: 1, xgap: 1, ygap: 1, hoverinfo: 'none',
-    colorbar: {title: {text: 'Pearson r', side: 'right'}, thickness: 10, len: 0.35, y: 1, yanchor: 'top'}}],
+    colorbar: {title: {text: MNAME[method], side: 'right'}, thickness: 10, len: 0.35, y: 1, yanchor: 'top'}}],
    {height: 100 + 19 * y.length, margin: {l: 150, r: 60, t: 80, b: 10},
     xaxis: {side: 'top', tickvals: D.cols.map((c, i) => i),
       ticktext: D.cols.map(c => c.replace(/, /g, ',<br>')),
@@ -733,14 +764,14 @@ function drawTreeHeat() {
   if (!treeRows) buildTreeRows();
   const w = Math.max(...treeRows.map(r => r.idx.length));
   const z = treeRows.map(r => { const row = new Array(w).fill(null);
-    r.idx.forEach((i, k) => { row[k] = D.crowns[i].r[ttype]; }); return row; });
+    r.idx.forEach((i, k) => { row[k] = D.crowns[i][method][ttype]; }); return row; });
   const cd = treeRows.map(r => { const row = new Array(w).fill(null);
     r.idx.forEach((i, k) => { row[k] = i; }); return row; });
   const y = treeRows.map(r => { const p = r.sp.split(' ');
     return `${p.length > 1 ? p[0][0] + '. ' + p.slice(1).join(' ') : r.sp} (${r.idx.length})`; });
   Plotly.newPlot('heat', [{type: 'heatmap', z: z, y: y, customdata: cd,
     colorscale: RDBU, zmin: -1, zmax: 1, xgap: 1, ygap: 1, hoverinfo: 'none', hoverongaps: false,
-    colorbar: {title: {text: 'Pearson r', side: 'right'}, thickness: 10, len: 0.25, y: 1, yanchor: 'top'}}],
+    colorbar: {title: {text: MNAME[method], side: 'right'}, thickness: 10, len: 0.25, y: 1, yanchor: 'top'}}],
    {height: 90 + 15 * y.length, margin: {l: 150, r: 60, t: 50, b: 10},
     xaxis: {side: 'top', title: {text: 'crowns of the species, ordered by correlation with either event',
       font: {size: 12}}, showticklabels: false, fixedrange: true},
@@ -768,7 +799,7 @@ function mark(sel) {
   }
   Plotly.relayout('heat', {shapes: shapes});
 }
-function show(sel) { mark(sel); if (sel.kind === 'species') showSpecies(sel.u, sel.c); else showTree(sel.i); }
+function show(sel) { cur = sel; mark(sel); if (sel.kind === 'species') showSpecies(sel.u, sel.c); else showTree(sel.i); }
 
 // ---------------------------------------------------------- right panels
 function showSpecies(ui, ci) {
@@ -784,26 +815,30 @@ function showSpecies(ui, ci) {
   const x = U[ty], y = U.planet;
   const pick = (a, f) => a.filter((v, i) => inc[i] === f);
   const xi = pick(x, true), yi = pick(y, true);
-  const r = pearson(xi, yi), [a, b] = fitLine(xi, yi);
-  const xr = [Math.min(...xi), Math.max(...xi)];
-  const ci95 = cell.ci[0] === null ? '' : `, 95% interval ${fmt(cell.ci[0])} to ${fmt(cell.ci[1])}`;
-  info.innerHTML = `${name} · ${D.cols[ci]} · <b>r = ${fmt(cell.r)}</b> over ${cell.n} of ` +
-    `${U.flight.length} flights${ci95} · median ${U.n_crowns} crowns per flight` +
-    (pinned ? ' · <span class="pin">pinned</span>' : '') +
-    `<br><span class="hint">Recomputed in the page from the highlighted points: r = ${fmt(r)}.</span>`;
-  const ht = '%{text}<br>drone %{x:.3f}<br>Planet %{y:.3f}<extra></extra>';
+  const rk = method === 'rho', px = rk ? ranks(xi) : xi, py = rk ? ranks(yi) : yi;
+  const r = pearson(px, py), [a, b] = fitLine(px, py);
+  const xr = [Math.min(...px), Math.max(...px)];
+  const cv = cell[CIKEY[method]];
+  const ci95 = cv[0] === null ? '' : `, 95% interval ${fmt(cv[0])} to ${fmt(cv[1])}`;
+  info.innerHTML = `${name} · ${D.cols[ci]} · <b>${MNAME[method]} = ${val(cell[method])}</b> over ${cell.n} of ` +
+    `${U.flight.length} flights${ci95} · ${MNAME[OTHER[method]]} = ${val(cell[OTHER[method]])}` +
+    ` · median ${U.n_crowns} crowns per flight` + (pinned ? ' · <span class="pin">pinned</span>' : '') +
+    `<br><span class="hint">Recomputed in the page from the highlighted points` +
+    `${rk ? ' (plotted as ranks, ties sharing their mean rank)' : ''}: ${SYM[method]} = ${fmt(r)}.</span>`;
+  const ht = rk ? '%{text}<br>drone rank %{x}<br>Planet rank %{y}<extra></extra>'
+    : '%{text}<br>drone %{x:.3f}<br>Planet %{y:.3f}<extra></extra>';
   Plotly.react('scatter', [
-    {x: pick(x, false), y: pick(y, false), text: pick(U.flight, false), mode: 'markers', type: 'scatter',
-     name: 'flights not used', hovertemplate: ht,
+    {x: rk ? [] : pick(x, false), y: rk ? [] : pick(y, false), text: pick(U.flight, false), mode: 'markers', type: 'scatter',
+     name: rk ? 'flights not used (not ranked)' : 'flights not used', hovertemplate: ht,
      marker: {color: 'rgba(0,0,0,0)', size: 7, line: {color: GRAY, width: 1}}},
-    {x: xi, y: yi, text: pick(U.flight, true), mode: 'markers', type: 'scatter',
+    {x: px, y: py, text: pick(U.flight, true), mode: 'markers', type: 'scatter',
      name: `flights used (${cell.n})`, hovertemplate: ht,
      marker: {color: C.planet, size: 8, opacity: 0.75, line: {color: '#fff', width: 0.5}}},
     {x: xr, y: xr.map(v => a + b * v), mode: 'lines', name: 'least-squares line',
      line: {color: C.ink, width: 1.2}, hoverinfo: 'skip'}],
    {margin: {l: 62, r: 16, t: 26, b: 62}, plot_bgcolor: '#fff',
-    xaxis: axis(`drone share of crowns: ${TYPE_NAME[ty]}`, {rangemode: 'tozero'}),
-    yaxis: axis('Planet share of clear crown-scenes called an event', {rangemode: 'tozero'}),
+    xaxis: axis(`${rk ? 'rank of the ' : ''}drone share of crowns: ${TYPE_NAME[ty]}`, {rangemode: 'tozero'}),
+    yaxis: axis(`${rk ? 'rank of the ' : ''}Planet share of clear crown-scenes called an event`, {rangemode: 'tozero'}),
     legend: {orientation: 'h', y: 1.08, font: {size: 11}}, hovermode: 'closest'}, CFG);
   const other = ['flower', 'decid', 'event'].filter(k => k !== ty);
   const line = k => ({x: U.sd, y: U['s' + k], mode: 'lines', type: 'scatter',
@@ -829,23 +864,28 @@ function showTree(i) {
   const pf = c.pf.map(v => v / 10000), pd = c.pd.map(v => v / 10000), y = c.sc.map(v => v / 10000);
   const x = k === 'flower' ? pf : k === 'decid' ? pd : pf.map((v, j) => 1 - (1 - v) * (1 - pd[j]));
   const fl = c.f.map(j => D.ddates[j]);
-  const r = pearson(x, y), [a, b] = fitLine(x, y), xr = [Math.min(...x), Math.max(...x)];
-  const rv = c.r[ttype];
+  const rk = method === 'rho', px = rk ? ranks(x) : x, py = rk ? ranks(y) : y, cm = c[method];
+  const r = pearson(px, py), [a, b] = fitLine(px, py), xr = [Math.min(...px), Math.max(...px)];
+  const rv = cm[ttype];
   document.getElementById('info').innerHTML = `<b>Tag ${c.tag}</b>, <i>${c.sp}</i> · crown ${c.area} m² · ` +
-    `drone ${TYPE_NAME[k]} probability against Planet score · <b>r = ${rv === null ? 'n/a' : fmt(rv)}</b> over ` +
-    `${c.n} paired flights (either ${c.r[0] === null ? 'n/a' : fmt(c.r[0])}, flowering ` +
-    `${c.r[1] === null ? 'n/a' : fmt(c.r[1])}, leaf loss ${c.r[2] === null ? 'n/a' : fmt(c.r[2])})` +
+    `drone ${TYPE_NAME[k]} probability against Planet score · <b>${MNAME[method]} = ${val(rv)}</b> over ` +
+    `${c.n} paired flights (either ${val(cm[0])}, flowering ${val(cm[1])}, leaf loss ${val(cm[2])}) · ` +
+    `${MNAME[OTHER[method]]} = ${val(c[OTHER[method]][ttype])}` +
     (pinned ? ' · <span class="pin">pinned</span>' : '') +
-    `<br><span class="hint">Recomputed in the page from the highlighted points: r = ${isFinite(r) ? fmt(r) : 'n/a'}.</span>`;
+    `<br><span class="hint">Recomputed in the page from the highlighted points` +
+    `${rk ? ' (plotted as ranks, ties sharing their mean rank)' : ''}: ${SYM[method]} = ${isFinite(r) ? fmt(r) : 'n/a'}.</span>`;
   Plotly.react('scatter', [
-    {x: x, y: y, text: fl, mode: 'markers', type: 'scatter', name: `paired flights (${c.n})`,
-     hovertemplate: '%{text}<br>drone %{x:.3f}<br>Planet %{y:.3f}<extra></extra>',
+    {x: px, y: py, text: fl, mode: 'markers', type: 'scatter', name: `paired flights (${c.n})`,
+     hovertemplate: rk ? '%{text}<br>drone rank %{x}<br>Planet rank %{y}<extra></extra>'
+       : '%{text}<br>drone %{x:.3f}<br>Planet %{y:.3f}<extra></extra>',
      marker: {color: C.planet, size: 8, opacity: 0.75, line: {color: '#fff', width: 0.5}}},
     {x: xr, y: xr.map(v => a + b * v), mode: 'lines', name: 'least-squares line',
      line: {color: C.ink, width: 1.2}, hoverinfo: 'skip'}],
    {margin: {l: 62, r: 16, t: 26, b: 62}, plot_bgcolor: '#fff',
-    xaxis: axis(`drone ${TYPE_NAME[k]} probability of the crown at the flight`, {range: [-0.03, 1.03]}),
-    yaxis: axis('Planet score: mean covered fraction, scenes within 10 d', {range: [-0.03, 1.03]}),
+    xaxis: axis(`${rk ? 'rank of the ' : ''}drone ${TYPE_NAME[k]} probability of the crown at the flight`,
+      rk ? {rangemode: 'tozero'} : {range: [-0.03, 1.03]}),
+    yaxis: axis(`${rk ? 'rank of the ' : ''}Planet score: mean covered fraction, scenes within 10 d`,
+      rk ? {rangemode: 'tozero'} : {range: [-0.03, 1.03]}),
     legend: {orientation: 'h', y: 1.08, font: {size: 11}}, hovermode: 'closest'}, CFG);
   const dd = c.di.map(j => D.ddates[j]);
   Plotly.react('series', [
@@ -880,6 +920,13 @@ document.querySelectorAll('#type button').forEach(b => b.onclick = () => {
   document.querySelectorAll('#type button').forEach(o => o.classList.toggle('on', o === b));
   const keep = pinned; Plotly.purge('heat'); drawTreeHeat();
   show(keep || {kind: 'tree', i: treeRows[0].idx[0]});
+});
+document.querySelectorAll('#method button').forEach(b => b.onclick = () => {
+  method = b.dataset.m;
+  document.querySelectorAll('#method button').forEach(o => o.classList.toggle('on', o === b));
+  const keep = cur; Plotly.purge('heat');
+  if (view === 'species') drawSpeciesHeat(); else drawTreeHeat();
+  if (keep) show(keep);
 });
 // A pinned cell is kept in the address (#cell=row,column or #tree=tag).
 (function () {
@@ -1527,6 +1574,173 @@ def repeat(outdir, tables, self_test):
                                  d[f'fit_anom_{src}'].values, 'pearson')) if len(d) >= 8 else None}
     (mat / 'tree_timing_summary.json').write_text(json.dumps(summary, indent=1))
     click.echo(json.dumps(summary, indent=1))
+
+
+# ------------------------------------------------- Pearson against Spearman
+
+def method_tables(T, source, kind):
+    """Everything the scale comparison reports, with one correlation measure."""
+    pairs = T['pairs'][source]
+    pre = 'rho' if kind == 'spearman' else 'r'
+    stab, ptab, _ = scale_tables(T, source, kind, 0, np.random.default_rng(0))
+    units = pd.concat([ptab, stab], ignore_index=True)
+    units = units.rename(columns={c: 'c' + c[len(pre):] for c in units.columns
+                                  if c.startswith(pre + '_')})
+    sp_means = correlate_means(unit_means(pairs), set(stab['species']), kind=kind)
+    plot_means = correlate_means(unit_means(pairs.assign(species=PLOT)), {PLOT}, kind=kind)
+    crowns = correlate_crowns(pairs, kind=kind).rename(
+        columns={pre: 'c_event', f'{pre}_flower': 'c_flower', f'{pre}_decid': 'c_decid'})
+    piv, species = crown_pivots(pairs)
+    crowns = crowns.merge(own_vs_others(crowns, piv, species, np.random.default_rng(0),
+                                        kind=kind), on='tag')
+    other = ['r_conspecific', 'r_species_mean', 'r_departure', 'r_other_species']
+    crowns.loc[crowns['c_event'].isna(), other] = np.nan
+    return {'units': units, 'sp_means': sp_means, 'plot_means': plot_means,
+            'crowns': crowns}
+
+
+def conclusions(M):
+    """The headline numbers of the scale comparison under one measure."""
+    c, rows = M['crowns'], []
+    for ty in TYPES:
+        name = TYPE_NAME[ty]
+        rows += [(f'individual crowns, {name} (median)', c[f'c_{ty}'].median()),
+                 (f'species, {name} (median)', M['sp_means'][f'r_{ty}'].median()),
+                 (f'whole plot, {name}', M['plot_means'][f'r_{ty}'].iloc[0])]
+    both = c.dropna(subset=['c_event', 'r_conspecific'])
+    rows += [('crown with the mean of other conspecifics (median)', c['r_species_mean'].median()),
+             ('crown with another conspecific (median)', c['r_conspecific'].median()),
+             ('crown with a crown of another species (median)', c['r_other_species'].median()),
+             ('crown and conspecific-mean departures (median)', c['r_departure'].median())]
+    area = pd.cut(c['area_m2'], [36, 50, 100, 200, 400, 800, 3000], right=False)
+    g = c.groupby(area, observed=False)['c_event'].median()
+    rows += [('crowns of 36–50 m², either (median)', g.iloc[0]),
+             ('crowns of 400–800 m², either (median)', g.iloc[4])]
+    shares = {
+        'share of crowns at 0.5 or more, either': (c['c_event'] >= 0.5).sum() / c['c_event'].notna().sum(),
+        'share of species at 0.5 or more, either': (M['sp_means']['r_event'] >= 0.5).mean(),
+        'share of crowns closer to themselves than to a conspecific':
+            (both['c_event'] > both['r_conspecific']).mean()}
+    return rows, shares
+
+
+def plot_methods(P, S, table, outdir):
+    fig, axes = plt.subplots(1, 3, figsize=(15.5, 5.0),
+                             gridspec_kw={'width_ratios': [1, 1, 0.72]})
+    ax = axes[0]
+    for ty in ('event', 'decid', 'flower'):
+        for sub, ms, al in (('dry', 3, 0.3), ('wet', 3, 0.3), ('window', 3, 0.3),
+                            ('pure', 3, 0.3), ('all', 5.5, 0.85)):
+            k = cell_key(ty, sub, 'c')
+            if k not in P['units']:
+                continue
+            m = P['units'][['species', k]].merge(S['units'][['species', k]], on='species',
+                                                 suffixes=('_p', '_s'))
+            sp = m[m['species'] != PLOT]
+            ax.plot(sp[f'{k}_p'], sp[f'{k}_s'], 'o', ms=ms, color=C_TYPE[ty], alpha=al,
+                    mew=0, label=f'{TYPE_NAME[ty]}, all flights' if sub == 'all' else None)
+            pl = m[m['species'] == PLOT]
+            if sub == 'all':
+                ax.plot(pl[f'{k}_p'], pl[f'{k}_s'], 'D', ms=9, color=C_TYPE[ty], mec='w',
+                        mew=1.2, zorder=5)
+    ax.plot([], [], 'o', ms=3, color='#777', alpha=0.5, mew=0, label='subsets of flights')
+    ax.plot([], [], 'D', ms=8, color='#777', mec='w', label='whole plot')
+    ax.set_title('species and whole plot (shares)', fontsize=10, loc='left')
+    ax = axes[1]
+    c = P['crowns'][['tag', 'c_event', 'c_decid', 'c_flower']].merge(
+        S['crowns'][['tag', 'c_event', 'c_decid', 'c_flower']], on='tag', suffixes=('_p', '_s'))
+    for ty in ('event', 'decid', 'flower'):
+        ax.plot(c[f'c_{ty}_p'], c[f'c_{ty}_s'], 'o', ms=2.6, color=C_TYPE[ty], alpha=0.3,
+                mew=0, label=TYPE_NAME[ty])
+    ax.set_title('individual crowns', fontsize=10, loc='left')
+    for ax in axes[:2]:
+        ax.plot([-0.6, 1], [-0.6, 1], color=INK, lw=0.7)
+        ax.axhline(0, color=INK, lw=0.5)
+        ax.axvline(0, color=INK, lw=0.5)
+        ax.set_xlim(-0.6, 1)
+        ax.set_ylim(-0.6, 1)
+        ax.set_aspect('equal')
+        ax.set_xlabel('Pearson correlation')
+        ax.set_ylabel('Spearman correlation')
+        leg = ax.legend(fontsize=7.5, frameon=False, loc='upper left')
+        for h in leg.legend_handles:
+            h.set_alpha(1)
+        style(ax)
+    ax = axes[2]
+    t = table.iloc[::-1].reset_index(drop=True)
+    for y, r in t.iterrows():
+        ax.plot([r['pearson'], r['spearman']], [y, y], color='#999', lw=1.2, zorder=1)
+        ax.plot(r['pearson'], y, 'o', color=INK, ms=6, zorder=2)
+        ax.plot(r['spearman'], y, 'o', color=INK, mfc='w', ms=6, zorder=3)
+    ax.plot([], [], 'o', color=INK, ms=6, label='Pearson')
+    ax.plot([], [], 'o', color=INK, mfc='w', ms=6, label='Spearman')
+    ax.set_yticks(range(len(t)), t['quantity'], fontsize=7.5)
+    for y in (1.5, 5.5, 8.5, 11.5):
+        ax.axhline(y, color='#999', lw=0.8, ls=(0, (2, 2)))
+    ax.set_ylim(-0.6, len(t) - 0.4)
+    ax.axvline(0, color=INK, lw=0.6)
+    ax.set_xlim(-0.2, 1)
+    ax.set_xlabel('correlation of Planet with drone')
+    ax.set_title('headline numbers', fontsize=10, loc='left')
+    ax.legend(fontsize=8, frameon=False, loc='upper right')
+    style(ax)
+    fig.tight_layout()
+    save(fig, outdir, 'corr_pearson_vs_spearman')
+
+
+@cli.command('compare-methods')
+@click.option('--outdir', default=str(DEFAULT_OUT), show_default=True)
+@click.option('--tables', default=str(TABLES), show_default=True)
+@click.option('--source', default='mrcnn', show_default=True)
+def compare_methods(outdir, tables, source):
+    """Do Pearson and Spearman lead to the same conclusions?"""
+    from scipy import stats
+    outdir = Path(outdir)
+    mat = outdir / 'materials'
+    T = build_tables(Path(tables), 10)
+    P, S = method_tables(T, source, 'pearson'), method_tables(T, source, 'spearman')
+    (rp, sp_), (rs, ss_) = conclusions(P), conclusions(S)
+    table = pd.DataFrame({'quantity': [q for q, _ in rp],
+                          'pearson': [v for _, v in rp], 'spearman': [v for _, v in rs]})
+    table['difference'] = table['spearman'] - table['pearson']
+    table.to_csv(mat / 'corr_method_comparison.csv', index=False)
+    plot_methods(P, S, table, outdir)
+    cols = [cell_key(ty, sub, 'c') for ty, sub in CELLS]
+    u = P['units'][['species', 'n_crowns'] + cols].merge(
+        S['units'][['species'] + cols], on='species', suffixes=('_pearson', '_spearman'))
+    u.to_csv(mat / 'corr_methods_species.csv', index=False)
+    c = P['crowns'][['tag', 'species', 'area_m2', 'n', 'n_events', 'c_event', 'c_decid',
+                     'c_flower']].merge(S['crowns'][['tag', 'c_event', 'c_decid', 'c_flower']],
+                                        on='tag', suffixes=('_pearson', '_spearman'))
+    c.to_csv(mat / 'corr_methods_crowns.csv', index=False)
+    sp = u[u['species'] != PLOT]
+    out = {'shares_pearson': {k: float(v) for k, v in sp_.items()},
+           'shares_spearman': {k: float(v) for k, v in ss_.items()}, 'agreement': {}}
+    for ty in TYPES:
+        a, b = sp[f'c_{ty}_pearson'], sp[f'c_{ty}_spearman']
+        ok = a.notna() & b.notna()
+        d = (b - a)[ok]
+        big = sp[ok & ((b - a).abs() >= 0.2)]
+        ca, cb = c[f'c_{ty}_pearson'], c[f'c_{ty}_spearman']
+        okc = ca.notna() & cb.notna()
+        out['agreement'][ty] = {
+            'species_n': int(ok.sum()),
+            'species_rank_agreement': float(stats.spearmanr(a[ok], b[ok])[0]),
+            'species_r_between_measures': float(stats.pearsonr(a[ok], b[ok])[0]),
+            'species_median_abs_diff': float(d.abs().median()),
+            'species_mean_diff_spearman_minus_pearson': float(d.mean()),
+            'species_differ_by_0.2': {s: [round(float(x), 2), round(float(y), 2)] for s, x, y in
+                                      zip(big['species'], big[f'c_{ty}_pearson'],
+                                          big[f'c_{ty}_spearman'])},
+            'species_same_side_of_0.5': float(((a >= 0.5) == (b >= 0.5))[ok].mean()),
+            'crowns_n': int(okc.sum()),
+            'crowns_rank_agreement': float(stats.spearmanr(ca[okc], cb[okc])[0]),
+            'crowns_median_abs_diff': float((cb - ca)[okc].abs().median()),
+            'crowns_mean_diff_spearman_minus_pearson': float((cb - ca)[okc].mean()),
+            'crowns_same_side_of_0.5': float(((ca >= 0.5) == (cb >= 0.5))[okc].mean())}
+    (mat / 'corr_method_comparison.json').write_text(json.dumps(out, indent=1))
+    click.echo(table.round(2).to_string(index=False))
+    click.echo(json.dumps(out, indent=1))
 
 
 if __name__ == '__main__':
