@@ -4,8 +4,9 @@ Scripts: [`scripts/island_coreg.py`](../scripts/island_coreg.py) (alignment) and
 [`scripts/island_coreg_diagnose.py`](../scripts/island_coreg_diagnose.py) (diagnosis of the
 central band, drone anchoring).
 Outputs: tables in `/Volumes/Earth03/flower/results/island_coreg/` (diagnostics in
-`diagnose/`), aligned rasters in `/Volumes/Earth03/flower/planet_bci_aligned/Ha/` (recommended;
-the earlier local-warp set is in `L/`), figures and videos in
+`diagnose/`), aligned rasters in `/Volumes/Earth03/flower/planet_bci_aligned/Ra/` (recommended;
+the earlier sets are in `Ha/` and `L/`), figures and videos in
+`/Volumes/Earth03/flower/figs/20261118_updates/` (model R: sequences, comparison, slide figures),
 `/Volumes/Earth03/flower/figs/20261110_updates/` (`island_coreg_*`) and
 `/Volumes/Earth03/flower/figs/20261116_updates/` (`island_diag_*`, re-rendered videos).
 
@@ -27,6 +28,17 @@ measured with the drone). The term can be predicted from metadata, to a median 0
 100 m against image matching; the shift and affine parts still need matching.
 Planet's documented process, the literature and the checks are in
 [planet_geolocation_literature.md](planet_geolocation_literature.md).
+
+**Revision of 2026-11-17 (model R).** The correction now takes each scene's elevation term
+from the tilt of its RPC instead of fitting it: model **R** (**Ra** when anchored to the
+drone mosaic), six fitted parameters per scene instead of eight. It is as accurate as H
+(re-measured median residual 1.04 against 1.03 m on 288 scenes; 1.18 against 1.19 m on 315
+cloudier scenes) and is the recommended model because it gets there with fewer fitted
+parameters and an elevation term that does not come from the tiles being corrected. The
+alignment now also covers 316 scenes that are 10–50 % clear. As delivered, the scenes have
+a per-scene RMSE of 9.5 m at the median and 20.4 m at the 90th percentile against the
+ground, twice Planet's specification of 10 m at the 90th percentile; after the correction
+1.7 and 3.7 m. Details in [Model R](#model-r-the-elevation-term-from-the-rpc).
 
 ## Question
 
@@ -303,6 +315,11 @@ shift. The scene-to-scene measurement in RPC-ortho geometry was dropped for the 
 given under 3. Matcher changes (coarse-to-fine, joint red + NIR, ambiguity weighting)
 were not needed: the matches were not the problem.
 
+**Answer (revised 2026-11-17).** Use model R (Ra where absolute position matters): as
+accurate as H with six fitted parameters instead of eight, see
+[Model R](#model-r-the-elevation-term-from-the-rpc). The paragraphs below are the earlier
+answers, kept for the record.
+
 **Answer (revised 2026-11-16).** Use affine + elevation (H; Ha where absolute position
 matters) for whole-island products. It is the physically motivated model, has 8
 parameters, reaches the matching noise floor everywhere including the plateau, and
@@ -323,6 +340,104 @@ whole-island products; for the 50ha plot alone, where the earlier finding of a
 rigid error still holds at 1 km scale, a translation remains adequate on most
 scenes, but the scenes with tens of meters of distortion (a 20 m stretch across
 5.9 km is 3.4 m across the 1 km plot) and the band-to-band offset apply there too.
+
+## Model R: the elevation term from the RPC
+
+**Model.** Displacement = planar part + k·(h − 100 m), with h the GLO-30 elevation as in H.
+
+| Scene has | Elevation term k | Planar part | Fitted parameters |
+|---|---|---|---|
+| An RPC, at least 60 distinct tiles | RPC tilt of the scene minus that of the master | affine | 6 |
+| An RPC, 10–59 tiles | same | shift (median) | 2 |
+| No RPC, at least 60 tiles | fitted (the H coefficients) | affine | 8 |
+| No RPC, 10–59 tiles spanning at least 10 m (SD) of elevation | fitted with the shift | shift | 4 |
+| No RPC, fewer or flatter tiles | none | shift | 2 |
+
+The tilt is the RPC line of sight at the frame center minus the line of sight given by the
+metadata incidence angle and satellite azimuth (`island_coreg.py tilts` →
+`results/island_coreg/tilts.csv`; 1,565 of the 2,177 SR scenes have a basic RPC on disk;
+see [planet_geolocation_literature.md](planet_geolocation_literature.md)). **Ra** adds the
+master's own model: its elevation term from its own RPC tilt (+2.36 m north, +2.13 m east
+per 100 m; the drone tie gave +2.43 and +2.00) and its planar terms as the median over 53
+scenes of (scene against drone) − (scene against master), each fitted with the elevation
+term fixed (`master_abs.json`, block `R`; they differ from the H anchor by under 0.02 m).
+For a scene with an RPC the elevation part of Ra therefore does not depend on the drone
+mosaic. Tiers were set on held-out tiles of scenes thinned to mimic cloud: below about 60
+tiles a shift beats an affine once the tilt is known (1.53 against 1.67 m at 30 tiles), and
+without an RPC a tilt fitted with the shift beats both a shift alone and the full fit (1.71
+against 2.16 and 2.04 m at 30 tiles) unless the tiles span under 10 m of elevation. A tilt
+fitted from tiles is off by a median 2.3 m per 100 m at 30 tiles and 1.2 m at 200, against
+0.5 m for the RPC, so the RPC files of the 174 scenes that lack one would be worth getting.
+
+**Main set (718 scenes at least 50 % clear).** 544 scenes use the RPC tilt and 174 (all
+SuperDove from late 2024 on, no basic scene on disk) the fitted term; all are in the
+affine tier.
+
+| | H | R |
+|---|---|---|
+| Fit residual, median over 718 scenes (m) | 1.11 | 1.12 |
+| Same, the 544 scenes with an RPC | 1.03 | 1.04 |
+| Re-measured after warping, 288 scenes: median / 90th percentile over scenes (m) | 1.03 / 2.05 | 1.04 / 1.98 |
+| Same, plateau tiles ≥ 120 m (m) | 1.02 | 1.01 |
+| Scenes whose 90th-percentile tile is above 1 px, re-measured | 28 % | 28 % |
+| Median disagreement with the Planet-to-drone shifts at the 50ha plot, 596 scenes (m) | 2.30 | 2.33 |
+
+Per scene the re-measured difference R − H has a median of 0.00 m and lies between −0.03
+and +0.02 m for 80 % of scenes. The two models are equivalent in accuracy; R is preferred
+for having two fewer fitted parameters and an independent elevation term. (The refit also
+changed one scene's pooled fit: a band with 10–29 tiles now has its band offset removed
+before pooling.)
+
+**Cloudier scenes (10–50 % clear).** `select` lists 676 such scenes in
+`results/island_coreg/sparse/`, with their own tables so that the statistics of the main
+set are unchanged. 317 pass the whole-scene match (20 % of those 10–20 % clear, 71 % of
+those 40–50 % clear) and 316 get a model: 239 RPC + affine, 2 RPC + shift, 72 fitted +
+affine, 3 fitted + shift. The scenes that pass have a median of 359 distinct tiles, so H
+fits all but one of them as well; what limits cloudy scenes is the whole-scene match, not
+the number of parameters.
+
+| Re-measured after warping, 315 scenes (m) | Median over scenes | 90th percentile |
+|---|---|---|
+| Translation | 1.91 | 3.75 |
+| H | 1.19 | 2.24 |
+| R | 1.18 | 2.24 |
+
+R − H is within 0.1 m on 90 % of scenes. On held-out tiles of the 239 scenes with an RPC
+both give 1.14 m. Of the three scenes in the fitted + shift tier one improved (1.69 to
+0.91 m; H 1.33), one did not (2.64 m; H 2.05) and one, `20250829_161452_85_24de` (24 tiles),
+re-measures at 10.8 m under every model: a false whole-scene match. Sparse scenes with a
+fit residual above 1.5 px (two scenes) are left out of the aligned set for that reason.
+
+**Accuracy in the form of Planet's specification** (less than 10 m RMSE at the 90th
+percentile). Per-scene RMSE of tile position, then the median and 90th percentile over
+scenes (`island_coreg_diagnose.py accuracy` → `diagnose/accuracy_rmse.csv`):
+
+| Per-scene RMSE (m), median / 90th percentile | Main set, 718 | Cloudier set, 316 | Against the drone directly, 53 |
+|---|---|---|---|
+| As delivered, against the ground | 9.5 / 20.4 | 10.1 / 25.6 | 7.2 / 14.3 |
+| As delivered, against the master | 7.8 / 17.3 | 8.5 / 23.4 | |
+| After a translation | 2.8 / 5.6 | 2.6 / 5.4 | |
+| After an affine | 2.5 / 4.9 | 2.3 / 4.2 | |
+| After H (Ha in the last column) | 1.7 / 3.6 | 1.9 / 3.3 | 1.6 / 3.6 |
+| After R (Ra in the last column) | 1.7 / 3.7 | 1.9 / 3.4 | 1.6 / 3.6 |
+
+As delivered, 46 % of main-set scenes have an RMSE above 10 m against the ground, and the
+90th percentile is about twice the specification. "Against the ground" is the frame of the
+2024-10-14 drone mosaic, reached through the master's anchor except in the last column, so
+it includes any offset between Planet's reference imagery and the mosaic; the row against
+the master does not depend on the mosaic and is still 17 m. Planet states its figure for
+cloud-free scenes; the last column (scenes at least 90 % clear near the drone date) is the
+closest to that condition. Scenes that failed the whole-scene match are in no row. The
+corrected rows are fit residuals on the tiles used for fitting and include about 1 m of
+matching noise.
+
+**Products.** `planet_bci_aligned/Ra/` holds 933 scenes: the 289 of the image sequence (at
+least 80 % clear; the master is now included, corrected by the anchor alone;
+`index.csv`), every other fitted main-set scene (`index_all.csv`, 719 with the master) and
+214 cloudier scenes at least 30 % clear (`index_sparse.csv`). `figs/20261118_updates/` has
+the sequence (289 frames), the comparison video (as delivered, translation, Ra) and an
+extended sequence `island_coreg_sequence_clear30.mp4` (933 frames at least 30 % clear).
+The four ≥ 80 % clear scenes that fail the whole-scene match are still missing.
 
 ## Method
 
@@ -503,6 +618,19 @@ Added 2026-11-16 (`figs/20261116_updates/`):
 13. `island_coreg_comparison.mp4` — the 900 m window over the 50ha plot under
     translation / local warp / affine + elevation, side by side.
 
+Model R (`figs/20261118_updates/`; from `island_coreg.py video`,
+`island_coreg_diagnose.py figures --outdir` and `make_island_alignment_figures.py`):
+
+14. `island_coreg_sequence.mp4` (289 scenes, `Ra`), `island_coreg_comparison.mp4` (as
+    delivered, translation, `Ra`), `island_coreg_sequence_clear30.mp4` (933 scenes at
+    least 30 % clear, including the cloudier set); captions written by `video`.
+15. `island_diag_band`, `island_diag_elevation` — as 10 and 11, with R in the residual panel.
+16. `island_align_problem`, `_diagnosis`, `_steps`, `_method`, `_result`, `_compare` — the
+    slide figures of the correction, now with model R (the 2026-11-17 versions with H are
+    in `figs/20261117_updates/`).
+17. `island_rpc_geometry`, `_tilt`, `_map`, `island_rpc_model.html` — the RPC line of
+    sight; see [planet_geolocation_literature.md](planet_geolocation_literature.md).
+
 ## Data locations
 
 | What | Where |
@@ -517,6 +645,11 @@ Added 2026-11-16 (`figs/20261116_updates/`):
 | Figures, captions, videos | `figs/20261110_updates/island_coreg_*`, `figs/20261116_updates/` |
 | Master's model relative to the drone mosaic | `results/island_coreg/master_abs.json` |
 | Aligned scenes, affine + elevation, drone-anchored | `planet_bci_aligned/Ha/<YYYY>/`, `planet_bci_aligned/Ha/index.csv` |
+| Aligned scenes, model R, drone-anchored (recommended) | `planet_bci_aligned/Ra/<YYYY>/`; `index.csv` (sequence scenes), `index_all.csv` (all main-set scenes), `index_sparse.csv` (cloudier scenes) |
+| RPC tilt of every scene with a basic RPC | `results/island_coreg/tilts.csv` |
+| Cloudier scenes (10–50 % clear): scene list, tiles, models, re-measurement | `results/island_coreg/sparse/` (same layout as the main directory) |
+| Per-scene RMSE as delivered and after each correction | `diagnose/accuracy_rmse.csv` |
+| Tables before model R | `diagnose/scene_models_before_R.csv`, `remeasure_before_R.csv`, `master_abs_before_R.json`, `drone_fits_before_R.csv` |
 | Diagnostics: per-tile spread and band tiles | `results/island_coreg/diagnose/spread_tiles.csv` |
 | Diagnostics: sample, alternate masters | `diagnose/sample.csv`, `diagnose/masters.json` |
 | Diagnostics: tile vectors and NCC-surface statistics for every scene–master pair | `diagnose/multi_planet.csv.gz` (per pair in `diagnose/pairs_planet/`) |
@@ -558,6 +691,26 @@ python scripts/island_coreg_diagnose.py figures
 
 # 2026-11-17: Planet metadata and RPC line of sight against the fitted terms
 python scripts/island_coreg_diagnose.py metadata            # writes diagnose/metadata_checks.csv
+
+# 2026-11-17: model R (elevation term from the RPC tilt) and the cloudier scenes
+S=/Volumes/Earth03/flower/results/island_coreg/sparse; O=/Volumes/Earth03/flower/figs/20261118_updates
+python scripts/island_coreg.py tilts                        # results/island_coreg/tilts.csv
+python scripts/island_coreg.py select                       # also writes sparse/scenes.csv
+python scripts/island_coreg.py fit
+python scripts/island_coreg_diagnose.py drone --jobs 3      # adds the R anchor to master_abs.json
+python scripts/island_coreg_diagnose.py crosscheck
+python scripts/island_coreg.py remeasure --jobs 6           # T, A, L, H, HL, R; ~75 min
+python scripts/island_coreg.py measure --results $S --jobs 5        # 676 scenes, ~1 h
+python scripts/island_coreg.py fit --results $S
+python scripts/island_coreg.py remeasure --results $S --min-clear 0.1 --models T,H,R --jobs 4
+python scripts/island_coreg_diagnose.py accuracy            # diagnose/accuracy_rmse.csv
+python scripts/island_coreg.py warp --model Ra --jobs 4
+python scripts/island_coreg.py warp --model Ra --jobs 4 --min-clear 0.3 --index index_all.csv
+python scripts/island_coreg.py warp --model Ra --jobs 4 --results $S --min-clear 0.3 --index index_sparse.csv --max-resid 1.5
+python scripts/island_coreg.py video --model Ra --outdir $O
+python scripts/island_coreg.py video --model Ra --which sequence --min-clear 0.3 --extra-results $S --outdir $O
+python scripts/island_coreg_diagnose.py figures --outdir $O
+python scripts/make_island_alignment_figures.py all         # figs/20261118_updates/
 ```
 
 `island_coreg_diagnose.py` also has `island1b` and `multi --source rpc` (the standard

@@ -25,6 +25,8 @@ Subcommands (in order):
   metadata   Planet's quality flags and ortho XML fields, the reported view
              direction and the line of sight of each basic scene's RPC, against
              the fitted offset and elevation term of every scene.
+  accuracy   per-scene RMSE and its 90th percentile, as delivered and after each
+             correction, in the form of Planet's accuracy specification.
   figures    figures and captions.
 
 Displacement convention as in island_coreg.py: d = (dy, dx) px means the content
@@ -806,6 +808,62 @@ def metadata():
         click.echo(f'  Spearman rho of |RPC - metadata| with {col}: '
                    f'{spearmanr(pd.to_numeric(q[col], errors="coerce"), g, nan_policy="omit").statistic:+.2f}')
     click.echo(f'wrote {DIAG / "metadata_checks.csv"}')
+
+
+@cli.command()
+def accuracy():
+    """Per-scene RMSE of tile position error, the form of Planet's accuracy specification
+    (less than 10 m RMSE at the 90th percentile): as delivered against the ground (the
+    drone frame, through the master's anchor) and against the master, and after each
+    correction (fit residual), for the main and the sparse scene sets; and for the scenes
+    matched directly to the drone mosaic. -> diagnose/accuracy_rmse.csv"""
+    A = ic.master_anchor(kind='R')
+    rows_, cols_ = ic.tile_lattice()
+    rc, cc = rows_ + ic.TILE / 2, cols_ + ic.TILE / 2
+    elev, shape = ic.tile_elevation(), ic.grid_shape()
+    recs = []
+    for name, res in (('main', RESULTS), ('sparse', RESULTS / ic.SPARSE)):
+        if not (res / 'scene_models.csv').exists():
+            continue
+        b = pd.read_csv(res / 'scene_models.csv')
+        b = b[(b.band == 'both') & b.med_R.notna()].set_index('scene_id')
+        for s, r in b.iterrows():
+            t = add_lattice(pd.read_csv(res / 'tiles' / f'{s}.csv').query("band == 'red'"))
+            if len(t) >= 10:
+                t = t[~ic.neighbor_outliers(t.ri.values, t.ci.values, t.dy_px.values, t.dx_px.values, shape)]
+            rec = dict(scene_id=s, set=name, elev_source=r.elev_source, planar=r.planar,
+                       **{f'rmse_{k}_m': RES * r.get(f'rms_{k}', np.nan) for k in ('T', 'A', 'H', 'R')})
+            if len(t) >= 10:
+                X = np.stack([np.ones(len(t)), rc[t.ri], cc[t.ci], elev[t.ri, t.ci] - ic.HREF], 1)
+                gy, gx = t.dy_px.values + X @ A[0], t.dx_px.values + X @ A[1]
+                rec.update(rmse_delivered_ground_m=RES * np.sqrt(np.mean(gy ** 2 + gx ** 2)),
+                           rmse_delivered_master_m=RES * np.sqrt(np.mean(t.dy_px ** 2 + t.dx_px ** 2)))
+            recs.append(rec)
+    d = pd.DataFrame(recs)
+    # scenes matched directly to the drone mosaic
+    t = add_lattice(pd.read_csv(DIAG / 'drone_tiles.csv.gz'))
+    t = t[(t.band == 'red') & t.global_ok]
+    sm = pd.read_csv(RESULTS / 'scene_models.csv')
+    sm = sm[sm.band == 'both'].set_index('scene_id')
+    dr = []
+    for s, g in t.groupby('scene_id'):
+        if s not in sm.index:
+            continue
+        X = np.stack([np.ones(len(g)), g.row, g.col, elev[g.ri, g.ci] - ic.HREF], 1)
+        rec = dict(scene_id=s, set='drone', rmse_delivered_ground_m=RES * np.sqrt(np.mean(g.dy_px ** 2 + g.dx_px ** 2)))
+        for k, pre in (('H', 'h'), ('R', 'r')):
+            c = ic.master_anchor(kind=k) + np.array([[sm.loc[s, f'{pre}_{p}_{a}'] for p in ('c0', 'cr', 'cc', 'ch')]
+                                                     for a in ('y', 'x')])
+            rec[f'rmse_{k}_m'] = RES * np.sqrt(np.mean((g.dy_px - X @ c[0]) ** 2 + (g.dx_px - X @ c[1]) ** 2))
+        dr.append(rec)
+    d = pd.concat([d, pd.DataFrame(dr)], ignore_index=True)
+    d.to_csv(DIAG / 'accuracy_rmse.csv', index=False)
+    cols = ['rmse_delivered_ground_m', 'rmse_delivered_master_m', 'rmse_T_m', 'rmse_A_m', 'rmse_H_m', 'rmse_R_m']
+    for name, g in d.groupby('set', sort=False):
+        click.echo(f'{name}: {len(g)} scenes; per-scene RMSE (m), median / 90th percentile over scenes; '
+                   f'{(g.rmse_delivered_ground_m > 10).mean():.0%} above 10 m as delivered')
+        click.echo(pd.DataFrame({'median': g[cols].median(), 'p90': g[cols].quantile(0.9)}).round(2).T.to_string())
+    click.echo(f'wrote {DIAG / "accuracy_rmse.csv"}')
 
 
 def save_fig(fig, name, caption):

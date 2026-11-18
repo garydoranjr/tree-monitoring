@@ -109,7 +109,9 @@ SIGMA_TILES = 1.5          # local field smoothing, in tiles (x STRIDE px)
 HOLDOUT_SPACING = 4        # test tiles every 4th lattice point; exclude their 3x3 ring
 HREF = 100.0               # m; reference elevation of the elevation term (mid-range of the island)
 SPARSE = 'sparse'          # subdirectory of the results for scenes below the main clear-fraction cut
+SPARSE_MAX_RESID = 1.5     # px; sparse scenes with a larger model R fit residual are treated as false matches
 R_MIN_TILES = 10           # distinct lattice tiles below which a scene gets no model at all
+R_MIN_HSD = 10.0           # m; elevation spread (SD) of the tiles needed to fit a tilt without an RPC
 R_MIN_AFFINE = 60          # distinct lattice tiles from which model R fits an affine instead of a shift
 MODELS = ('T', 'A', 'L', 'H', 'HL', 'Ha', 'R', 'Ra')
 MODEL_NAMES = {'raw': 'uncorrected', 'T': 'translation', 'Tc': 'translation + archive-mean field',
@@ -493,13 +495,18 @@ def fit_r(XH, dy, dx, tilt, n_distinct, coef_h=None):
     """Model R: the elevation term is not fitted but taken from the tilt of the scene's
     RPC (`tilt`, px per m, relative to the master), and what is left is fitted with an
     affine when there are at least R_MIN_AFFINE distinct tiles and with a shift (median)
-    otherwise. Without an RPC (`tilt` None) the fitted H coefficients are used when the
-    affine tier applies, and a shift alone otherwise. Returns the (2, 4) coefficients in
-    the layout of H, the source of the elevation term and the planar tier."""
+    otherwise. Without an RPC (`tilt` None) the tilt is fitted from the tiles: together
+    with the affine (the H coefficients) in the affine tier, together with the shift
+    (4 parameters) below it when the tiles span at least R_MIN_HSD of elevation, and not
+    at all (shift alone) otherwise. Returns the (2, 4) coefficients in the layout of H,
+    the source of the elevation term (rpc, fitted, none) and the planar tier."""
     affine = n_distinct >= R_MIN_AFFINE
     if tilt is None:
         if affine and coef_h is not None:
             return coef_h.copy(), 'fitted', 'affine'
+        if not affine and XH[:, 3].std() >= R_MIN_HSD:
+            c2, _ = fit_linear(XH[:, [0, 3]], dy, dx)
+            return np.array([[c2[0, 0], 0, 0, c2[0, 1]], [c2[1, 0], 0, 0, c2[1, 1]]]), 'fitted', 'shift'
         k, src = np.zeros(2), 'none'
     else:
         k, src = np.asarray(tilt, float), 'rpc'
@@ -1072,15 +1079,25 @@ def selftest(results, master, jobs):
     o2, _, m2 = fit_scene(table(blk, affine=False), None, tilt=k_true)
     o3, _, m3 = fit_scene(table(dense), None, tilt=None)
     o4, _, _ = fit_scene(table(blk[:8], affine=False), None, tilt=k_true)
+    # no RPC and few tiles: the tilt is fitted with the shift where the tiles span enough elevation
+    wide = np.flatnonzero((ri >= 18) & (ri < 34) & (ci >= 20) & (ci < 40))[::8][:40]
+    o5, _, m5 = fit_scene(table(wide, affine=False), None, tilt=None)
+    flat = np.flatnonzero(hh[ri, ci] < -60)[:25]
+    o6, _, _ = fit_scene(table(flat, affine=False), None, tilt=None)
     r_ok = (o1['planar'] == 'affine' and o1['elev_source'] == 'rpc' and o1['med_R'] < 0.1
             and abs(m1['coef_r'][0, 1] - 2e-4) < 2e-5 and abs(m1['coef_r'][1, 2] + 3e-4) < 2e-5
             and o2['planar'] == 'shift' and o2['med_R'] < 0.1 and 'coef' not in m2
             and o3['elev_source'] == 'fitted' and np.allclose(m3['coef_r'], m3['coef_h'])
-            and np.abs(m3['coef_h'][:, 3] - k_true).max() < 1e-3 and 'med_R' not in o4)
+            and np.abs(m3['coef_h'][:, 3] - k_true).max() < 1e-3 and 'med_R' not in o4
+            and (o5['elev_source'], o5['planar']) == ('fitted', 'shift')
+            and np.abs(m5['coef_r'][:, 3] - k_true).max() < 2e-3 and o6['elev_source'] == 'none')
     msgs.append(f"model R: dense {o1['planar']}/{o1['elev_source']} residual {o1['med_R']:.3f} px; 20 tiles "
                 f"{o2['planar']} residual {o2['med_R']:.3f} px; no RPC {o3['elev_source']}, fitted term "
                 f"{m3['coef_h'][0, 3]:.4f}, {m3['coef_h'][1, 3]:.4f} (truth {k_true[0]}, {k_true[1]}); "
-                f"8 tiles -> {'no model' if 'med_R' not in o4 else 'model'}")
+                f"8 tiles -> {'no model' if 'med_R' not in o4 else 'model'}; no RPC, {o5['n_distinct']} tiles spanning "
+                f"{hh[ri[wide], ci[wide]].std():.0f} m: {o5['planar']}/{o5['elev_source']}, term {m5['coef_r'][0, 3]:.4f}, "
+                f"{m5['coef_r'][1, 3]:.4f}; {o6['n_distinct']} tiles spanning {hh[ri[flat], ci[flat]].std():.0f} m: "
+                f"{o6['elev_source']}")
     click.echo('\n'.join(msgs))
     ok = (np.median(err) < 0.15 and np.hypot(t2.dy_px, t2.dx_px).median() < 0.1
           and abs(out['jac_yy_m'] - 1e-3 * h * RES) < 0.1 * abs(1e-3 * h * RES) and r_ok)
@@ -1233,7 +1250,9 @@ def warp_scene(args):
 @click.option('--min-clear', default=None, type=float,
               help='Every fitted scene at least this clear (and with MODIS offsets) instead of the video scenes.')
 @click.option('--index', 'index_name', default='index.csv', show_default=True)
-def warp(results, kind, jobs, limit, min_clear, index_name):
+@click.option('--max-resid', default=None, type=float,
+              help='Leave out scenes whose model R fit residual exceeds this (px): false whole-scene matches.')
+def warp(results, kind, jobs, limit, min_clear, index_name, max_resid):
     """Aligned SR scenes (uint16 reflectance x 1e4, uncalibrated, nodata 0) and OCM masks
     for the video scenes, on the island grid, under planet_bci_aligned/<model>/. With a
     drone-anchored model the master is included (corrected by the anchor alone)."""
@@ -1241,8 +1260,10 @@ def warp(results, kind, jobs, limit, min_clear, index_name):
     sm = pd.read_csv(results / 'scene_models.csv')
     sm = sm[sm.band == 'both'].set_index('scene_id')
     pick = df.use_video if min_clear is None else (df.fraction_clear >= min_clear) & df.has_offsets
+    if max_resid is not None:
+        pick &= ~df.scene_id.isin(sm.index[sm.med_R > max_resid])
     ids = [s for s in df[pick].scene_id if model_path(results, s).exists()
-           or (s == MASTER and kind in ('Ha', 'Ra'))][:limit]
+           or (s == MASTER and kind in ('Ha', 'Ra') and results == RESULTS)][:limit]
     outdir = ALIGNED / kind
     outdir.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
@@ -1265,7 +1286,7 @@ def warp(results, kind, jobs, limit, min_clear, index_name):
             idx[c] = idx.scene_id.map(sm[c])
     idx['path'] = idx.scene_id.map(lambda s: str(outdir / s[:4] / f'{s}_4band.tif'))
     idx.to_csv(outdir / index_name, index=False)
-    click.echo(f'{len(ids)} scenes -> {outdir}; index.csv written')
+    click.echo(f'{len(ids)} scenes -> {outdir}; {index_name} written')
 
 
 # --------------------------------------------------------------------------- rendering
@@ -1355,6 +1376,8 @@ def video_scenes(results, kind, min_clear=None, extra=None):
         df = df[pick & has_model].copy()
         sm = pd.read_csv(res / 'scene_models.csv')
         sm = sm[sm.band == 'both'].set_index('scene_id')
+        if res != results and 'med_R' in sm:  # the extra (sparse) set: drop false whole-scene matches
+            df = df[~df.scene_id.isin(sm.index[sm.med_R > SPARSE_MAX_RESID])]
         key = {'T': 'med_T', 'A': 'med_A', 'L': 'med_Lh', 'H': 'med_H', 'HL': 'med_HLh', 'Ha': 'med_H',
                'R': 'med_R', 'Ra': 'med_R'}[kind]
         df['resid_px'] = df.scene_id.map(sm[key]) if key in sm else np.nan

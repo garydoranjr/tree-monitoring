@@ -13,7 +13,8 @@ checks of those explanations against Planet's own metadata and RPCs for our scen
 
 - Planet promises less than 10 m RMSE at the 90th percentile, against its own reference
   imagery. It makes no promise about scene-to-scene alignment, and none that the error is a
-  rigid shift.
+  rigid shift. Over BCI the delivered scenes are at about twice that figure (20 m at the
+  90th percentile against the drone mosaic, 17 m against one master scene).
 - Planet's orthorectification is two steps: a per-scene geometric model (RPC) refined
   against reference imagery, then projection of that model onto a 30–90 m elevation model.
   For our scenes the second step is not where the error is: every scene records the same
@@ -76,10 +77,17 @@ scenes separately. We have not evaluated basemaps or composites.
 | Mueting and Bookhagen (2024) | SuperDove, two Andean landslides | Uncorrected ortho pairs show "higher and more variable disparities within the bounds of the < 10 m relative geolocation accuracy"; after correction, zero median and about 0.5 px interquartile range over stable terrain. |
 | This project | 718 scenes of all three generations over BCI against one master | Median offset 7.1 m, 90th percentile 17 m; 31 % of scenes beyond 10 m. Against the 2024-10-14 drone mosaic the delivered scenes are 6–13 m off. NIR against red 0.5–0.7 px. |
 
-Our offsets are within the specification as worded (a 90th-percentile RMSE of 10 m is not a
-bound on every scene) and in line with NASA's figures for sites that are easier than a
-forested island in a lake. The specification does not address what matters for crown-scale
-time series: the error differs from frame to frame and is not a shift.
+As delivered, our scenes do not meet the specification over BCI. In its own form
+(per-scene RMSE, then the 90th percentile over scenes) the 718 scenes have 9.5 m at the
+median and 20.4 m at the 90th percentile against the ground, 7.8 and 17.3 m against the
+master scene, and 7.2 and 14.3 m for the 53 scenes at least 90 % clear that were matched
+directly to the drone mosaic; 46 % of scenes are above 10 m. The comparison is not exact:
+Planet's figure is against its own reference imagery and for cloud-free scenes, ours is
+against the drone mosaic (so it includes any offset between the two references) and
+includes partly cloudy scenes. NASA's site means of up to tens of meters show the same
+kind of reference offset. Beyond the size of the error, the specification does not address
+what matters for crown-scale time series: the error differs from frame to frame and is
+not a shift. Details in [island_coregistration.md](island_coregistration.md#model-r-the-elevation-term-from-the-rpc).
 
 ## Published error sources and how they map onto ours
 
@@ -205,9 +213,13 @@ and tie-point distribution.
 4. **Filter `ground_control` false scenes.** It costs six scenes and removes the worst
    offsets.
 
-Not done: applying the metadata-derived term in `island_coreg.py` (a model with H's
-elevation coefficients fixed); testing it at the plot against the Planet-to-drone shifts;
-RPC refinement; Planet's Coregister tool and basemaps on our scenes.
+Done since (2026-11-17): the metadata-derived term is model R in `island_coreg.py`. It
+matches the fitted model H (re-measured 1.04 against 1.03 m) with two fewer fitted
+parameters per scene and is the recommended correction; see
+[island_coregistration.md](island_coregistration.md#model-r-the-elevation-term-from-the-rpc).
+Not done: testing it at the plot against the Planet-to-drone registration beyond the
+cross-check there; RPC refinement; Planet's Coregister tool and basemaps on our scenes;
+getting the RPC files of the 174 scenes that lack one.
 
 ## Figures (`figs/20261117_updates/`)
 
