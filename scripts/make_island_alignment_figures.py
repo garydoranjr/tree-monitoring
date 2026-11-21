@@ -165,7 +165,7 @@ def problem(outdir, scene):
     island_axes(ax2, hs, vmin=-0.3, vmax=1.3)
     im = ax2.imshow(np.where(land, elev, np.nan), extent=ic.extent(), cmap='terrain', vmin=0, vmax=190, alpha=0.75)
     ic.add_scalebar(ax2, 1000, '1 km', loc=(0.74, 0.05), fontsize=FS_S)
-    cax = fig.add_axes([0.357, 0.09, 0.012, 0.22])
+    cax = fig.add_axes([0.637, 0.615, 0.012, 0.22])
     cb = fig.colorbar(im, cax=cax)
     cax.set_title('m', fontsize=FS_S, pad=3)
     cb.ax.tick_params(labelsize=FS_S - 1)
