@@ -341,9 +341,11 @@ def cross_species(sp_pairs, species):
     return pd.DataFrame(m, index=species, columns=species)
 
 
-def correlate_crowns(pairs, min_pairs=15, min_events=3):
-    """Per crown: Spearman of the Planet score with the drone event
-    probability over its paired flights."""
+def correlate_crowns(pairs, min_pairs=15, min_events=3, kind='spearman'):
+    """Per crown: correlation (Spearman, or Pearson with kind='pearson', in
+    which case the columns are r, r_flower, r_decid) of the Planet score
+    with the drone event probability over its paired flights."""
+    pre = 'rho' if kind == 'spearman' else 'r'
     rows = []
     for tag, t in pairs.groupby('tag'):
         if len(t) < min_pairs or t['event'].sum() < min_events:
@@ -353,9 +355,9 @@ def correlate_crowns(pairs, min_pairs=15, min_events=3):
             'area_m2': t['area_m2'].iloc[0], 'n': len(t),
             'n_events': int(t['event'].sum()),
             'n_flower': int(t['flower'].sum()), 'n_decid': int(t['decid'].sum()),
-            'rho': _corr(t['p_event'].values, t['score'].values),
-            'rho_flower': _corr(t['p_flower'].values, t['score'].values),
-            'rho_decid': _corr(t['p_decid'].values, t['score'].values)})
+            pre: _corr(t['p_event'].values, t['score'].values, kind),
+            f'{pre}_flower': _corr(t['p_flower'].values, t['score'].values, kind),
+            f'{pre}_decid': _corr(t['p_decid'].values, t['score'].values, kind)})
     return pd.DataFrame(rows)
 
 

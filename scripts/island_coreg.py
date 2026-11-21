@@ -108,12 +108,18 @@ OUTLIER_PX = 2.0           # vs the 3x3 tile-neighbor median
 SIGMA_TILES = 1.5          # local field smoothing, in tiles (x STRIDE px)
 HOLDOUT_SPACING = 4        # test tiles every 4th lattice point; exclude their 3x3 ring
 HREF = 100.0               # m; reference elevation of the elevation term (mid-range of the island)
-MODELS = ('T', 'A', 'L', 'H', 'HL', 'Ha')
+SPARSE = 'sparse'          # subdirectory of the results for scenes below the main clear-fraction cut
+SPARSE_MAX_RESID = 1.5     # px; sparse scenes with a larger model R fit residual are treated as false matches
+R_MIN_TILES = 10           # distinct lattice tiles below which a scene gets no model at all
+R_MIN_HSD = 10.0           # m; elevation spread (SD) of the tiles needed to fit a tilt without an RPC
+R_MIN_AFFINE = 60          # distinct lattice tiles from which model R fits an affine instead of a shift
+MODELS = ('T', 'A', 'L', 'H', 'HL', 'Ha', 'R', 'Ra')
 MODEL_NAMES = {'raw': 'uncorrected', 'T': 'translation', 'Tc': 'translation + archive-mean field',
                'A': 'affine', 'L': 'local warp', 'Lh': 'local warp (hold-out)',
                'H': 'affine + elevation', 'HL': 'affine + elevation + local',
                'HLh': 'affine + elevation + local (hold-out)',
-               'Ha': 'affine + elevation, drone-anchored'}
+               'Ha': 'affine + elevation, drone-anchored',
+               'R': 'affine + RPC tilt', 'Ra': 'affine + RPC tilt, drone-anchored'}
 INSTRUMENTS = {'PS2': ('Dove Classic', '#1f77b4'), 'PS2.SD': ('Dove-R', '#ff7f0e'),
                'PSB.SD': ('SuperDove', '#2ca02c')}
 
@@ -485,9 +491,46 @@ def holdout_predict(ri, ci, rdy, rdx, shape, sigma, spacing=HOLDOUT_SPACING):
     return pred_y[ri, ci], pred_x[ri, ci]
 
 
-def fit_scene(df, rec, sigma=SIGMA_TILES, sigmas_eval=(1.0, 1.5, 2.0, 3.0)):
-    """Fit T, A, L to the tiles of one scene and band. Returns (summary dict,
-    per-tile DataFrame with residuals, model dict for warping)."""
+def fit_r(XH, dy, dx, tilt, n_distinct, coef_h=None):
+    """Model R: the elevation term is not fitted but taken from the tilt of the scene's
+    RPC (`tilt`, px per m, relative to the master), and what is left is fitted with an
+    affine when there are at least R_MIN_AFFINE distinct tiles and with a shift (median)
+    otherwise. Without an RPC (`tilt` None) the tilt is fitted from the tiles: together
+    with the affine (the H coefficients) in the affine tier, together with the shift
+    (4 parameters) below it when the tiles span at least R_MIN_HSD of elevation, and not
+    at all (shift alone) otherwise. Returns the (2, 4) coefficients in the layout of H,
+    the source of the elevation term (rpc, fitted, none) and the planar tier."""
+    affine = n_distinct >= R_MIN_AFFINE
+    if tilt is None:
+        if affine and coef_h is not None:
+            return coef_h.copy(), 'fitted', 'affine'
+        if not affine and XH[:, 3].std() >= R_MIN_HSD:
+            c2, _ = fit_linear(XH[:, [0, 3]], dy, dx)
+            return np.array([[c2[0, 0], 0, 0, c2[0, 1]], [c2[1, 0], 0, 0, c2[1, 1]]]), 'fitted', 'shift'
+        k, src = np.zeros(2), 'none'
+    else:
+        k, src = np.asarray(tilt, float), 'rpc'
+    ey, ex = dy - k[0] * XH[:, 3], dx - k[1] * XH[:, 3]
+    if affine:
+        c3, _ = fit_linear(XH[:, :3], ey, ex)
+    else:
+        c3 = np.array([[np.median(ey), 0, 0], [np.median(ex), 0, 0]])
+    return np.column_stack([c3, k]), src, 'affine' if affine else 'shift'
+
+
+def r_summary(coef_r, src, planar, rR):
+    return dict(elev_source=src, planar=planar, med_R=float(np.nanmedian(rR)), p90_R=float(np.nanpercentile(rR, 90)),
+                rms_R=float(np.sqrt(np.nanmean(rR ** 2))),
+                kr_north_m100=float(-coef_r[0, 3] * RES * 100), kr_east_m100=float(coef_r[1, 3] * RES * 100),
+                **{f'r_{k}': float(v) for k, v in zip(
+                    ['c0_y', 'cr_y', 'cc_y', 'ch_y', 'c0_x', 'cr_x', 'cc_x', 'ch_x'], coef_r.ravel())})
+
+
+def fit_scene(df, rec, sigma=SIGMA_TILES, sigmas_eval=(1.0, 1.5, 2.0, 3.0), tilt='skip'):
+    """Fit T, A, L, H (and R unless `tilt` is 'skip') to the tiles of one scene and
+    band. `tilt` is tilt_px() of the scene: None without an RPC. Returns (summary dict,
+    per-tile DataFrame with residuals, model dict for warping). A scene with fewer than
+    30 tiles gets T and R only, and none below R_MIN_TILES distinct tiles."""
     shape = grid_shape()
     rows, cols = tile_lattice()
     rows_c, cols_c = rows + TILE / 2, cols + TILE / 2
@@ -499,12 +542,26 @@ def fit_scene(df, rec, sigma=SIGMA_TILES, sigmas_eval=(1.0, 1.5, 2.0, 3.0)):
     ri, ci, dy, dx = ri[~bad], ci[~bad], dy[~bad], dx[~bad]
     df = df[~bad].copy()
     out['n_tiles'] = len(df)
-    if len(df) < 30:
+    n_distinct = len(set(zip(ri.tolist(), ci.tolist())))
+    out['n_distinct'] = n_distinct
+    with_r = not isinstance(tilt, str)
+    if len(df) < 30 and not (with_r and n_distinct >= R_MIN_TILES):
         return out, None, None
     raw = np.hypot(dy, dx)
     # T
     t = np.array([np.median(dy), np.median(dx)])
     rT = np.hypot(dy - t[0], dx - t[1])
+    hh = tile_elevation()[ri, ci] - HREF
+    XH = np.stack([np.ones(len(dy)), rows_c[ri], cols_c[ci], hh], axis=1)
+    if len(df) < 30:
+        # too few tiles for the fitted models: translation and R only
+        coef_r, src, planar = fit_r(XH, dy, dx, tilt, n_distinct)
+        rdy_r, rdx_r = dy - XH @ coef_r[0], dx - XH @ coef_r[1]
+        out.update(t_dy_px=float(t[0]), t_dx_px=float(t[1]), med_raw=float(np.median(raw)),
+                   med_T=float(np.median(rT)), p90_T=float(np.percentile(rT, 90)),
+                   **r_summary(coef_r, src, planar, np.hypot(rdy_r, rdx_r)))
+        tiles = df.assign(ri=ri, ci=ci, rT_dy=dy - t[0], rT_dx=dx - t[1], rR_dy=rdy_r, rR_dx=rdx_r)
+        return out, tiles, dict(t=t, coef_r=coef_r)
     # A
     coef, keep = fit_affine(ri, ci, dy, dx, rows_c, cols_c)
     ay, ax = affine_predict(coef, rows_c[ri], cols_c[ci])
@@ -527,8 +584,6 @@ def fit_scene(df, rec, sigma=SIGMA_TILES, sigmas_eval=(1.0, 1.5, 2.0, 3.0)):
     # H: affine plus a displacement proportional to elevation (a per-scene pointing
     # error leaves a parallax of height x angle error after orthorectification), and
     # HL: H plus the smoothed H residual
-    hh = tile_elevation()[ri, ci] - HREF
-    XH = np.stack([np.ones(len(dy)), rows_c[ri], cols_c[ci], hh], axis=1)
     coef_h, keep_h = fit_linear(XH, dy, dx)
     hdy, hdx = dy - XH @ coef_h[0], dx - XH @ coef_h[1]
     rH = np.hypot(hdy, hdx)
@@ -557,6 +612,12 @@ def fit_scene(df, rec, sigma=SIGMA_TILES, sigmas_eval=(1.0, 1.5, 2.0, 3.0)):
     model = dict(t=t, coef=coef, field_dy=ay_grid(coef, rows_c, cols_c)[0] + fy,
                  field_dx=ay_grid(coef, rows_c, cols_c)[1] + fx, support=present,
                  coef_h=coef_h, hres_dy=fhy, hres_dx=fhx)
+    if with_r:
+        coef_r, src, planar = fit_r(XH, dy, dx, tilt, n_distinct, coef_h)
+        rdy_r, rdx_r = dy - XH @ coef_r[0], dx - XH @ coef_r[1]
+        out.update(r_summary(coef_r, src, planar, np.hypot(rdy_r, rdx_r)))
+        tiles = tiles.assign(rR_dy=rdy_r, rR_dx=rdx_r)
+        model['coef_r'] = coef_r
     return out, tiles, model
 
 
@@ -582,11 +643,11 @@ def displacement_maps(model, kind, shape=ISLAND_SHAPE, window=None):
         dy = ndimage.map_coordinates(model['field_dy'], [fy, fx], order=1, mode='nearest')
         dx = ndimage.map_coordinates(model['field_dx'], [fy, fx], order=1, mode='nearest')
         return dy, dx
-    if kind in ('H', 'HL', 'Ha'):
-        c = model['coef_h']
-        if kind == 'Ha':
+    if kind in ('H', 'HL', 'Ha', 'R', 'Ra'):
+        c = model['coef_r' if kind in ('R', 'Ra') else 'coef_h']
+        if kind in ('Ha', 'Ra'):
             # to first order the scene-to-master and master-to-drone fields add
-            c = c + master_anchor()
+            c = c + master_anchor(kind=kind[0])
         h = dem_arrays()[0][r0:r1, c0:c1] - HREF
         dy = c[0, 0] + c[0, 1] * Y + c[0, 2] * X + c[0, 3] * h
         dx = c[1, 0] + c[1, 1] * Y + c[1, 2] * X + c[1, 3] * h
@@ -611,14 +672,16 @@ def warp_arrays(arrays, dy, dx, orders, cvals, window=None):
 _ANCHOR = {}
 
 
-def master_anchor(results=RESULTS):
+def master_anchor(results=RESULTS, kind='H'):
     """(2, 4) affine + elevation coefficients of the master relative to the drone
     orthomosaic (island_coreg_diagnose.py drone): the content at ground (drone)
-    pixel p appears at p + d in the master."""
-    if 'c' not in _ANCHOR:
-        m = json.loads((results / 'master_abs.json').read_text())['median']
-        _ANCHOR['c'] = np.array([[m[f'h_{k}_{a}'] for k in ('c0', 'cr', 'cc', 'ch')] for a in ('y', 'x')])
-    return _ANCHOR['c']
+    pixel p appears at p + d in the master. kind 'H': all eight from the drone tie.
+    kind 'R': the planar terms from the drone tie with every scene's elevation term
+    fixed at its RPC tilt, and the elevation term from the master's own RPC tilt."""
+    if kind not in _ANCHOR:
+        m = json.loads((results / 'master_abs.json').read_text())[{'H': 'median', 'R': 'R'}[kind]]
+        _ANCHOR[kind] = np.array([[m[f'h_{k}_{a}'] for k in ('c0', 'cr', 'cc', 'ch')] for a in ('y', 'x')])
+    return _ANCHOR[kind]
 
 
 def save_model(path, model):
@@ -628,6 +691,145 @@ def save_model(path, model):
 def load_model(path):
     z = np.load(path)
     return {k: z[k] for k in z.files}
+
+
+# --------------------------------------------------------------------------- RPC line of sight (model R)
+
+BASIC = FLOWER / 'csdap' / 'planet'  # basic (level 1B) scenes with their RPCs
+META_KEYS = ['ground_control', 'quality_category', 'publishing_stage', 'cloud_cover', 'clear_percent',
+             'visible_percent', 'clear_confidence_percent', 'anomalous_pixels', 'gsd', 'published', 'updated']
+XML_KEYS = {'elevation_model': 'ps:elevationCorrectionApplied', 'geo_level': 'ps:geoCorrectionLevel',
+            'processor_version': 'eop:processorVersion', 'incidence_angle': 'eop:incidenceAngle',
+            'scan_azimuth': 'ps:azimuthAngle', 'xml_view_angle': 'ps:spaceCraftViewAngle'}
+RPC_H0 = 27.0  # m, lake level: the height of most of the tie points available around the island
+_RPC_GROUPS = ('LINE_NUM_COEFF', 'LINE_DEN_COEFF', 'SAMP_NUM_COEFF', 'SAMP_DEN_COEFF')
+
+
+def rpc_txt_path(scene_id):
+    return BASIC / f'PSScene-{scene_id}' / 'assets' / 'basic_analytic_4b_rpc' / f'{scene_id}_1B_AnalyticMS_RPC.TXT'
+
+
+def scene_metadata(scene_id, sr_path):
+    """Planet's item properties (order metadata.json) and the ortho product XML fields
+    that describe the geometric processing of one scene."""
+    import re
+    d = Path(sr_path).parent
+    out = {}
+    j = d / f'{scene_id}_metadata.json'
+    if j.exists():
+        p = json.loads(j.read_text())['properties']
+        out.update({k: p.get(k) for k in META_KEYS})
+    for x in d.glob(f'{scene_id}_3B_AnalyticMS_metadata*.xml'):
+        txt = x.read_text()
+        for k, tag in XML_KEYS.items():
+            m = re.search(rf'<{tag}[^>]*>([^<]*)<', txt)
+            if m:
+                v = m.group(1).strip()
+                out[k] = v if k in ('elevation_model', 'geo_level', 'processor_version') else float(v)
+        break
+    return out
+
+
+def load_rpc(path):
+    kv = dict(line.split(':', 1) for line in Path(path).read_text().splitlines() if ':' in line)
+    rpc = {k: float(v) for k, v in kv.items() if not k.startswith(_RPC_GROUPS)}
+    for g in _RPC_GROUPS:
+        rpc[g] = np.array([float(kv[f'{g}_{i}']) for i in range(1, 21)])
+    return rpc
+
+
+def rpc_project(rpc, lon, lat, h):
+    """Ground (lon, lat, height) to image (line, sample) with the RPC00B rational polynomial."""
+    L = (lon - rpc['LONG_OFF']) / rpc['LONG_SCALE']
+    P = (lat - rpc['LAT_OFF']) / rpc['LAT_SCALE']
+    H = (h - rpc['HEIGHT_OFF']) / rpc['HEIGHT_SCALE']
+    t = np.array([1, L, P, H, L * P, L * H, P * H, L * L, P * P, H * H, P * L * H, L ** 3, L * P * P, L * H * H,
+                  L * L * P, P ** 3, P * H * H, L * L * H, P * P * H, H ** 3])
+    line = (rpc['LINE_NUM_COEFF'] @ t) / (rpc['LINE_DEN_COEFF'] @ t) * rpc['LINE_SCALE'] + rpc['LINE_OFF']
+    samp = (rpc['SAMP_NUM_COEFF'] @ t) / (rpc['SAMP_DEN_COEFF'] @ t) * rpc['SAMP_SCALE'] + rpc['SAMP_OFF']
+    return np.array([line, samp])
+
+
+def rpc_ground(rpc, line, samp, h, start):
+    """Image (line, sample) at height `h` to ground (lon, lat): Newton inverse of rpc_project."""
+    x = np.array(start, float)
+    t = np.array([line, samp], float)
+    eps = 1e-5
+    for _ in range(8):
+        f = rpc_project(rpc, x[0], x[1], h) - t
+        J = np.stack([(rpc_project(rpc, x[0] + eps, x[1], h) - t - f) / eps,
+                      (rpc_project(rpc, x[0], x[1] + eps, h) - t - f) / eps], axis=1)
+        x = x - np.linalg.solve(J, f)
+    return x
+
+
+def rpc_los(rpc, lon, lat, h0=RPC_H0, dh=100.0):
+    """Line of sight of the RPC at a ground point: (east, north) m by which the ground
+    position of one image pixel moves when the assumed height rises by `dh`, and the
+    image position of the point. Points up the line of sight, toward the satellite."""
+    from pyproj import Transformer
+    p0 = rpc_project(rpc, lon, lat, h0)
+    x = rpc_ground(rpc, p0[0], p0[1], h0 + dh, (lon, lat))
+    tr = Transformer.from_crs('EPSG:4326', CRS, always_xy=True)
+    e0, n0 = tr.transform(lon, lat)
+    e1, n1 = tr.transform(x[0], x[1])
+    return e1 - e0, n1 - n0, p0
+
+
+def island_lonlat():
+    from pyproj import Transformer
+    cx, cy = (ISLAND_BOUNDS[0] + ISLAND_BOUNDS[2]) / 2, (ISLAND_BOUNDS[1] + ISLAND_BOUNDS[3]) / 2
+    return Transformer.from_crs(CRS, 'EPSG:4326', always_xy=True).transform(cx, cy)
+
+
+def scene_los(scene_id, sr_path, view_angle, satellite_azimuth, lonlat=None):
+    """Planet's metadata of one scene, its reported line of sight and, where the basic
+    scene's RPC is on disk, the RPC's: (east, north) m by which a pixel's ground position
+    moves per 100 m of height. The metadata angles describe the frame center, so that is
+    where the RPC is evaluated; `rpc_island_*` is the same at the island center."""
+    row = dict(scene_id=scene_id, view_angle=view_angle, satellite_azimuth=satellite_azimuth)
+    row.update(scene_metadata(scene_id, sr_path))
+    inc = row.get('incidence_angle', np.nan)
+    if not np.isfinite(inc):  # ground incidence from the spacecraft off-nadir angle at ~475 km
+        inc = np.degrees(np.arcsin(np.clip((6371 + 475) / 6371 * np.sin(np.radians(view_angle)), -1, 1)))
+    az = np.radians(satellite_azimuth)
+    row.update(meta_los_east=100 * np.tan(np.radians(inc)) * np.sin(az),
+               meta_los_north=100 * np.tan(np.radians(inc)) * np.cos(az))
+    p = rpc_txt_path(scene_id)
+    if p.exists():
+        rpc = load_rpc(p)
+        c = rpc_ground(rpc, rpc['LINE_OFF'], rpc['SAMP_OFF'], RPC_H0, (rpc['LONG_OFF'], rpc['LAT_OFF']))
+        e, n, _ = rpc_los(rpc, c[0], c[1])
+        lon, lat = lonlat or island_lonlat()
+        ie, in_, pix = rpc_los(rpc, lon, lat)
+        row.update(rpc_los_east=e, rpc_los_north=n, rpc_island_los_east=ie, rpc_island_los_north=in_,
+                   line_frac=(pix[0] - rpc['LINE_OFF']) / rpc['LINE_SCALE'],
+                   samp_frac=(pix[1] - rpc['SAMP_OFF']) / rpc['SAMP_SCALE'],
+                   tilt_east=e - row['meta_los_east'], tilt_north=n - row['meta_los_north'])
+    return row
+
+
+_TILTS = {}
+
+
+def load_tilts():
+    """scene_id -> (east, north) tilt of the scene's RPC, m per 100 m of height: the RPC
+    line of sight minus the reported one (`tilts` command). Always the main table."""
+    if 't' not in _TILTS:
+        p = RESULTS / 'tilts.csv'
+        t = pd.read_csv(p).set_index('scene_id') if p.exists() else pd.DataFrame(columns=['tilt_east', 'tilt_north'])
+        _TILTS['t'] = {s: (r.tilt_east, r.tilt_north) for s, r in t.iterrows() if np.isfinite(r.tilt_east)}
+    return _TILTS['t']
+
+
+def tilt_px(scene_id, master=MASTER):
+    """Elevation coefficients (dy, dx px per m of height) that the RPC tilt of a scene
+    predicts relative to the master, or None without an RPC for either."""
+    t = load_tilts()
+    if scene_id not in t or master not in t:
+        return None
+    e, n = t[scene_id][0] - t[master][0], t[scene_id][1] - t[master][1]
+    return np.array([-n, e]) / (RES * 100)
 
 
 # --------------------------------------------------------------------------- CLI
@@ -646,8 +848,12 @@ master_option = click.option('--master', default=MASTER, show_default=True)
 @results_option
 @click.option('--min-clear', default=0.5, show_default=True)
 @click.option('--min-clear-video', default=0.8, show_default=True)
-def select(results, min_clear, min_clear_video):
-    """Scene list: island clear fraction joined to SR metadata and MODIS offsets."""
+@click.option('--min-clear-sparse', default=0.1, show_default=True,
+              help='Scenes from this clear fraction up to --min-clear go to <results>/sparse/scenes.csv.')
+def select(results, min_clear, min_clear_video, min_clear_sparse):
+    """Scene list: island clear fraction joined to SR metadata and MODIS offsets. Cloudier
+    scenes, which only model R can handle, get their own list and results directory
+    (<results>/sparse) so that the statistics of the main set do not change."""
     results.mkdir(parents=True, exist_ok=True)
     cf = pd.read_csv(CLEAR_CSV).rename(columns={'image_name': 'scene_id'})
     idx = pd.read_csv(SR / 'index.csv', parse_dates=['acquired'])
@@ -662,6 +868,13 @@ def select(results, min_clear, min_clear_video):
     df['use_video'] = (df.fraction_clear >= min_clear_video) & df.has_sr & df.has_offsets
     df = df.sort_values('datetime_utc')
     df.to_csv(results / 'scenes.csv', index=False)
+    sp = df.copy()
+    sp['use_measure'] = (sp.fraction_clear >= min_clear_sparse) & (sp.fraction_clear < min_clear) & sp.has_sr
+    sp['use_video'] = False
+    (results / SPARSE).mkdir(exist_ok=True)
+    sp.to_csv(results / SPARSE / 'scenes.csv', index=False)
+    click.echo(f'{int(sp.use_measure.sum())} sparse scenes ({min_clear_sparse:.0%} to {min_clear:.0%} clear with SR) '
+               f'-> {results / SPARSE / "scenes.csv"}')
     m, v = df[df.use_measure], df[df.use_video]
     click.echo(f'{len(df)} scenes with a clear fraction; {m.shape[0]} to measure '
                f'(>= {min_clear:.0%} clear with SR), {v.shape[0]} for the video '
@@ -675,6 +888,25 @@ def select(results, min_clear, min_clear_video):
         grid=dict(crs=CRS, transform=list(ISLAND_TRANSFORM)[:6], shape=ISLAND_SHAPE),
         tile=TILE, stride=STRIDE, tile_search=TILE_SEARCH, global_search=GLOBAL_SEARCH),
         indent=1))
+
+
+@cli.command()
+def tilts():
+    """Reported and RPC line of sight of every SR scene whose basic RPC is on disk, and
+    their difference (the tilt of the RPC, which is the scene's elevation term), in m
+    east/north per 100 m of height -> results/island_coreg/tilts.csv. Read by `fit`."""
+    idx = pd.read_csv(SR / 'index.csv')
+    lonlat = island_lonlat()
+    rows = [scene_los(r.scene_id, r.sr_path, r.view_angle, r.satellite_azimuth, lonlat)
+            for r in idx.itertuples() if rpc_txt_path(r.scene_id).exists()]
+    t = pd.DataFrame(rows).set_index('scene_id')
+    t.to_csv(RESULTS / 'tilts.csv')
+    _TILTS.clear()
+    mag = np.hypot(t.tilt_east, t.tilt_north)
+    click.echo(f'{len(t)} of {len(idx)} SR scenes have an RPC; tilt median {mag.median():.2f}, 90th percentile '
+               f'{mag.quantile(0.9):.2f} m per 100 m; master '
+               + (f'{t.loc[MASTER, "tilt_east"]:+.2f} E, {t.loc[MASTER, "tilt_north"]:+.2f} N' if MASTER in t.index
+                  else 'has no RPC: model R falls back to the fitted term everywhere'))
 
 
 @cli.command()
@@ -724,8 +956,9 @@ def fit(results, sigma_tiles):
         rec = g.loc[sid]
         bands = {b: d for b, d in sdf.groupby('band')}
         per_band, outs = {}, {}
+        tilt = tilt_px(sid)
         for band, d in bands.items():
-            out, tdf, model = fit_scene(d, rec, sigma_tiles)
+            out, tdf, model = fit_scene(d, rec, sigma_tiles, tilt=tilt)
             out.update(scene_id=sid, band=band)
             outs[band] = out
             if tdf is not None:
@@ -741,7 +974,7 @@ def fit(results, sigma_tiles):
             j = r.join(n, lsuffix='_r', rsuffix='_n', how='inner')
             off = (outs['nir']['t_dy_px'] - outs['red']['t_dy_px'],
                    outs['nir']['t_dx_px'] - outs['red']['t_dx_px'])
-            if len(j) >= 30:
+            if len(j) >= 30 and 'rA_dy_r' in j:
                 diff = np.hypot(j.rT_dy_r - j.rT_dy_n, j.rT_dx_r - j.rT_dx_n)
                 extra = dict(noise_px=float(np.median(diff) / np.sqrt(2)),
                              coherence=float(np.corrcoef(np.r_[j.rA_dy_r, j.rA_dx_r],
@@ -753,7 +986,7 @@ def fit(results, sigma_tiles):
             nir['dy_px'] -= off[0]
             nir['dx_px'] -= off[1]
             both = pd.concat([sdf[sdf.band == 'red'], nir], ignore_index=True)
-        out, tdf, model = fit_scene(both, rec, sigma_tiles)
+        out, tdf, model = fit_scene(both, rec, sigma_tiles, tilt=tilt)
         out.update(scene_id=sid, band='both')
         outs['both'] = out
         if tdf is not None:
@@ -765,15 +998,19 @@ def fit(results, sigma_tiles):
     sm = pd.DataFrame(rows).merge(g.reset_index(), on='scene_id', how='left')
     sm.to_csv(results / 'scene_models.csv', index=False)
     pd.concat(resid, ignore_index=True).to_csv(results / 'tile_residuals.csv.gz', index=False)
-    b = sm[sm.band == 'both']
+    b = sm[(sm.band == 'both') & sm.med_R.notna()] if 'med_R' in sm else sm[sm.band == 'both']
     click.echo(f'{len(b)} scenes fitted. Median over scenes of the median tile residual (px):\n'
-               + '\n'.join(f'  {MODEL_NAMES[k]:26s} {b[f"med_{k}"].median():.3f}'
-                           for k in ('raw', 'T', 'A', 'L', 'Lh', 'H', 'HL', 'HLh')))
+               + '\n'.join(f'  {MODEL_NAMES[k]:38s} {b[f"med_{k}"].median():.3f}  ({int(b[f"med_{k}"].notna().sum())} scenes)'
+                           for k in ('raw', 'T', 'A', 'L', 'Lh', 'H', 'HL', 'HLh', 'R') if f'med_{k}' in b))
+    if 'elev_source' in b:
+        click.echo('model R, scenes by elevation source and planar tier:\n'
+                   + pd.crosstab(b.elev_source, b.planar).to_string())
     r = sm[sm.band == 'red']
-    click.echo(f'noise floor (red-NIR, median over scenes): {r.noise_px.median():.3f} px; '
-               f'coherence median {r.coherence.median():.2f}\n'
-               f'hold-out median by sigma: ' +
-               ', '.join(f'{c[7:]}: {b[c].median():.3f}' for c in b.columns if c.startswith('med_Lh_s')))
+    if 'noise_px' in r:
+        click.echo(f'noise floor (red-NIR, median over scenes): {r.noise_px.median():.3f} px; '
+                   f'coherence median {r.coherence.median():.2f}\n'
+                   f'hold-out median by sigma: ' +
+                   ', '.join(f'{c[7:]}: {b[c].median():.3f}' for c in b.columns if c.startswith('med_Lh_s')))
 
 
 @cli.command()
@@ -781,7 +1018,8 @@ def fit(results, sigma_tiles):
 @master_option
 @click.option('--jobs', default=5, show_default=True)
 def selftest(results, master, jobs):
-    """Recover a known affine + bump field applied to the master itself."""
+    """Recover a known affine + bump field applied to the master itself, and model R on a
+    synthetic tile table (affine tier, shift tier, fallback without an RPC, tile floor)."""
     rng = np.random.default_rng(0)
     md = master_data(master)
     h, w = ISLAND_SHAPE
@@ -824,9 +1062,45 @@ def selftest(results, master, jobs):
     t2 = pd.DataFrame(tiles2)
     msgs.append(f're-measured after the L warp: median |d| {np.hypot(t2.dy_px, t2.dx_px).median():.3f} px '
                 f'over {len(t2)} tiles (want < 0.1)')
+    # model R on a synthetic tile table: affine + tilt x height + noise
+    hh = tile_elevation() - HREF
+    k_true = np.array([0.012, -0.007])                       # px per m: 3.6 m N, 2.1 m E per 100 m
+    ri, ci = np.nonzero(land_mask()[np.ix_((rows + TILE // 2), (cols + TILE // 2))])
+
+    def table(sel, affine=True):
+        y, x = rc[ri[sel]], cc[ci[sel]]
+        dy = 0.4 + (2e-4 * (y - cy) if affine else 0) + k_true[0] * hh[ri[sel], ci[sel]] + rng.normal(0, 0.05, len(y))
+        dx = -0.9 + (-3e-4 * (x - cx) if affine else 0) + k_true[1] * hh[ri[sel], ci[sel]] + rng.normal(0, 0.05, len(y))
+        return pd.DataFrame(dict(band='red', row=y, col=x, dy_px=dy, dx_px=dx))
+    dense = np.arange(len(ri))
+    o1, _, m1 = fit_scene(table(dense), None, tilt=k_true)
+    # a cloudy scene: 20 tiles in one block, displacement = shift + tilt x height
+    blk = np.flatnonzero((ri >= 20) & (ri < 24) & (ci >= 30) & (ci < 35))[:20]
+    o2, _, m2 = fit_scene(table(blk, affine=False), None, tilt=k_true)
+    o3, _, m3 = fit_scene(table(dense), None, tilt=None)
+    o4, _, _ = fit_scene(table(blk[:8], affine=False), None, tilt=k_true)
+    # no RPC and few tiles: the tilt is fitted with the shift where the tiles span enough elevation
+    wide = np.flatnonzero((ri >= 18) & (ri < 34) & (ci >= 20) & (ci < 40))[::8][:40]
+    o5, _, m5 = fit_scene(table(wide, affine=False), None, tilt=None)
+    flat = np.flatnonzero(hh[ri, ci] < -60)[:25]
+    o6, _, _ = fit_scene(table(flat, affine=False), None, tilt=None)
+    r_ok = (o1['planar'] == 'affine' and o1['elev_source'] == 'rpc' and o1['med_R'] < 0.1
+            and abs(m1['coef_r'][0, 1] - 2e-4) < 2e-5 and abs(m1['coef_r'][1, 2] + 3e-4) < 2e-5
+            and o2['planar'] == 'shift' and o2['med_R'] < 0.1 and 'coef' not in m2
+            and o3['elev_source'] == 'fitted' and np.allclose(m3['coef_r'], m3['coef_h'])
+            and np.abs(m3['coef_h'][:, 3] - k_true).max() < 1e-3 and 'med_R' not in o4
+            and (o5['elev_source'], o5['planar']) == ('fitted', 'shift')
+            and np.abs(m5['coef_r'][:, 3] - k_true).max() < 2e-3 and o6['elev_source'] == 'none')
+    msgs.append(f"model R: dense {o1['planar']}/{o1['elev_source']} residual {o1['med_R']:.3f} px; 20 tiles "
+                f"{o2['planar']} residual {o2['med_R']:.3f} px; no RPC {o3['elev_source']}, fitted term "
+                f"{m3['coef_h'][0, 3]:.4f}, {m3['coef_h'][1, 3]:.4f} (truth {k_true[0]}, {k_true[1]}); "
+                f"8 tiles -> {'no model' if 'med_R' not in o4 else 'model'}; no RPC, {o5['n_distinct']} tiles spanning "
+                f"{hh[ri[wide], ci[wide]].std():.0f} m: {o5['planar']}/{o5['elev_source']}, term {m5['coef_r'][0, 3]:.4f}, "
+                f"{m5['coef_r'][1, 3]:.4f}; {o6['n_distinct']} tiles spanning {hh[ri[flat], ci[flat]].std():.0f} m: "
+                f"{o6['elev_source']}")
     click.echo('\n'.join(msgs))
     ok = (np.median(err) < 0.15 and np.hypot(t2.dy_px, t2.dx_px).median() < 0.1
-          and abs(out['jac_yy_m'] - 1e-3 * h * RES) < 0.1 * abs(1e-3 * h * RES))
+          and abs(out['jac_yy_m'] - 1e-3 * h * RES) < 0.1 * abs(1e-3 * h * RES) and r_ok)
     click.echo('SELFTEST ' + ('PASSED' if ok else 'FAILED'))
     if not ok:
         sys.exit(1)
@@ -887,7 +1161,10 @@ def remeasure_scene(args):
         return scene_id, [], f'error: {e}'
     rows = []
     for kind in kinds:
-        dy, dx = displacement_maps(model, kind)
+        try:
+            dy, dx = displacement_maps(model, kind)
+        except KeyError:  # a sparse scene has only T and R
+            continue
         red, clr, dat = warp_arrays([bands['red'], clear.astype(np.float32), data.astype(np.float32)],
                                     dy, dx, [1, 1, 1], [0, 0, 0])
         _, tiles = measure_arrays({'red': red}, clr > 0.99, dat > 0.99, master, skip_global=True)
@@ -913,13 +1190,16 @@ def remeasure_scene(args):
 @results_option
 @master_option
 @click.option('--jobs', default=5, show_default=True)
-@click.option('--models', default='T,A,L,H,HL', show_default=True)
+@click.option('--models', default='T,A,L,H,HL,R', show_default=True)
 @click.option('--limit', default=None, type=int)
-def remeasure(results, master, jobs, models, limit):
+@click.option('--min-clear', default=None, type=float,
+              help='Every fitted scene at least this clear instead of the video scenes.')
+def remeasure(results, master, jobs, models, limit, min_clear):
     """Warp the video scenes with each model and re-run the tile matcher: the residual
     a viewer of the aligned sequence sees."""
     df = load_scenes(results)
-    ids = [s for s in df[df.use_video].scene_id if model_path(results, s).exists()][:limit]
+    pick = df.use_video if min_clear is None else df.fraction_clear >= min_clear
+    ids = [s for s in df[pick].scene_id if model_path(results, s).exists()][:limit]
     kinds = models.split(',')
     rows = []
     t0 = time.time()
@@ -942,7 +1222,9 @@ def warp_scene(args):
     if out4.exists() and outo.exists():
         return scene_id, 'cached'
     try:
-        model = load_model(model_path(results, scene_id))
+        # the master has no model of its own: its correction is the drone anchor alone
+        model = (dict(coef_h=np.zeros((2, 4)), coef_r=np.zeros((2, 4))) if scene_id == MASTER
+                 else load_model(model_path(results, scene_id)))
         sr = read_island(p4, [1, 2, 3, 4]).astype(np.float32)
         ocm = read_island(pocm, [1], fill=OCM_NODATA)[0]
         dy, dx = displacement_maps(model, kind)
@@ -965,13 +1247,23 @@ def warp_scene(args):
 @click.option('--model', 'kind', type=click.Choice(MODELS), default='L', show_default=True)
 @click.option('--jobs', default=5, show_default=True)
 @click.option('--limit', default=None, type=int)
-def warp(results, kind, jobs, limit):
+@click.option('--min-clear', default=None, type=float,
+              help='Every fitted scene at least this clear (and with MODIS offsets) instead of the video scenes.')
+@click.option('--index', 'index_name', default='index.csv', show_default=True)
+@click.option('--max-resid', default=None, type=float,
+              help='Leave out scenes whose model R fit residual exceeds this (px): false whole-scene matches.')
+def warp(results, kind, jobs, limit, min_clear, index_name, max_resid):
     """Aligned SR scenes (uint16 reflectance x 1e4, uncalibrated, nodata 0) and OCM masks
-    for the video scenes, on the island grid, under planet_bci_aligned/<model>/."""
+    for the video scenes, on the island grid, under planet_bci_aligned/<model>/. With a
+    drone-anchored model the master is included (corrected by the anchor alone)."""
     df = load_scenes(results)
     sm = pd.read_csv(results / 'scene_models.csv')
     sm = sm[sm.band == 'both'].set_index('scene_id')
-    ids = [s for s in df[df.use_video].scene_id if model_path(results, s).exists()][:limit]
+    pick = df.use_video if min_clear is None else (df.fraction_clear >= min_clear) & df.has_offsets
+    if max_resid is not None:
+        pick &= ~df.scene_id.isin(sm.index[sm.med_R > max_resid])
+    ids = [s for s in df[pick].scene_id if model_path(results, s).exists()
+           or (s == MASTER and kind in ('Ha', 'Ra') and results == RESULTS)][:limit]
     outdir = ALIGNED / kind
     outdir.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
@@ -986,12 +1278,15 @@ def warp(results, kind, jobs, limit):
             'fraction_clear', 'offset_blue', 'offset_green', 'offset_red', 'offset_nir', 'offset_source']
     idx = df[df.scene_id.isin(ids)][cols].copy()
     idx['model'] = kind
-    for c in ('med_raw', 'med_T', 'med_A', 'med_Lh', 'med_H'):
-        idx[f'{c}_px'] = idx.scene_id.map(sm[c])
-    idx['noise_px'] = idx.scene_id.map(sm.noise_px)
+    for c in ('med_raw', 'med_T', 'med_A', 'med_Lh', 'med_H', 'med_R'):
+        if c in sm:
+            idx[f'{c}_px'] = idx.scene_id.map(sm[c])
+    for c in ('noise_px', 'elev_source', 'planar', 'n_distinct'):
+        if c in sm:
+            idx[c] = idx.scene_id.map(sm[c])
     idx['path'] = idx.scene_id.map(lambda s: str(outdir / s[:4] / f'{s}_4band.tif'))
-    idx.to_csv(outdir / 'index.csv', index=False)
-    click.echo(f'{len(ids)} scenes -> {outdir}; index.csv written')
+    idx.to_csv(outdir / index_name, index=False)
+    click.echo(f'{len(ids)} scenes -> {outdir}; {index_name} written')
 
 
 # --------------------------------------------------------------------------- rendering
@@ -1066,23 +1361,37 @@ def scene_label(row):
     return f"{pd.Timestamp(row.acquired).strftime('%Y-%m-%d')}   {name} {row.satellite_id}"
 
 
-def video_scenes(results, kind):
-    """Video scenes in date order with their model residuals (remeasured if available)."""
-    df = load_scenes(results)
-    df = df[df.use_video & df.scene_id.map(lambda s: model_path(results, s).exists())].copy()
-    sm = pd.read_csv(results / 'scene_models.csv')
-    sm = sm[sm.band == 'both'].set_index('scene_id')
-    key = {'T': 'med_T', 'A': 'med_A', 'L': 'med_Lh', 'H': 'med_H', 'HL': 'med_HLh', 'Ha': 'med_H'}[kind]
-    df['resid_px'] = df.scene_id.map(sm[key])
-    df['resid_src'] = 'hold-out' if kind in ('L', 'HL') else 'fit'
-    rm = results / 'remeasure.csv'
-    if rm.exists():
-        r = pd.read_csv(rm)
-        r = r[r.model == ('H' if kind == 'Ha' else kind)].set_index('scene_id').med_px
-        has = df.scene_id.isin(r.index)
-        df.loc[has, 'resid_px'] = df.loc[has, 'scene_id'].map(r)
-        df.loc[has, 'resid_src'] = 'remeasured'
-    return df.sort_values('acquired').reset_index(drop=True)
+def video_scenes(results, kind, min_clear=None, extra=None):
+    """Video scenes in date order with their model residuals (remeasured if available).
+    `min_clear`: every fitted scene at least that clear, with MODIS offsets, instead of
+    the use_video set. `extra`: a second results directory (the sparse scenes) to add.
+    With a drone-anchored model the master is included, with no residual."""
+    parts = []
+    for res in [results] + ([extra] if extra else []):
+        df = load_scenes(res)
+        pick = df.use_video if min_clear is None else (df.fraction_clear >= min_clear) & df.has_offsets
+        has_model = df.scene_id.map(lambda s: model_path(res, s).exists())
+        if res == results and kind in ('Ha', 'Ra'):
+            has_model |= df.scene_id == MASTER
+        df = df[pick & has_model].copy()
+        sm = pd.read_csv(res / 'scene_models.csv')
+        sm = sm[sm.band == 'both'].set_index('scene_id')
+        if res != results and 'med_R' in sm:  # the extra (sparse) set: drop false whole-scene matches
+            df = df[~df.scene_id.isin(sm.index[sm.med_R > SPARSE_MAX_RESID])]
+        key = {'T': 'med_T', 'A': 'med_A', 'L': 'med_Lh', 'H': 'med_H', 'HL': 'med_HLh', 'Ha': 'med_H',
+               'R': 'med_R', 'Ra': 'med_R'}[kind]
+        df['resid_px'] = df.scene_id.map(sm[key]) if key in sm else np.nan
+        df['resid_src'] = 'hold-out' if kind in ('L', 'HL') else 'fit'
+        df['results_dir'] = str(res)
+        rm = res / 'remeasure.csv'
+        if rm.exists():
+            r = pd.read_csv(rm)
+            r = r[r.model == {'Ha': 'H', 'Ra': 'R'}.get(kind, kind)].set_index('scene_id').med_px
+            has = df.scene_id.isin(r.index)
+            df.loc[has, 'resid_px'] = df.loc[has, 'scene_id'].map(r)
+            df.loc[has, 'resid_src'] = 'remeasured'
+        parts.append(df)
+    return pd.concat(parts).sort_values('acquired').reset_index(drop=True)
 
 
 def comparison_window(results, ids, size=300):
@@ -1122,20 +1431,29 @@ def comparison_window(results, ids, size=300):
 @click.option('--limit', default=None, type=int)
 @click.option('--panels', default=None,
               help='Three comma-separated models for the comparison video (default raw,T,<model>).')
-def video(results, outdir, kind, fps, dpi, min_clear, which, limit, panels):
+@click.option('--extra-results', type=click.Path(path_type=Path), default=None,
+              help='Second results directory whose scenes join the sequence (the sparse set).')
+@click.option('--as-delivered', is_flag=True,
+              help='Sequence only: the same scenes and frames, but showing Planet\'s orthorectified images '
+                   'unchanged (island_coreg_sequence_raw*), to set beside the aligned sequence.')
+def video(results, outdir, kind, fps, dpi, min_clear, which, limit, panels, extra_results, as_delivered):
     """The aligned whole-island sequence and the three-panel comparison video."""
     import matplotlib.pyplot as plt
     outdir.mkdir(parents=True, exist_ok=True)
-    df = video_scenes(results, kind)
-    df = df[df.fraction_clear >= min_clear][:limit]
+    df = video_scenes(results, kind, None if min_clear == 0.8 else min_clear, extra_results)
+    df = df[df.fraction_clear >= min_clear][:limit].reset_index(drop=True)
     lo, hi = fixed_stretch()
     outline = island_outline()
     ext = extent()
     offsets_cols = ['offset_blue', 'offset_green', 'offset_red', 'offset_nir']
     tag = '' if min_clear == 0.8 else f'_clear{int(min_clear * 100)}'
+    if as_delivered:
+        which = 'sequence'
+        raw_px = pd.concat([pd.read_csv(r / 'scene_models.csv').query("band == 'both'").set_index('scene_id').med_raw
+                            for r in [results] + ([extra_results] if extra_results else [])])
 
     if which in ('sequence', 'both'):
-        name = f'island_coreg_sequence{tag}'
+        name = f'island_coreg_sequence{"_raw" if as_delivered else ""}{tag}'
         fig = plt.figure(figsize=(8.0, 7.6))
         ax = fig.add_axes([0.01, 0.01, 0.98, 0.98])
         bare(ax)
@@ -1162,14 +1480,22 @@ def video(results, outdir, kind, fps, dpi, min_clear, which, limit, panels):
         ff = ffmpeg_pipe(outdir / f'{name}.mp4', w, h, fps)
         t0 = time.time()
         for k, row in df.iterrows():
-            p4 = ALIGNED / kind / row.scene_id[:4] / f'{row.scene_id}_4band.tif'
-            with rasterio.open(p4) as src:
-                sr = src.read()
+            if as_delivered:
+                sr = read_island(scene_paths(row.scene_id)[0], [1, 2, 3, 4])
+            else:
+                with rasterio.open(ALIGNED / kind / row.scene_id[:4] / f'{row.scene_id}_4band.tif') as src:
+                    sr = src.read()
             cal = calibrate(sr, row[offsets_cols].values.astype(float))
             im.set_data(to_rgb(cal, lo, hi, valid=sr[0] > 0))
             t1.set_text(scene_label(row))
-            t2.set_text(f'{row.fraction_clear:.0%} clear   aligned: {MODEL_NAMES[kind]}, '
-                        f'residual {row.resid_px * RES:.1f} m ({row.resid_src})')
+            if as_delivered:
+                off = raw_px.get(row.scene_id, np.nan) * RES
+                t2.set_text(f'{row.fraction_clear:.0%} clear   as delivered by Planet, '
+                            + (f'{off:.1f} m from the reference scene' if np.isfinite(off) else 'reference scene'))
+            else:
+                t2.set_text(f'{row.fraction_clear:.0%} clear   aligned: {MODEL_NAMES[kind]}, '
+                            + (f'residual {row.resid_px * RES:.1f} m ({row.resid_src})' if np.isfinite(row.resid_px)
+                               else 'reference scene' if row.scene_id == MASTER else 'residual not measured'))
             fig.canvas.draw()
             frame = bytes(fig.canvas.buffer_rgba())
             ff.stdin.write(frame)
@@ -1182,9 +1508,42 @@ def video(results, outdir, kind, fps, dpi, min_clear, which, limit, panels):
             raise click.ClickException('ffmpeg failed')
         plt.close(fig)
         click.echo(f'Wrote {outdir / name}.mp4: {len(df)} frames at {fps} fps, {w}x{h}')
+        anchored = (' and then moved into the frame of the 2024-10-14 drone orthomosaic with the master\'s own model'
+                    if kind in ('Ha', 'Ra') else '')
+        how = ('a displacement linear in map position, fitted to 192 m tile matches against the master scene '
+               f'{MASTER} (a shift alone for scenes with fewer than {R_MIN_AFFINE} matched tiles), plus a '
+               'displacement proportional to Copernicus GLO-30 elevation taken from the tilt of the scene\'s RPC '
+               'against its reported view direction (fitted where no RPC is on disk)' if kind in ('R', 'Ra') else
+               f'the {MODEL_NAMES[kind]} model fitted to 192 m tile matches against the master scene {MASTER}')
+        nres = int(df.resid_px.notna().sum())
+        if as_delivered:
+            off = df.scene_id.map(raw_px) * RES
+            (outdir / f'{name}_caption.md').write_text(' '.join(f"""
+                Time-lapse of Barro Colorado Island from the same {len(df)} PlanetScope scenes
+                ({df.acquired.min():%Y-%m-%d} to {df.acquired.max():%Y-%m-%d}, at least {min_clear:.0%} of the
+                island clear by OmniCloudMask) and with the same frames as island_coreg_sequence{tag}.mp4, but
+                showing Planet's orthorectified surface reflectance product as delivered, placed on the 3 m island
+                grid by its own georeferencing with no correction. True color (red, green, blue with per-scene
+                MODIS offsets) on one fixed stretch, {fps} frames per second; the white line is the island outline
+                and gray is no data. Each frame is labeled with its date, satellite, island clear fraction and the
+                median displacement of its 192 m tiles from the reference scene {MASTER} (median over
+                {int(off.notna().sum())} scenes {off.median():.1f} m, 90th percentile {off.quantile(0.9):.1f} m).
+                """.split()) + '\n')
+            return
+        (outdir / f'{name}_caption.md').write_text(' '.join(f"""
+            Time-lapse of Barro Colorado Island from {len(df)} PlanetScope scenes
+            ({df.acquired.min():%Y-%m-%d} to {df.acquired.max():%Y-%m-%d}, at least {min_clear:.0%} of the island
+            clear by OmniCloudMask), each resampled bilinearly to the 3 m island grid with {how}{anchored}. True
+            color (red, green, blue surface reflectance with per-scene MODIS offsets) on one fixed stretch,
+            {fps} frames per second; clouds and their shadows are shown as they are, the white line is the island
+            outline and gray is no data. Each frame is labeled with its date, satellite, island clear fraction and
+            the median tile displacement against the master after the correction (re-measured after warping where
+            available, otherwise from the fit; median over {nres} scenes {df.resid_px.median() * RES:.2f} m).
+            """.split()) + '\n')
 
     if which in ('comparison', 'both'):
         name = f'island_coreg_comparison{tag}'
+        df = df[(df.scene_id != MASTER) & (df.results_dir == str(results))].reset_index(drop=True)
         win, score = comparison_window(results, df.scene_id.tolist())
         r0, r1, c0, c1 = win
         wext = extent(win)
@@ -1240,6 +1599,17 @@ def video(results, outdir, kind, fps, dpi, min_clear, which, limit, panels):
         plt.close(fig)
         click.echo(f'Wrote {outdir / name}.mp4: window rows {r0}-{r1}, cols {c0}-{c1} '
                    f'(mean |local - translation| {score:.2f} px)')
+        (outdir / f'{name}_caption.md').write_text(' '.join(f"""
+            {len(df)} PlanetScope scenes ({df.acquired.min():%Y-%m-%d} to {df.acquired.max():%Y-%m-%d}, at least
+            {min_clear:.0%} of the island clear) over a {(r1 - r0) * RES:.0f} m window on the central plateau of
+            Barro Colorado Island, the window where the local-warp and translation models differ most on average,
+            shown side by side {', '.join(f'({"left center right".split()[i]}) {t}' for i, t in enumerate(titles))}.
+            True color surface reflectance with per-scene MODIS offsets on one fixed stretch,
+            {max(2, fps // 2)} frames per second; the yellow lines are fixed marks every 150 m against which motion
+            of the canopy between frames can be judged. The title gives each scene's date, satellite, clear
+            fraction and its median tile residual against the master after the translation and after the
+            {MODEL_NAMES[kind]} model.
+            """.split()) + '\n')
 
 
 _SM = {}

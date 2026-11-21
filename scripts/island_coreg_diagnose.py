@@ -22,13 +22,19 @@ Subcommands (in order):
              image: what Planet's orthorectification did beyond RPC + DEM.
   island1b   the standard measurement and T/A/L fit on the RPC orthos against
              the RPC ortho of the master, next to the Planet-ortho results.
+  metadata   Planet's quality flags and ortho XML fields, the reported view
+             direction and the line of sight of each basic scene's RPC, against
+             the fitted offset and elevation term of every scene.
+  accuracy   per-scene RMSE and its 90th percentile, as delivered and after each
+             correction, in the form of Planet's accuracy specification.
   figures    figures and captions.
 
 Displacement convention as in island_coreg.py: d = (dy, dx) px means the content
 at reference pixel p appears at p + d in the scene.
 
 Outputs: results/island_coreg/diagnose/ (tables), planet_bci_1b_ortho/ (rasters),
-figs/20261116_updates/island_diag_* (figures). See docs/island_coregistration.md.
+figs/20261116_updates/island_diag_* (figures). See docs/island_coregistration.md and,
+for the metadata checks, docs/planet_geolocation_literature.md.
 """
 import os
 
@@ -53,7 +59,7 @@ import island_coreg as ic  # noqa: E402
 RESULTS = ic.RESULTS
 DIAG = RESULTS / 'diagnose'
 FIGS = ic.FLOWER / 'figs' / '20261116_updates'
-BASIC = ic.FLOWER / 'csdap' / 'planet'
+BASIC = ic.BASIC
 ORTHO1B = ic.FLOWER / 'planet_bci_1b_ortho'
 DEM_SRC = ic.DEM_DIR / f'{ic.DEM_NAME}.tif'
 RES = ic.RES
@@ -515,8 +521,9 @@ def orthocmp(jobs):
     click.echo(r.groupby('island_instrument')[['offset_m', 'med_T_m', 'affine_amp_m']].median().round(3).to_string())
 
 
-def fit_pairs(df):
-    """T/A/L fit (red, NIR referred to red) per (scene, ref) of a multi table."""
+def fit_pairs(df, tilts=None):
+    """T/A/L/H fit (red, NIR referred to red) per (scene, ref) of a multi table. With
+    `tilts` (scene_id -> elevation coefficients in px per m, or None) also model R."""
     rows = []
     for (s, r), d in df[df.global_ok].groupby(['scene_id', 'ref_id']):
         red, nir = d[d.band == 'red'], d[d.band == 'nir'].copy()
@@ -527,7 +534,7 @@ def fit_pairs(df):
             nir['dx_px'] -= nir.dx_px.median() - red.dx_px.median()
         both = pd.concat([red, nir], ignore_index=True)[['band', 'row', 'col', 'dy_px', 'dx_px', 'peak',
                                                          'valid_frac', 'method']]
-        out, tdf, _ = ic.fit_scene(both, None)
+        out, tdf, _ = ic.fit_scene(both, None, tilt='skip' if tilts is None else tilts.get(s))
         if tdf is None:
             continue
         inb = band_mask()[tdf.ri, tdf.ci]
@@ -585,7 +592,10 @@ def drone(jobs, n, min_clear):
     ids = [ic.MASTER] + [s for s in c.sort_values('dt').index[:n] if s != ic.MASTER]
     df = run_pairs([(s, DRONE) for s in ids], 'drone', DIAG / 'pairs_drone', jobs)
     df.to_csv(DIAG / 'drone_tiles.csv.gz', index=False)
-    f = fit_pairs(df).set_index('scene_id')
+    # against the drone the elevation term of model R is the scene's whole tilt, not the tilt relative to the master
+    tl = ic.load_tilts()
+    abs_tilt = {s: np.array([-tl[s][1], tl[s][0]]) / (RES * 100) for s in ids if s in tl}
+    f = fit_pairs(df, abs_tilt).set_index('scene_id')
     f.to_csv(DIAG / 'drone_fits.csv')
     click.echo(f'{len(f)} of {len(ids)} scenes matched to the drone mosaic; median tile peak {f.peak.median():.2f}; '
                f'median residual T {RES * f.med_T.median():.2f} m, A {RES * f.med_A.median():.2f} m, '
@@ -597,8 +607,25 @@ def drone(jobs, n, min_clear):
     out = dict(n=len(est), median={p: float(est[p].median()) for p in H_PARAMS},
                mad={p: float(mad(est[p])) for p in H_PARAMS},
                direct={p: float(f.loc[ic.MASTER, p]) for p in H_PARAMS} if ic.MASTER in f.index else None)
+    # the same for model R: planar terms as the median of (scene vs drone) - (scene vs master), each fitted
+    # with the scene's elevation term fixed at its RPC tilt; elevation term = the master's own RPC tilt
+    R_PARAMS = ['r' + p[1:] for p in H_PARAMS]
+    if 'r_c0_y' in sm and 'r_c0_y' in f:
+        jr = f[R_PARAMS].join(sm[R_PARAMS], rsuffix='_rel', how='inner')
+        jr = jr[jr.index != ic.MASTER].dropna()
+        est_r = pd.DataFrame({p: jr[p] - jr[f'{p}_rel'] for p in R_PARAMS})
+        r = {'h' + p[1:]: float(est_r[p].median()) for p in R_PARAMS}
+        if ic.MASTER in tl:
+            r['h_ch_y'], r['h_ch_x'] = -tl[ic.MASTER][1] / (RES * 100), tl[ic.MASTER][0] / (RES * 100)
+        out['R'] = r
+        out['R_n'] = len(est_r)
+        out['R_mad'] = {'h' + p[1:]: float(mad(est_r[p])) for p in R_PARAMS}
+        click.echo(f'model R anchor from {len(est_r)} scenes: offset at the island origin '
+                   f'{RES * r["h_c0_y"]:+.2f}, {RES * r["h_c0_x"]:+.2f} px->m (dy, dx); elevation term from the '
+                   f'master RPC {-r["h_ch_y"] * RES * 100:+.2f} N, {r["h_ch_x"] * RES * 100:+.2f} E m per 100 m '
+                   f'(drone tie: {-out["median"]["h_ch_y"] * RES * 100:+.2f} N, {out["median"]["h_ch_x"] * RES * 100:+.2f} E)')
     (DIAG / 'master_abs.json').write_text(json.dumps(out, indent=1))
-    (RESULTS / 'master_abs.json').write_text(json.dumps(out, indent=1))  # read by island_coreg.py (model Ha)
+    (RESULTS / 'master_abs.json').write_text(json.dumps(out, indent=1))  # read by island_coreg.py (models Ha, Ra)
     kn, ke = -est.h_ch_y * RES * 100, est.h_ch_x * RES * 100
     click.echo(f'master elevation term from {len(est)} scenes: north {kn.median():+.2f} (MAD {mad(kn):.2f}), '
                f'east {ke.median():+.2f} (MAD {mad(ke):.2f}) m per 100 m; direct: '
@@ -635,13 +662,18 @@ def crosscheck(shifts):
         m = ic.load_model(p)
         row = dict(scene_id=s)
         for kind in ic.MODELS:
-            dy, dx = ic.displacement_maps(m, kind, window=win)
+            try:
+                dy, dx = ic.displacement_maps(m, kind, window=win)
+            except KeyError:
+                continue
             row[f'{kind}_east'], row[f'{kind}_north'] = RES * float(dx[0, 0]), -RES * float(dy[0, 0])
         rows.append(row)
     j = pd.DataFrame(rows).merge(d, on='scene_id')
     j.to_csv(DIAG / 'plot_crosscheck.csv', index=False)
     click.echo(f'{len(j)} scenes with an island model and a Planet-to-drone shift')
     for kind in ic.MODELS:
+        if f'{kind}_east' not in j:
+            continue
         # the sign of the drone shift relative to the island convention is fixed by the data
         best = None
         for sg in (1, -1):
@@ -650,8 +682,188 @@ def crosscheck(shifts):
             dis = np.hypot(e - e.median(), n - n.median())
             if best is None or dis.median() < best[0]:
                 best = (dis.median(), (dis <= 3).mean(), sg)
-        click.echo(f'  {ic.MODEL_NAMES[kind]:28s} median disagreement {best[0]:.2f} m, within 3 m {best[1]:.0%} '
+        click.echo(f'  {ic.MODEL_NAMES[kind]:36s} median disagreement {best[0]:.2f} m, within 3 m {best[1]:.0%} '
                    f'(sign {best[2]:+d})')
+
+
+# --------------------------------------------------------------------------- Planet metadata and RPC line of sight
+
+# the helpers live in island_coreg.py (model R uses them at fit time)
+META_KEYS, XML_KEYS, RPC_H0 = ic.META_KEYS, ic.XML_KEYS, ic.RPC_H0
+rpc_txt_path, scene_metadata, load_rpc = ic.rpc_txt_path, ic.scene_metadata, ic.load_rpc
+rpc_project, rpc_ground, rpc_los = ic.rpc_project, ic.rpc_ground, ic.rpc_los
+
+
+def _vector_fit(y_e, y_n, x_e, x_n):
+    """Least-squares scalar c in (y_e, y_n) = c (x_e, x_n) + const, and the share of
+    the variance of y it explains."""
+    ok = np.isfinite(y_e) & np.isfinite(y_n) & np.isfinite(x_e) & np.isfinite(x_n)
+    y = np.concatenate([y_e[ok] - y_e[ok].mean(), y_n[ok] - y_n[ok].mean()])
+    x = np.concatenate([x_e[ok] - x_e[ok].mean(), x_n[ok] - x_n[ok].mean()])
+    c = float(x @ y / (x @ x))
+    return c, float(1 - ((y - c * x) ** 2).sum() / (y ** 2).sum()), int(ok.sum())
+
+
+@cli.command()
+def metadata():
+    """Planet's own metadata and the RPC line of sight against the fitted terms: (1) the
+    ground_control / quality flags and cloud fields, (2) the elevation model recorded in
+    the ortho XML, (3) the metadata view direction, and (4) the line of sight of each
+    basic scene's RPC, each against the scene's offset and elevation term."""
+    from pyproj import Transformer
+    from scipy.stats import spearmanr
+    sm = pd.read_csv(RESULTS / 'scene_models.csv')
+    sm = sm[sm.band == 'both'].set_index('scene_id')
+    idx = pd.read_csv(ic.SR / 'index.csv').set_index('scene_id')
+    absm = json.loads((RESULTS / 'master_abs.json').read_text())['median']
+    k_master = np.array([absm['h_ch_x'], -absm['h_ch_y']]) * RES * 100  # east, north m per 100 m
+    cx, cy = (ic.ISLAND_BOUNDS[0] + ic.ISLAND_BOUNDS[2]) / 2, (ic.ISLAND_BOUNDS[1] + ic.ISLAND_BOUNDS[3]) / 2
+    lon, lat = Transformer.from_crs(ic.CRS, 'EPSG:4326', always_xy=True).transform(cx, cy)
+
+    def describe(s, view_angle, satellite_azimuth):
+        return ic.scene_los(s, idx.loc[s, 'sr_path'], view_angle, satellite_azimuth, (lon, lat))
+
+    rows = []
+    for s, r in sm.iterrows():
+        row = describe(s, r.view_angle, r.satellite_azimuth)
+        row.update(instrument=r.instrument, acquired=r.acquired, fraction_clear=r.fraction_clear,
+                   offset_m=RES * np.hypot(r.t_dy_px, r.t_dx_px), affine_amp_m=r.affine_amp_m,
+                   res_T_m=RES * r.med_T, res_H_m=RES * r.med_H,
+                   k_east=r.k_east_m100, k_north=r.k_north_m100, k_m100=np.hypot(r.k_east_m100, r.k_north_m100))
+        rows.append(row)
+    d = pd.DataFrame(rows).set_index('scene_id')
+    d['k_abs_east'], d['k_abs_north'] = d.k_east + k_master[0], d.k_north + k_master[1]
+    # the master is the reference of every fit, so it has no row of its own
+    m = pd.Series(describe(ic.MASTER, idx.loc[ic.MASTER, 'view_angle'], idx.loc[ic.MASTER, 'satellite_azimuth']))
+    m['los_gap_east'], m['los_gap_north'] = m.rpc_los_east - m.meta_los_east, m.rpc_los_north - m.meta_los_north
+    for src in ('meta', 'rpc'):
+        for ax in ('east', 'north'):
+            d[f'd{src}_los_{ax}'] = d[f'{src}_los_{ax}'] - m[f'{src}_los_{ax}']
+    d['los_gap_east'], d['los_gap_north'] = d.rpc_los_east - d.meta_los_east, d.rpc_los_north - d.meta_los_north
+    d['los_gap_m100'] = np.hypot(d.los_gap_east, d.los_gap_north)
+    DIAG.mkdir(parents=True, exist_ok=True)
+    d.to_csv(DIAG / 'metadata_checks.csv')
+    click.echo(f'{len(d)} fitted scenes; elevation term of the master against the drone: '
+               f'{k_master[0]:+.2f} E, {k_master[1]:+.2f} N m per 100 m')
+
+    targets = ['offset_m', 'k_m100', 'affine_amp_m', 'res_T_m']
+    click.echo('\n(1) Planet quality flags (median of each quantity by flag value)')
+    for col in ('ground_control', 'quality_category', 'publishing_stage'):
+        click.echo(d.groupby(col, dropna=False)[targets].agg(['size', 'median']).round(2).to_string())
+    click.echo('Spearman rho against the cloud and resolution fields:')
+    for col in ('cloud_cover', 'clear_percent', 'visible_percent', 'clear_confidence_percent', 'fraction_clear',
+                'gsd', 'view_angle'):
+        v = pd.to_numeric(d[col], errors='coerce')
+        click.echo(f'  {col:26s} ' + '  '.join(
+            f'{t} {spearmanr(v, d[t], nan_policy="omit").statistic:+.2f}' for t in targets))
+
+    click.echo('\n(2) geometric processing recorded in the ortho XML')
+    for col in ('elevation_model', 'geo_level'):
+        click.echo(d[col].value_counts(dropna=False).to_string())
+    pv = d.assign(year=d.acquired.astype(str).str[:4]).groupby(['year', 'processor_version']).size().unstack(0)
+    click.echo(pv.fillna(0).astype(int).to_string())
+
+    click.echo('\n(3) elevation term (relative to the master) against the metadata view direction, m per 100 m')
+    click.echo(f'  line of sight |tan(incidence)| x 100: median {np.hypot(d.meta_los_east, d.meta_los_north).median():.2f}'
+               f' (master {np.hypot(m.meta_los_east, m.meta_los_north):.2f})')
+    c, r2, n = _vector_fit(d.k_east.values, d.k_north.values, d.dmeta_los_east.values, d.dmeta_los_north.values)
+    click.echo(f'  k = c x (line of sight - master line of sight): c = {c:+.3f}, variance explained {r2:.1%}, n = {n}')
+    for ax in ('east', 'north'):
+        click.echo(f'  Pearson r, {ax}: {d[f"k_{ax}"].corr(d[f"dmeta_los_{ax}"]):+.2f}')
+
+    q = d[d.rpc_los_east.notna()]
+    inside = (q.line_frac.abs() <= 1) & (q.samp_frac.abs() <= 1)
+    click.echo(f'\n(4) RPC line of sight at the frame center against the metadata view direction, {len(q)} scenes '
+               f'with a basic RPC ({int(inside.sum())} with the island center inside the frame), m per 100 m')
+    click.echo(f'  master: RPC ({m.rpc_los_east:+.2f} E, {m.rpc_los_north:+.2f} N) - metadata '
+               f'({m.meta_los_east:+.2f} E, {m.meta_los_north:+.2f} N) = ({m.los_gap_east:+.2f} E, '
+               f'{m.los_gap_north:+.2f} N); elevation term measured against the drone '
+               f'({k_master[0]:+.2f} E, {k_master[1]:+.2f} N)')
+    g = q.los_gap_m100
+    click.echo(f'  |RPC - metadata|: median {g.median():.2f}, 90th percentile {g.quantile(0.9):.2f} '
+               f'({np.degrees(np.arctan(g.median() / 100)):.2f} and '
+               f'{np.degrees(np.arctan(g.quantile(0.9) / 100)):.2f} deg)')
+    ka = np.hypot(q.k_abs_east, q.k_abs_north)
+    click.echo(f'  |absolute elevation term|: median {ka.median():.2f}, 90th percentile {ka.quantile(0.9):.2f}')
+    c, r2, n = _vector_fit(q.k_abs_east.values, q.k_abs_north.values, q.los_gap_east.values, q.los_gap_north.values)
+    click.echo(f'  elevation term = c x (RPC - metadata): c = {c:+.3f}, variance explained {r2:.1%}, n = {n}')
+    for inst, gi in q.groupby('instrument'):
+        c, r2, n = _vector_fit(gi.k_abs_east.values, gi.k_abs_north.values, gi.los_gap_east.values,
+                               gi.los_gap_north.values)
+        click.echo(f'    {inst:7s} c = {c:+.3f}, variance explained {r2:.1%}, n = {n}')
+    res = np.hypot(q.k_abs_east - q.los_gap_east, q.k_abs_north - q.los_gap_north)
+    click.echo(f'  |elevation term - (RPC - metadata)|: median {res.median():.2f}, 90th percentile '
+               f'{res.quantile(0.9):.2f} (mean difference {(q.k_abs_east - q.los_gap_east).mean():+.2f} E, '
+               f'{(q.k_abs_north - q.los_gap_north).mean():+.2f} N)')
+    ve, vn = q.rpc_island_los_east - q.rpc_los_east, q.rpc_island_los_north - q.rpc_los_north
+    c, r2, n = _vector_fit(q.k_abs_east.values, q.k_abs_north.values, ve.values, vn.values)
+    click.echo(f'  look direction at the island minus at the frame center: median {np.hypot(ve, vn).median():.2f}; '
+               f'elevation term on it: c = {c:+.3f}, variance explained {r2:.1%}')
+    click.echo('  |RPC - metadata| by ground_control: ' + ', '.join(
+        f'{k}: {v:.2f} (n = {int(cnt)})' for k, v, cnt in zip(*[
+            q.groupby('ground_control').los_gap_m100.median().index,
+            q.groupby('ground_control').los_gap_m100.median().values,
+            q.groupby('ground_control').los_gap_m100.size().values])))
+    for col in ('cloud_cover', 'clear_percent', 'fraction_clear'):
+        click.echo(f'  Spearman rho of |RPC - metadata| with {col}: '
+                   f'{spearmanr(pd.to_numeric(q[col], errors="coerce"), g, nan_policy="omit").statistic:+.2f}')
+    click.echo(f'wrote {DIAG / "metadata_checks.csv"}')
+
+
+@cli.command()
+def accuracy():
+    """Per-scene RMSE of tile position error, the form of Planet's accuracy specification
+    (less than 10 m RMSE at the 90th percentile): as delivered against the ground (the
+    drone frame, through the master's anchor) and against the master, and after each
+    correction (fit residual), for the main and the sparse scene sets; and for the scenes
+    matched directly to the drone mosaic. -> diagnose/accuracy_rmse.csv"""
+    A = ic.master_anchor(kind='R')
+    rows_, cols_ = ic.tile_lattice()
+    rc, cc = rows_ + ic.TILE / 2, cols_ + ic.TILE / 2
+    elev, shape = ic.tile_elevation(), ic.grid_shape()
+    recs = []
+    for name, res in (('main', RESULTS), ('sparse', RESULTS / ic.SPARSE)):
+        if not (res / 'scene_models.csv').exists():
+            continue
+        b = pd.read_csv(res / 'scene_models.csv')
+        b = b[(b.band == 'both') & b.med_R.notna()].set_index('scene_id')
+        for s, r in b.iterrows():
+            t = add_lattice(pd.read_csv(res / 'tiles' / f'{s}.csv').query("band == 'red'"))
+            if len(t) >= 10:
+                t = t[~ic.neighbor_outliers(t.ri.values, t.ci.values, t.dy_px.values, t.dx_px.values, shape)]
+            rec = dict(scene_id=s, set=name, elev_source=r.elev_source, planar=r.planar,
+                       **{f'rmse_{k}_m': RES * r.get(f'rms_{k}', np.nan) for k in ('T', 'A', 'H', 'R')})
+            if len(t) >= 10:
+                X = np.stack([np.ones(len(t)), rc[t.ri], cc[t.ci], elev[t.ri, t.ci] - ic.HREF], 1)
+                gy, gx = t.dy_px.values + X @ A[0], t.dx_px.values + X @ A[1]
+                rec.update(rmse_delivered_ground_m=RES * np.sqrt(np.mean(gy ** 2 + gx ** 2)),
+                           rmse_delivered_master_m=RES * np.sqrt(np.mean(t.dy_px ** 2 + t.dx_px ** 2)))
+            recs.append(rec)
+    d = pd.DataFrame(recs)
+    # scenes matched directly to the drone mosaic
+    t = add_lattice(pd.read_csv(DIAG / 'drone_tiles.csv.gz'))
+    t = t[(t.band == 'red') & t.global_ok]
+    sm = pd.read_csv(RESULTS / 'scene_models.csv')
+    sm = sm[sm.band == 'both'].set_index('scene_id')
+    dr = []
+    for s, g in t.groupby('scene_id'):
+        if s not in sm.index:
+            continue
+        X = np.stack([np.ones(len(g)), g.row, g.col, elev[g.ri, g.ci] - ic.HREF], 1)
+        rec = dict(scene_id=s, set='drone', rmse_delivered_ground_m=RES * np.sqrt(np.mean(g.dy_px ** 2 + g.dx_px ** 2)))
+        for k, pre in (('H', 'h'), ('R', 'r')):
+            c = ic.master_anchor(kind=k) + np.array([[sm.loc[s, f'{pre}_{p}_{a}'] for p in ('c0', 'cr', 'cc', 'ch')]
+                                                     for a in ('y', 'x')])
+            rec[f'rmse_{k}_m'] = RES * np.sqrt(np.mean((g.dy_px - X @ c[0]) ** 2 + (g.dx_px - X @ c[1]) ** 2))
+        dr.append(rec)
+    d = pd.concat([d, pd.DataFrame(dr)], ignore_index=True)
+    d.to_csv(DIAG / 'accuracy_rmse.csv', index=False)
+    cols = ['rmse_delivered_ground_m', 'rmse_delivered_master_m', 'rmse_T_m', 'rmse_A_m', 'rmse_H_m', 'rmse_R_m']
+    for name, g in d.groupby('set', sort=False):
+        click.echo(f'{name}: {len(g)} scenes; per-scene RMSE (m), median / 90th percentile over scenes; '
+                   f'{(g.rmse_delivered_ground_m > 10).mean():.0%} above 10 m as delivered')
+        click.echo(pd.DataFrame({'median': g[cols].median(), 'p90': g[cols].quantile(0.9)}).round(2).T.to_string())
+    click.echo(f'wrote {DIAG / "accuracy_rmse.csv"}')
 
 
 def save_fig(fig, name, caption):
@@ -663,9 +875,12 @@ def save_fig(fig, name, caption):
 
 
 @cli.command()
-def figures():
-    """Figures and captions (figs/20261116_updates/island_diag_*)."""
+@click.option('--outdir', type=click.Path(file_okay=False, path_type=Path), default=FIGS, show_default=True)
+def figures(outdir):
+    """Figures and captions (island_diag_*)."""
     import matplotlib.pyplot as plt
+    global FIGS
+    FIGS = outdir
     sp = pd.read_csv(DIAG / 'spread_tiles.csv')
     cl = pd.read_csv(DIAG / 'closure_tiles_planet.csv')
     cl = cl[cl.band == 'red']
@@ -745,7 +960,7 @@ outside); displacements that are real close to zero, false matches do not.
     ax.legend(fontsize=8)
     ax = axes[2]
     rm = pd.read_csv(RESULTS / 'remeasure.csv')
-    kinds = [k for k in ('T', 'A', 'L', 'H', 'HL') if k in set(rm.model)]
+    kinds = [k for k in ('T', 'A', 'L', 'H', 'HL', 'R') if k in set(rm.model)]
     x = np.arange(len(kinds))
     med = rm.groupby('model')[['med_high_px', 'med_low_px']].median().reindex(kinds) * RES
     ax.bar(x - 0.2, med.med_high_px, 0.4, color='#8c564b', label='plateau tiles (>= 120 m a.s.l.)')
@@ -777,30 +992,6 @@ over scenes of the red-versus-near-infrared disagreement of a tile's displacemen
 of 2).
 """)
     plt.close(fig)
-
-    # captions of the two videos rendered by island_coreg.py video into the same folder
-    n = rm.scene_id.nunique()
-    medH = RES * rm[rm.model == 'H'].med_px.median()
-    (FIGS / 'island_coreg_sequence_caption.md').write_text(f"""
-Time-lapse of Barro Colorado Island from {n} PlanetScope scenes (2020-2026, at least 80 % of the island clear
-by OmniCloudMask), each resampled bilinearly to the 3 m island grid with its own affine + elevation model (a
-displacement linear in map position and in Copernicus GLO-30 elevation, fitted to 192 m tile matches against
-the master scene {ic.MASTER}) and then moved into the frame of the 2024-10-14 drone orthomosaic with the
-master's own affine + elevation model. True color (red, green, blue surface reflectance with per-scene MODIS
-offsets) on one fixed stretch, 6 frames per second; the white line is the island outline, gray is no data.
-Each frame is labeled with its date, satellite, island clear fraction and the median tile displacement
-re-measured against the master after warping (median over scenes {medH:.2f} m).
-""".strip() + '\n')
-    (FIGS / 'island_coreg_comparison_caption.md').write_text(f"""
-The same {n} PlanetScope scenes (2020-2026, at least 80 % of the island clear) over a 900 m window on the
-central plateau of Barro Colorado Island, which contains the 50ha plot, aligned to the master scene
-{ic.MASTER} with three models side by side: one translation per scene (left), the local warp (an affine plus
-a 144 m Gaussian-smoothed residual field, center) and the affine + elevation model (right). True color surface
-reflectance with per-scene MODIS offsets on one fixed stretch, 3 frames per second; the yellow lines are fixed
-marks every 150 m against which motion of the canopy between frames can be judged. The title gives each
-scene's date, satellite, clear fraction and its median tile residual after the translation and after the
-affine + elevation model.
-""".strip() + '\n')
 
 
 if __name__ == '__main__':

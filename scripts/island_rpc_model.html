@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RPC line of sight</title>
+<style>
+:root {
+  --bg: #fafaf7; --panel: #ffffff; --fg: #1d1d1b; --muted: #6b6b66; --line: #d9d8d2;
+  --rep: #2f2f2f; --rpc: #d95f02; --meas: #1b9e77; --lake: #7fb2e5; --ground: #e9e6dc;
+  --accent: #d95f02;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #171716; --panel: #212120; --fg: #ecebe6; --muted: #a3a29b; --line: #3a3a37;
+    --rep: #e4e4e0; --rpc: #ff8a3c; --meas: #3fd0a4; --lake: #3d6f9f; --ground: #2c2b28;
+    --accent: #ff8a3c;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg);
+  font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+header { padding: 18px 20px 6px; max-width: 1280px; margin: 0 auto; }
+h1 { font-size: 21px; margin: 0 0 4px; font-weight: 650; }
+header p { margin: 0; color: var(--muted); max-width: 78ch; }
+main { max-width: 1280px; margin: 0 auto; padding: 10px 20px 28px; display: grid;
+  grid-template-columns: minmax(0, 1fr) 330px; gap: 16px; }
+@media (max-width: 900px) { main { grid-template-columns: 1fr; padding: 10px 16px 24px; } header { padding: 16px 16px 4px; } }
+.bar { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg button { border: 0; background: var(--panel); color: var(--fg); padding: 7px 13px; font: inherit; cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button[aria-pressed="true"] { background: var(--accent); color: #fff; }
+select, .plain { font: inherit; color: var(--fg); background: var(--panel); border: 1px solid var(--line);
+  border-radius: 8px; padding: 7px 10px; max-width: 100%; }
+.plain { cursor: pointer; }
+label.sl { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 14px; }
+label.sl output { color: var(--fg); min-width: 3.2em; font-variant-numeric: tabular-nums; }
+.stage { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; position: relative; }
+canvas { display: block; width: 100%; height: min(66vh, 640px); touch-action: none; cursor: grab; }
+canvas:active { cursor: grabbing; }
+.hint { position: absolute; left: 12px; bottom: 9px; color: var(--muted); font-size: 12.5px; pointer-events: none; }
+aside { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; align-self: start; }
+aside h2 { font-size: 15px; margin: 0 0 2px; }
+aside .sub { color: var(--muted); font-size: 13px; margin: 0 0 10px; }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+td { padding: 4px 0; vertical-align: top; border-top: 1px solid var(--line); }
+td:last-child { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; padding-left: 8px; }
+.key { display: inline-block; width: 18px; height: 0; border-top: 3px solid; vertical-align: middle; margin-right: 6px; }
+.ring { display: inline-block; width: 10px; height: 10px; border: 2px dashed var(--meas); border-radius: 50%; vertical-align: middle; margin: 0 10px 0 4px; }
+#explain { margin: 12px 0 0; font-size: 13.5px; color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Where the RPC thinks the camera was</h1>
+  <p>Each PlanetScope scene is orthorectified with a geometric model (RPC) that was tied to the ground near lake
+  level. Its line of sight is tilted away from the direction the satellite reported, so the model is right at the
+  tie points and wrong by height × tilt above them. Three scales of the same geometry, from real scenes over
+  Barro Colorado Island.</p>
+</header>
+<main>
+  <div class="bar">
+    <div class="seg" role="group" aria-label="Scale">
+      <button data-mode="orbit">Orbit</button><button data-mode="island">Island</button><button data-mode="crown">Tree crown</button>
+    </div>
+    <select id="scene" aria-label="Scene"></select>
+    <label class="sl" id="veWrap">Vertical exaggeration <input type="range" id="ve" min="1" max="10" step="0.5" value="4"><output id="veOut"></output></label>
+    <label class="sl" id="arWrap">Arrow length <input type="range" id="ar" min="10" max="150" step="10" value="60"><output id="arOut"></output></label>
+    <button class="plain" id="reset">Reset view</button>
+  </div>
+  <div class="stage"><canvas id="c"></canvas><div class="hint">Drag to rotate · scroll or pinch to zoom</div></div>
+  <aside>
+    <h2 id="sTitle"></h2>
+    <p class="sub" id="sSub"></p>
+    <table>
+      <tr><td><span class="key" style="border-color:var(--rep)"></span>Reported line of sight</td><td id="vRep"></td></tr>
+      <tr><td><span class="key" style="border-color:var(--rpc)"></span>RPC line of sight</td><td id="vRpc"></td></tr>
+      <tr><td>Tilt of the RPC</td><td id="vTilt"></td></tr>
+      <tr><td>Camera positions apart</td><td id="vCam"></td></tr>
+      <tr><td>RPC rays converge at</td><td id="vH"></td></tr>
+      <tr><td>Shift of a crown at the 50ha plot</td><td id="vShift"></td></tr>
+      <tr><td><span class="ring"></span>Same, measured by image matching</td><td id="vMeas"></td></tr>
+    </table>
+    <p id="explain"></p>
+  </aside>
+</main>
+<script>
+const D = __DATA__;
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const DEFAULTS = { orbit: { yaw: -0.5, pitch: 1.36, zoom: 1 }, island: { yaw: -0.45, pitch: 0.95, zoom: 1 },
+  crown: { yaw: -0.55, pitch: 1.3, zoom: 1 } };
+const state = { mode: 'orbit', scene: 1, ve: 4, ar: 60, view: { ...DEFAULTS.orbit } };
+const hyp = (a, b) => Math.hypot(a, b), deg = v => Math.atan(v / 100) * 180 / Math.PI;
+const az = (e, n) => ((Math.atan2(e, n) * 180 / Math.PI) + 360) % 360;
+const f1 = v => v.toFixed(1);
+
+function derived(s) {
+  const tilt = [s.rpc[0] - s.rep[0], s.rpc[1] - s.rep[1]];
+  const rise = D.plot.h - D.lake;
+  return { tilt, tiltMag: hyp(...tilt), rise,
+    shift: [rise * tilt[0] / 100, rise * tilt[1] / 100], meas: [rise * s.term[0] / 100, rise * s.term[1] / 100],
+    camRep: [s.H * s.rep[0] / 100, s.H * s.rep[1] / 100], camRpc: [s.H * s.rpc[0] / 100, s.H * s.rpc[1] / 100] };
+}
+
+// ---------------------------------------------------------------- scene building
+let prims = [], frame = { c: [0, 0, 0], ext: 1 };
+const poly = (pts, fill, stroke, alpha) => prims.push({ t: 'poly', pts, fill, stroke, alpha: alpha ?? 1 });
+const line = (a, b, color, w, dash) => prims.push({ t: 'line', a, b, color, w: w || 1.5, dash });
+const dot = (p, color, r, square) => prims.push({ t: 'dot', p, color, r: r || 4, square });
+const label = (p, text, color, dx, dy, align) => prims.push({ t: 'label', p, text, color, dx: dx || 0, dy: dy || 0, align: align || 'left' });
+const circle = (c, r, z, n = 28) => Array.from({ length: n }, (_, i) => [c[0] + r * Math.cos(2 * Math.PI * i / n), c[1] + r * Math.sin(2 * Math.PI * i / n), z]);
+
+function buildOrbit(s, d) {
+  const H = s.H, R = Math.max(150, hyp(...d.camRep), hyp(...d.camRpc)) + 40;
+  frame = { c: [(d.camRep[0] + d.camRpc[0]) / 4, (d.camRep[1] + d.camRpc[1]) / 4, H / 2], ext: Math.max(H * 0.62, R * 0.9) };
+  poly([[-R, -R, 0], [R, -R, 0], [R, R, 0], [-R, R, 0]], css('--ground'), css('--line'));
+  const a = s.scan * Math.PI / 180, al = [Math.sin(a), Math.cos(a)], ac = [Math.cos(a), -Math.sin(a)];
+  const fr = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([u, v]) => [u * 16.25 * ac[0] + v * 9.8 * al[0], u * 16.25 * ac[1] + v * 9.8 * al[1], 0.2]);
+  poly(fr, css('--lake'), css('--muted'), 0.55);
+  poly([[-3, -3, 0.4], [3, -3, 0.4], [3, 3, 0.4], [-3, 3, 0.4]], '#3a8f3a', null);
+  line([0, 0, 0], [0, 0, H], css('--muted'), 1, [3, 4]);
+  line([0, 0, 0], [0, R * 0.8, 0], css('--muted'), 1);
+  label([0, R * 0.8, 0], 'N', css('--muted'), 4, -4);
+  const cr = [d.camRep[0], d.camRep[1], H], cp = [d.camRpc[0], d.camRpc[1], H];
+  line([cr[0], cr[1], 0], cr, css('--rep'), 1, [2, 4]);
+  line([cp[0], cp[1], 0], cp, css('--rpc'), 1, [2, 4]);
+  line([0, 0, 0], [cr[0], cr[1], 0], css('--rep'), 1, [2, 4]);
+  line([0, 0, 0], [cp[0], cp[1], 0], css('--rpc'), 1, [2, 4]);
+  line([0, 0, 0], cr, css('--rep'), 2.2);
+  line([0, 0, 0], cp, css('--rpc'), 2.2);
+  line(cr, cp, css('--muted'), 1.2);
+  dot(cr, css('--rep'), 6, true); dot(cp, css('--rpc'), 6, true);
+  label(cr, 'camera, as reported', css('--rep'), -10, -12, 'right');
+  label(cp, 'camera, per the RPC', css('--rpc'), 10, -12);
+  label([(cr[0] + cp[0]) / 2, (cr[1] + cp[1]) / 2, H], Math.round(H * d.tiltMag / 100) + ' km', css('--fg'), 0, 18, 'center');
+  label([0, 0, 0], 'island, in the 32 × 20 km frame', css('--fg'), 12, 16);
+}
+
+function ramp(z) {   // low forest green to plateau tan
+  const t = Math.max(0, Math.min(1, (z - D.lake) / 150));
+  const a = [86, 132, 84], b = [205, 186, 140];
+  return 'rgb(' + a.map((v, i) => Math.round(v + (b[i] - v) * t)).join(',') + ')';
+}
+const nodeXY = (i, j) => [(i - (D.nx - 1) / 2) * D.dx, ((D.ny - 1) / 2 - j) * D.dx];
+
+function buildIsland(s, d) {
+  const ve = state.ve, Z = (i, j) => D.z[j * D.nx + i], L = (i, j) => D.land[j * D.nx + i];
+  frame = { c: [0, 0, 70 * ve], ext: Math.max(D.nx, D.ny) * D.dx * 0.5 };
+  for (let j = 0; j < D.ny - 1; j++) for (let i = 0; i < D.nx - 1; i++) {
+    const cs = [[i, j], [i + 1, j], [i + 1, j + 1], [i, j + 1]];
+    const land = cs.some(([a, b]) => L(a, b));
+    const zm = cs.reduce((t, [a, b]) => t + Z(a, b), 0) / 4;
+    const col = land ? ramp(zm) : css('--lake');
+    poly(cs.map(([a, b]) => [...nodeXY(a, b), ve * (land ? Z(a, b) : D.lake)]), col, col);
+  }
+  let mx = 0;
+  for (let j = 1; j < D.ny; j += 2) for (let i = 1; i < D.nx; i += 2) {
+    if (!L(i, j)) continue;
+    const h = Z(i, j) - D.lake, [x, y] = nodeXY(i, j), k = state.ar * h / 100;
+    const m = h / 100 * d.tiltMag; mx = Math.max(mx, m);
+    if (m < 0.3) continue;
+    const a = [x, y, ve * Z(i, j) + 6], b = [x + k * d.tilt[0], y + k * d.tilt[1], ve * Z(i, j) + 6];
+    line(a, b, css('--rpc'), 1.6); dot(b, css('--rpc'), 2.2);
+  }
+  const [px, py] = nodeXY(D.plot.col, D.plot.row), pz = ve * D.plot.h;
+  line([px, py, pz], [px, py, pz + 380], css('--fg'), 1.2);
+  dot([px, py, pz + 380], css('--fg'), 4);
+  label([px, py, pz + 380], '50ha plot: ' + f1(hyp(...d.shift)) + ' m', css('--fg'), 8, 4);
+  label([frame.ext * 0.9, -frame.ext * 0.95, ve * D.lake], 'largest on the island: ' + f1(mx) + ' m', css('--rpc'), 0, 0, 'right');
+  line([-frame.ext, frame.ext * 0.78, ve * D.lake], [-frame.ext, frame.ext * 1.0, ve * D.lake], css('--muted'), 1.2);
+  label([-frame.ext, frame.ext * 1.0, ve * D.lake], 'N', css('--muted'), 5, -3);
+}
+
+function buildCrown(s, d) {
+  const h = D.plot.h, lake = D.lake, rise = d.rise, top = h + 38;
+  const x0 = [-rise * s.rep[0] / 100, -rise * s.rep[1] / 100];      // where both rays cross lake level
+  const at = (los, z) => [x0[0] + (z - lake) * los[0] / 100, x0[1] + (z - lake) * los[1] / 100, z];
+  const F = [0, 0, h], G = [d.shift[0], d.shift[1], h], M = [d.meas[0], d.meas[1], h];
+  const mid = [(x0[0] + G[0]) / 2, (x0[1] + G[1]) / 2], half = Math.max(34, hyp(G[0] - x0[0], G[1] - x0[1]) / 2 + 22);
+  frame = { c: [mid[0], mid[1], (lake + top) / 2], ext: Math.max((top - lake) / 2 + 12, half * 1.15) };
+  const sq = z => [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([u, v]) => [mid[0] + u * half, mid[1] + v * half, z]);
+  poly(sq(lake), css('--lake'), css('--lake'), 0.55);
+  poly(sq(h), '#c9b79c', '#b09f84', 0.5);
+  line([x0[0], x0[1], lake], at(s.rep, top), css('--rep'), 2.2);
+  line([x0[0], x0[1], lake], at(s.rpc, top), css('--rpc'), 2.2);
+  dot([x0[0], x0[1], lake], css('--fg'), 4);
+  label([x0[0], x0[1], lake], 'lake level, ' + lake + ' m: the two lines of sight agree', css('--fg'), 10, 14);
+  poly(circle(F, 5, h + 0.6), '#3a8f3a', '#2b6e2b');
+  prims.push({ t: 'ring', pts: circle(G, 5, h + 0.6), color: css('--rpc'), w: 2.2 });
+  prims.push({ t: 'ring', pts: circle(M, 6.2, h + 0.6), color: css('--meas'), w: 1.6, dash: [4, 4] });
+  line([F[0], F[1], h + 0.8], [G[0], G[1], h + 0.8], css('--rpc'), 2);
+  label(F, 'tree crown, 10 m across', '#2b8a2b', 0, 22, 'center');
+  label(G, 'where the ortho puts it: ' + f1(hyp(...d.shift)) + ' m away', css('--rpc'), 0, -20, 'center');
+  label([mid[0] + half * 0.95, mid[1] - half * 0.95, h], 'plateau, ' + Math.round(h) + ' m', css('--muted'), 0, 16, 'center');
+  label(at(s.rep, top), 'to the satellite, as reported', css('--rep'), -8, -6, 'right');
+  label(at(s.rpc, top), 'to the satellite, per the RPC', css('--rpc'), 8, -6);
+  line([mid[0] - half, mid[1] + half * 0.7, lake], [mid[0] - half, mid[1] + half, lake], css('--muted'), 1.2);
+  label([mid[0] - half, mid[1] + half, lake], 'N', css('--muted'), 5, -3);
+}
+
+function build() {
+  prims = [];
+  const s = D.scenes[state.scene], d = derived(s);
+  ({ orbit: buildOrbit, island: buildIsland, crown: buildCrown })[state.mode](s, d);
+  readout(s, d);
+  draw();
+}
+
+// ---------------------------------------------------------------- rendering
+function size() {
+  const r = cv.getBoundingClientRect(), k = window.devicePixelRatio || 1;
+  cv.width = Math.round(r.width * k); cv.height = Math.round(r.height * k);
+  ctx.setTransform(k, 0, 0, k, 0, 0);
+  return [r.width, r.height];
+}
+function draw() {
+  const [W, Hh] = size(), v = state.view;
+  const S = Math.min(W, Hh) / (2.25 * frame.ext) * v.zoom;
+  const cy = Math.cos(v.yaw), sy = Math.sin(v.yaw), cp = Math.cos(v.pitch), sp = Math.sin(v.pitch);
+  const P = p => {
+    const x = p[0] - frame.c[0], y = p[1] - frame.c[1], z = p[2] - frame.c[2];
+    const x1 = x * cy - y * sy, y1 = x * sy + y * cy;
+    return [W / 2 + x1 * S, Hh / 2 - (y1 * cp + z * sp) * S, y1 * sp - z * cp];
+  };
+  ctx.clearRect(0, 0, W, Hh);
+  const polys = prims.filter(p => p.t === 'poly').map(p => {
+    const q = p.pts.map(P);
+    return { p, q, d: q.reduce((t, a) => t + a[2], 0) / q.length };
+  }).sort((a, b) => b.d - a.d);
+  for (const { p, q } of polys) {
+    ctx.beginPath(); q.forEach((a, i) => i ? ctx.lineTo(a[0], a[1]) : ctx.moveTo(a[0], a[1])); ctx.closePath();
+    ctx.globalAlpha = p.alpha; ctx.fillStyle = p.fill; ctx.fill();
+    if (p.stroke) { ctx.strokeStyle = p.stroke; ctx.lineWidth = 0.6; ctx.stroke(); }
+    ctx.globalAlpha = 1;
+  }
+  ctx.lineCap = 'round';
+  for (const p of prims) {
+    if (p.t === 'line') {
+      const a = P(p.a), b = P(p.b);
+      ctx.beginPath(); ctx.setLineDash(p.dash || []); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]);
+      ctx.strokeStyle = p.color; ctx.lineWidth = p.w; ctx.stroke(); ctx.setLineDash([]);
+    } else if (p.t === 'ring') {
+      const q = p.pts.map(P);
+      ctx.beginPath(); ctx.setLineDash(p.dash || []); q.forEach((a, i) => i ? ctx.lineTo(a[0], a[1]) : ctx.moveTo(a[0], a[1]));
+      ctx.closePath(); ctx.strokeStyle = p.color; ctx.lineWidth = p.w; ctx.stroke(); ctx.setLineDash([]);
+    }
+  }
+  for (const p of prims) if (p.t === 'dot') {
+    const a = P(p.p); ctx.fillStyle = p.color; ctx.beginPath();
+    if (p.square) ctx.rect(a[0] - p.r, a[1] - p.r, 2 * p.r, 2 * p.r); else ctx.arc(a[0], a[1], p.r, 0, 2 * Math.PI);
+    ctx.fill();
+  }
+  ctx.font = '13px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
+  ctx.lineJoin = 'round';
+  for (const p of prims) if (p.t === 'label') {
+    const a = P(p.p); ctx.textAlign = p.align; ctx.textBaseline = 'middle';
+    ctx.lineWidth = 4; ctx.strokeStyle = css('--panel'); ctx.strokeText(p.text, a[0] + p.dx, a[1] + p.dy);
+    ctx.fillStyle = p.color; ctx.fillText(p.text, a[0] + p.dx, a[1] + p.dy);
+  }
+}
+
+// ---------------------------------------------------------------- panel and controls
+const EXPLAIN = {
+  orbit: 'To scale. Both lines of sight end at the same place on the ground, because the model was fitted to tie points there. They leave it in different directions, as if the camera had been somewhere else in orbit. Dotted lines drop each camera position to the ground.',
+  island: 'Orange lines show how far and which way each point is displaced: its height above the lake times the tilt. The shore does not move and the plateau moves most. Line lengths are multiplied by the arrow-length factor so they can be seen at this scale.',
+  crown: 'To scale: one image pixel at the 50ha plot. The crown sits where the reported line of sight meets the plateau. The orthorectification follows the RPC line of sight up from lake level and puts the crown where the orange outline is. The dashed green ring is where image matching against the other scenes and the drone mosaic found it.'
+};
+function readout(s, d) {
+  const $ = id => document.getElementById(id);
+  $('sTitle').textContent = s.date + ' · ' + s.inst;
+  $('sSub').textContent = s.id + ' (' + s.note + ')';
+  const v = (e, n) => f1(deg(hyp(e, n))) + '° toward ' + Math.round(az(e, n)) + '°';
+  $('vRep').textContent = v(...s.rep);
+  $('vRpc').textContent = v(...s.rpc);
+  $('vTilt').textContent = v(...d.tilt);
+  $('vCam').textContent = Math.round(s.H * d.tiltMag / 100) + ' km';
+  $('vH').textContent = Math.round(s.H) + ' km';
+  $('vShift').textContent = f1(hyp(...d.shift)) + ' m';
+  $('vMeas').textContent = f1(hyp(...d.meas)) + ' m (' + f1(hyp(d.meas[0] - d.shift[0], d.meas[1] - d.shift[1])) + ' m from it)';
+  $('explain').textContent = EXPLAIN[state.mode];
+  $('veWrap').style.display = $('arWrap').style.display = state.mode === 'island' ? '' : 'none';
+  $('veOut').textContent = '×' + state.ve; $('arOut').textContent = '×' + state.ar;
+  document.querySelectorAll('.seg button').forEach(b => b.setAttribute('aria-pressed', b.dataset.mode === state.mode));
+}
+const sel = document.getElementById('scene');
+D.scenes.forEach((s, i) => sel.add(new Option(s.date + ' · ' + s.inst + ' · ' + s.note, i)));
+function resetView() {   // orbit and crown: look across the tilt, so the two lines of sight separate on screen
+  const v = { ...DEFAULTS[state.mode] }, t = derived(D.scenes[state.scene]).tilt;
+  if (state.mode !== 'island') v.yaw = Math.atan2(-t[1], t[0]) + 0.3;
+  state.view = v;
+}
+function setMode(m) { state.mode = m; resetView(); build(); }
+document.querySelectorAll('.seg button').forEach(b => b.addEventListener('click', () => setMode(b.dataset.mode)));
+sel.addEventListener('change', () => { state.scene = +sel.value; resetView(); build(); });
+document.getElementById('ve').addEventListener('input', e => { state.ve = +e.target.value; build(); });
+document.getElementById('ar').addEventListener('input', e => { state.ar = +e.target.value; build(); });
+document.getElementById('reset').addEventListener('click', () => { resetView(); draw(); });
+const ptrs = new Map(); let pinch = 0;
+cv.addEventListener('pointerdown', e => { cv.setPointerCapture(e.pointerId); ptrs.set(e.pointerId, [e.clientX, e.clientY]); pinch = 0; });
+cv.addEventListener('pointermove', e => {
+  if (!ptrs.has(e.pointerId)) return;
+  const prev = ptrs.get(e.pointerId); ptrs.set(e.pointerId, [e.clientX, e.clientY]);
+  if (ptrs.size === 1) {
+    state.view.yaw += (e.clientX - prev[0]) * 0.008;
+    state.view.pitch = Math.max(0.05, Math.min(1.56, state.view.pitch + (e.clientY - prev[1]) * 0.006));
+  } else {
+    const [a, b] = [...ptrs.values()], dist = hyp(a[0] - b[0], a[1] - b[1]);
+    if (pinch) state.view.zoom = Math.max(0.4, Math.min(12, state.view.zoom * dist / pinch));
+    pinch = dist;
+  }
+  draw();
+});
+['pointerup', 'pointercancel'].forEach(t => cv.addEventListener(t, e => { ptrs.delete(e.pointerId); pinch = 0; }));
+cv.addEventListener('wheel', e => { e.preventDefault(); state.view.zoom = Math.max(0.4, Math.min(12, state.view.zoom * Math.exp(-e.deltaY * 0.0015))); draw(); }, { passive: false });
+window.addEventListener('resize', draw);
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', build);
+const hash = new URLSearchParams(location.hash.slice(1));
+if (DEFAULTS[hash.get('mode')]) state.mode = hash.get('mode');
+if (hash.get('scene') !== null && D.scenes[+hash.get('scene')]) state.scene = +hash.get('scene');
+sel.value = state.scene;
+resetView();
+build();
+</script>
+</body>
+</html>
